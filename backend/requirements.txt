@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+psycopg2-binary
+sqlalchemy
+pydantic
+spacy
+nltk
+transformers
+torch
+scikit-learn
