@@ -1,0 +1,48 @@
+name: newsscope
+description: "NewsScope - A global, bias-aware news aggregator."
+publish_to: 'none' # Prevent accidental publishing
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.9.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Networking
+  http: ^1.2.2
+
+  # State management
+  provider: ^6.1.2
+
+  # Maps & geolocation
+  flutter_map: ^8.2.2
+
+  # Charts & data visualization
+  fl_chart: ^1.1.1
+
+  # Icons & UI
+  cupertino_icons: ^1.0.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+
+  # Example for adding assets (uncomment when needed)
+  # assets:
+  #   - assets/images/
+  #   - assets/icons/
+
+  # Example for adding fonts (uncomment when needed)
+  # fonts:
+  #   - family: Schyler
+  #     fonts:
+  #       - asset: fonts/Schyler-Regular.ttf
+  #       - asset: fonts/Schyler-Italic.ttf
+  #         style: italic
