@@ -9,7 +9,24 @@ build/
 .dart_tool/
 .packages
 pubspec.lock
+.flutter-plugins
+.flutter-plugins-dependencies
+.metadata
 
-# General
-*.log
+# IDEs
+.vscode/
+.idea/
+
+# System / OS
 .DS_Store
+Thumbs.db
+*.log
+*.tmp
+*.lnk
+*.ini
+~$*
+
+# OneDrive / Google Drive sync artifacts
+*.gdoc
+*.gsheet
+*.glink
