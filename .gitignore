@@ -1,14 +1,36 @@
 # Python
 __pycache__/
 *.pyc
-venv/
+.venv/
+.env
 
-# Flutter
+# Flutter / Dart
 build/
 .dart_tool/
 .packages
 pubspec.lock
+.flutter-plugins
+.flutter-plugins-dependencies
+.metadata
 
-# OS
+# IDEs
+.vscode/
+.idea/
+
+# System / OS
 .DS_Store
 Thumbs.db
+*.log
+*.tmp
+*.lnk
+*.ini
+~$*
+
+# OneDrive / Google Drive sync artifacts
+*.gdoc
+*.gsheet
+*.glink
+
+# Virtual environments
+venv/
+backend/venv/

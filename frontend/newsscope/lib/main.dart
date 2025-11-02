@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'screens/feed_screen.dart';
 
 void main() {
   runApp(const NewsScopeApp());
@@ -12,11 +11,12 @@ class NewsScopeApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'NewsScope',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
-        useMaterial3: true, // keeps your theme modern
+      theme: ThemeData(primarySwatch: Colors.blue),
+      home: const Scaffold(
+        body: Center(
+          child: Text('NewsScope frontend is running 🚀'),
+        ),
       ),
-      home: const FeedScreen(), // 👈 Replaces the counter demo
     );
   }
 }
