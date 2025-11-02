@@ -1,14 +1,15 @@
 # Python
 __pycache__/
 *.pyc
-venv/
+.venv/
+.env
 
-# Flutter
+# Flutter / Dart
 build/
 .dart_tool/
 .packages
 pubspec.lock
 
-# OS
+# General
+*.log
 .DS_Store
-Thumbs.db
