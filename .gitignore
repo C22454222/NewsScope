@@ -30,3 +30,7 @@ Thumbs.db
 *.gdoc
 *.gsheet
 *.glink
+
+# Virtual environments
+venv/
+backend/venv/
