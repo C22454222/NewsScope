@@ -19,12 +19,12 @@ jobs:
 
       - name: Install dependencies
         run: flutter pub get
-        working-directory: frontend
+        working-directory: frontend/newsscope
 
       - name: Analyze
         run: flutter analyze
-        working-directory: frontend
+        working-directory: frontend/newsscope
 
       - name: Run tests
         run: flutter test || echo "No tests yet"
-        working-directory: frontend
+        working-directory: frontend/newsscope
