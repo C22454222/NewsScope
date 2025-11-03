@@ -1,14 +1,11 @@
 name: NLP CI (Optional Heavy Job)
 
 on:
-  workflow_dispatch:   # run manually from GitHub Actions tab
+  workflow_dispatch:
 
 jobs:
   nlp:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ./backend
     steps:
       - uses: actions/checkout@v3
 
@@ -21,6 +18,8 @@ jobs:
         run: |
           pip install -r requirements.txt
           pip install -r requirements-nlp.txt
+        working-directory: backend
 
       - name: Run NLP tests
         run: pytest tests/nlp || echo "No NLP tests yet"
+        working-directory: backend
