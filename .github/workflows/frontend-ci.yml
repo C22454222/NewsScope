@@ -1,26 +1,31 @@
 name: Frontend CI
 
-on: [push, pull_request]
+on:
+  push:
+    branches: [ dev ]
+  pull_request:
+    branches: [ dev ]
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend/newsscope   # where pubspec.yaml lives
     steps:
       - uses: actions/checkout@v3
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.19.0'
+          flutter-version: '3.24.0'
+          channel: 'stable'
 
       - name: Install dependencies
         run: flutter pub get
-        working-directory: ./frontend
 
       - name: Analyze
         run: flutter analyze
-        working-directory: ./frontend
 
       - name: Run tests
         run: flutter test || echo "No tests yet"
-        working-directory: ./frontend
