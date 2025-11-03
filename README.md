@@ -17,6 +17,12 @@ It uses AI/NLP to detect tone, political bias, and misinformation, presenting re
 - `docs/` → Diagrams, schema, and documentation
 - `.github/workflows/` → CI/CD pipelines
 
+[![Backend CI](https://github.com/C22454222/NewsScope/actions/workflows/backend-ci.yml/badge.svg)](https://github.com/C22454222/NewsScope/actions/workflows/backend-ci.yml)
+
+[![Frontend CI](https://github.com/C22454222/NewsScope/actions/workflows/frontend-ci.yml/badge.svg)](https://github.com/C22454222/NewsScope/actions/workflows/frontend-ci.yml)
+
+[![NLP CI (Optional Heavy Job)](https://github.com/C22454222/NewsScope/actions/workflows/nlp-ci.yml/badge.svg)](https://github.com/C22454222/NewsScope/actions/workflows/nlp-ci.yml)
+
 ## Getting Started
 ### Backend
 ```bash
