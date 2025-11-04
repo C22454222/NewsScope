@@ -6,4 +6,4 @@ python-dotenv==1.0.1
 SQLAlchemy==2.0.43
 psycopg2-binary==2.9.10
 starlette==0.48.0
-supabase==2.10.0
+supabase==2.32.2
