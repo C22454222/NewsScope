@@ -21,4 +21,5 @@ def root():
 def health():
     return {"status": "ok"}
 
+
 app.include_router(articles.router)
