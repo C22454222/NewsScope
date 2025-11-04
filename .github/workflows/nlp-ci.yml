@@ -1,26 +1,24 @@
 name: NLP CI (Optional Heavy Job)
 
 on:
-  workflow_dispatch:   # still manual trigger
+  workflow_dispatch:
 
 jobs:
   nlp:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
     steps:
       - uses: actions/checkout@v3
 
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
+          python-version: '3.11.9'
 
       - name: Install core + NLP dependencies
         run: |
-          pip install -r ../requirements.txt
-          pip install -r ../requirements-nlp.txt
+          pip install -r requirements.txt
+          pip install -r requirements-nlp.txt
+        working-directory: .
 
       - name: Run NLP tests
-        run: pytest tests/nlp || echo "No NLP tests yet"
+        run: pytest backend/tests/nlp || echo "No NLP tests yet"
