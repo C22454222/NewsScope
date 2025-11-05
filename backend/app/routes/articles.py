@@ -1,6 +1,6 @@
 from fastapi import APIRouter
-from backend.app.db.supabase import supabase
-from backend.app.models.schemas import ArticleCreate
+from app.db.supabase import supabase
+from app.models.schemas import ArticleCreate
 
 
 router = APIRouter()
