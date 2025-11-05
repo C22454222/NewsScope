@@ -22,4 +22,3 @@ class Article(ArticleBase):
 
     class Config:
         orm_mode = True
-        
