@@ -1,6 +1,7 @@
-import 'package:flutter/material.dart';
-// Add this import for Firebase
+import 'package:flutter/material.dart' show BuildContext, Colors, MaterialApp, StatelessWidget, ThemeData, Widget, WidgetsFlutterBinding, runApp;
 import 'package:firebase_core/firebase_core.dart';
+import 'auth_gate.dart';
+
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -8,19 +9,17 @@ void main() async {
   runApp(const NewsScopeApp());
 }
 
+
 class NewsScopeApp extends StatelessWidget {
   const NewsScopeApp({super.key});
+
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'NewsScope',
       theme: ThemeData(primarySwatch: Colors.blue),
-      home: const Scaffold(
-        body: Center(
-          child: Text('NewsScope frontend is running 🚀'),
-        ),
-      ),
+      home: const AuthGate(), // entry point
     );
   }
 }
