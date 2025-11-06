@@ -15,6 +15,7 @@ subprojects {
     val newSubprojectBuildDir: Directory = newBuildDir.dir(project.name)
     project.layout.buildDirectory.value(newSubprojectBuildDir)
 }
+
 subprojects {
     project.evaluationDependsOn(":app")
 }
@@ -24,9 +25,6 @@ tasks.register<Delete>("clean") {
 }
 
 plugins {
-  // ...
-
-  // Add the dependency for the Google services Gradle plugin
-  id("com.google.gms.google-services") version "4.4.4" apply false
-
+    // Add the Google services Gradle plugin dependency here, but don’t apply it globally
+    id("com.google.gms.google-services") version "4.4.4" apply false
 }
