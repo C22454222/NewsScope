@@ -26,6 +26,11 @@ dependencies:
   # Icons & UI
   cupertino_icons: ^1.0.8
 
+  # Firebase (latest stable versions)
+  firebase_core: ^4.2.1
+  firebase_auth: ^6.1.2
+  google_sign_in: ^7.2.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -34,16 +39,4 @@ dev_dependencies:
 flutter:
   uses-material-design: true
 
-  # Example for adding assets (uncomment when needed)
-  # assets:
-  #   - assets/images/
-  #   - assets/icons/
-
-  # Example for adding fonts (uncomment when needed)
-  # fonts:
-  #   - family: Schyler
-  #     fonts:
-  #       - asset: fonts/Schyler-Regular.ttf
-  #       - asset: fonts/Schyler-Italic.ttf
-  #         style: italic
-
+  
