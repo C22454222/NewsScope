@@ -15,11 +15,16 @@ def root():
         )
     }
 
+# Add HEAD route so Render probes don't trigger 405
+@app.head("/")
+def root_head():
+    # HEAD responses should be empty, just return 200 OK
+    return {}
 
 # Health check route (used by Render)
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
-
+# Include your articles router
 app.include_router(articles.router)
