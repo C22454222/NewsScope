@@ -15,15 +15,20 @@ class _SignInScreenState extends State<SignInScreen> {
   final _passwordController = TextEditingController();
 
   Future<UserCredential> _signInWithGoogle() async {
-    final GoogleSignIn googleSignIn = GoogleSignIn(scopes: ['email']);
+    // ✅ No scopes argument in v7
+    final GoogleSignIn googleSignIn = GoogleSignIn();
+
     final GoogleSignInAccount? googleUser = await googleSignIn.signIn();
     if (googleUser == null) throw Exception("Google sign-in aborted");
 
+    // ✅ Must await the Future
     final GoogleSignInAuthentication googleAuth = await googleUser.authentication;
+
+    // ✅ accessToken removed in v7; only idToken is needed for Firebase
     final credential = GoogleAuthProvider.credential(
       idToken: googleAuth.idToken,
-      accessToken: googleAuth.accessToken,
     );
+
     return FirebaseAuth.instance.signInWithCredential(credential);
   }
 
