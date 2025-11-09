@@ -1,57 +1,86 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'sign_up_screen.dart';
 
-class SignInScreen extends StatelessWidget {
+class SignInScreen extends StatefulWidget {
   const SignInScreen({super.key});
 
+  @override
+  State<SignInScreen> createState() => _SignInScreenState();
+}
+
+class _SignInScreenState extends State<SignInScreen> {
+  final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
+
   Future<UserCredential> _signInWithGoogle() async {
-    // Create a GoogleSignIn instance
-    final GoogleSignIn googleSignIn = GoogleSignIn(
-      scopes: ['email'],
-    );
-
-    // Trigger the sign-in flow
+    final GoogleSignIn googleSignIn = GoogleSignIn(scopes: ['email']);
     final GoogleSignInAccount? googleUser = await googleSignIn.signIn();
+    if (googleUser == null) throw Exception("Google sign-in aborted");
 
-    if (googleUser == null) {
-      throw Exception("Google sign-in aborted");
-    }
-
-    // Get the authentication details
     final GoogleSignInAuthentication googleAuth = await googleUser.authentication;
-
-    // Build a Firebase credential
     final credential = GoogleAuthProvider.credential(
       idToken: googleAuth.idToken,
       accessToken: googleAuth.accessToken,
     );
-
-    // Sign in to Firebase
     return FirebaseAuth.instance.signInWithCredential(credential);
   }
 
-  Future<UserCredential> _signInWithEmail() async {
-    return FirebaseAuth.instance.signInWithEmailAndPassword(
-      email: "test@example.com", // replace with form input
-      password: "password123",   // replace with form input
-    );
+  Future<void> _signInWithEmail() async {
+    try {
+      await FirebaseAuth.instance.signInWithEmailAndPassword(
+        email: _emailController.text.trim(),
+        password: _passwordController.text.trim(),
+      );
+    } on FirebaseAuthException catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Error: ${e.message}")),
+      );
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: Center(
-        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-          ElevatedButton(
-            onPressed: _signInWithGoogle,
-            child: const Text("Sign in with Google"),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              TextField(
+                controller: _emailController,
+                decoration: const InputDecoration(labelText: "Email"),
+              ),
+              TextField(
+                controller: _passwordController,
+                decoration: const InputDecoration(labelText: "Password"),
+                obscureText: true,
+              ),
+              const SizedBox(height: 16),
+              ElevatedButton(
+                onPressed: _signInWithEmail,
+                child: const Text("Sign in with Email"),
+              ),
+              const SizedBox(height: 8),
+              ElevatedButton(
+                onPressed: _signInWithGoogle,
+                child: const Text("Sign in with Google"),
+              ),
+              const SizedBox(height: 8),
+              TextButton(
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const SignUpScreen()),
+                  );
+                },
+                child: const Text("Create Account"),
+              ),
+            ],
           ),
-          ElevatedButton(
-            onPressed: _signInWithEmail,
-            child: const Text("Sign in with Email"),
-          ),
-        ]),
+        ),
       ),
     );
   }

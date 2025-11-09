@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
-
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
 
@@ -11,7 +10,7 @@ class HomeScreen extends StatelessWidget {
     return Scaffold(
       body: Center(
         child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-          Text("Welcome ${user?.email ?? user?.displayName}!"),
+          Text("Welcome ${user?.displayName ?? user?.email}!"),
           ElevatedButton(
             onPressed: () async {
               await FirebaseAuth.instance.signOut();
