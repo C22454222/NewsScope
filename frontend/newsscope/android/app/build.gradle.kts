@@ -1,14 +1,14 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
-    // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
+    // Flutter plugin must be applied after Android/Kotlin
     id("dev.flutter.flutter-gradle-plugin")
-    // Apply Google Services plugin here
+    // Google Services plugin
     id("com.google.gms.google-services")
 }
 
 android {
-    namespace = "com.example.newsscope"
+    namespace = "com.newsscope.app"         
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -22,7 +22,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.newsscope"
+        applicationId = "com.newsscope.app"  
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
@@ -41,10 +41,10 @@ flutter {
 }
 
 dependencies {
-    // Import the Firebase BoM
+    // Firebase BoM
     implementation(platform("com.google.firebase:firebase-bom:34.5.0"))
 
-    // Example Firebase dependencies (add what you need)
+    // Firebase dependencies
     implementation("com.google.firebase:firebase-auth")
     implementation("com.google.firebase:firebase-analytics")
 }

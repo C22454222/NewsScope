@@ -7,9 +7,9 @@
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:802242042695:android:2b8420710eb53517738a62",
+        "mobilesdk_app_id": "1:802242042695:android:973e3deb89c9c262738a62",
         "android_client_info": {
-          "package_name": "com.android.application"
+          "package_name": "com.newsscope.app"
         }
       },
       "oauth_client": [
