@@ -2,7 +2,7 @@
     package="com.newsscope.app">   <!-- ✅ updated package -->
 
     <application
-        android:label="newsscope"
+        android:label="NewsScope"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
 
