@@ -23,12 +23,14 @@ class _SignUpScreenState extends State<SignUpScreen> {
 
       await userCred.user?.updateDisplayName(_usernameController.text.trim());
 
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Account created successfully")),
       );
 
       Navigator.pop(context); // back to SignInScreen
     } on FirebaseAuthException catch (e) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text("Error: ${e.message}")),
       );
@@ -39,12 +41,32 @@ class _SignUpScreenState extends State<SignUpScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       body: Center(
-        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-          TextField(controller: _usernameController, decoration: const InputDecoration(labelText: "Username")),
-          TextField(controller: _emailController, decoration: const InputDecoration(labelText: "Email")),
-          TextField(controller: _passwordController, decoration: const InputDecoration(labelText: "Password"), obscureText: true),
-          ElevatedButton(onPressed: _signUp, child: const Text("Sign Up")),
-        ]),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              TextField(
+                controller: _usernameController,
+                decoration: const InputDecoration(labelText: "Username"),
+              ),
+              TextField(
+                controller: _emailController,
+                decoration: const InputDecoration(labelText: "Email"),
+              ),
+              TextField(
+                controller: _passwordController,
+                decoration: const InputDecoration(labelText: "Password"),
+                obscureText: true,
+              ),
+              const SizedBox(height: 16),
+              ElevatedButton(
+                onPressed: _signUp,
+                child: const Text("Sign Up"),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
