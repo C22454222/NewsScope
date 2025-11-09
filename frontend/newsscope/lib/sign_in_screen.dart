@@ -19,7 +19,7 @@ class _SignInScreenState extends State<SignInScreen> {
     final GoogleSignInAccount? googleUser = await googleSignIn.signIn();
     if (googleUser == null) throw Exception("Google sign-in aborted");
 
-    final GoogleSignInAuthentication googleAuth = await googleUser.authentication;
+    final GoogleSignInAuthentication googleAuth = googleUser.authentication;
     final credential = GoogleAuthProvider.credential(
       idToken: googleAuth.idToken,
       accessToken: googleAuth.accessToken,
