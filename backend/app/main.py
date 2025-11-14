@@ -26,6 +26,6 @@ def health():
 
 
 # Routers
-app.include_router(articles.router)
-app.include_router(users.router)
-app.include_router(sources.router)
+app.include_router(articles.router, prefix="/articles", tags=["articles"])
+app.include_router(users.router, prefix="/users", tags=["users"])
+app.include_router(sources.router, prefix="/sources", tags=["sources"])
