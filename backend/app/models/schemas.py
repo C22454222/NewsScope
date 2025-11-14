@@ -45,14 +45,17 @@ class User(UserBase):
     class Config:
         from_attributes = True
 
+
 # Sources
 class SourceBase(BaseModel):
     name: str
     country: Optional[str]
     bias_rating: Optional[str]
 
+
 class Source(SourceBase):
     id: UUID
 
     class Config:
         from_attributes = True
+        
