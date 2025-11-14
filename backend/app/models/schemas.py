@@ -21,7 +21,6 @@ class Article(ArticleBase):
     id: UUID
     created_at: datetime
 
-
     class Config:
         from_attributes = True
 
@@ -41,7 +40,6 @@ class User(UserBase):
     id: UUID
     created_at: datetime
 
-
     class Config:
         from_attributes = True
 
@@ -58,4 +56,3 @@ class Source(SourceBase):
 
     class Config:
         from_attributes = True
-        
