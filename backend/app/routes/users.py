@@ -20,11 +20,13 @@ def get_user(uid: str):
 
 @router.put("/users/{uid}/preferences")
 def update_preferences(uid: str, prefs: dict):
-    response = supabase.table("users").update({"preferences": prefs}).eq("id", uid).execute()
+    response = supabase.table("users").update
+    ({"preferences": prefs}).eq("id", uid).execute()
     return response.data
 
 
 @router.put("/users/{uid}/bias_profile")
 def update_bias_profile(uid: str, profile: dict):
-    response = supabase.table("users").update({"bias_profile": profile}).eq("id", uid).execute()
+    response = supabase.table("users").update
+    ({"bias_profile": profile}).eq("id", uid).execute()
     return response.data
