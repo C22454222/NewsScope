@@ -4,6 +4,7 @@ from typing import Optional
 from uuid import UUID
 
 
+# Articles
 class ArticleBase(BaseModel):
     source: Optional[str] = None
     url: str
@@ -13,12 +14,45 @@ class ArticleBase(BaseModel):
 
 
 class ArticleCreate(ArticleBase):
-    pass  # same fields as base, used for POST
+    pass
 
 
 class Article(ArticleBase):
     id: UUID
     created_at: datetime
+
+
+    class Config:
+        from_attributes = True
+
+
+# Users
+class UserBase(BaseModel):
+    email: str
+    preferences: Optional[dict] = {}
+    bias_profile: Optional[dict] = {}
+
+
+class UserCreate(UserBase):
+    id: UUID  # Firebase UID
+
+
+class User(UserBase):
+    id: UUID
+    created_at: datetime
+
+
+    class Config:
+        from_attributes = True
+
+# Sources
+class SourceBase(BaseModel):
+    name: str
+    country: Optional[str]
+    bias_rating: Optional[str]
+
+class Source(SourceBase):
+    id: UUID
 
     class Config:
         from_attributes = True

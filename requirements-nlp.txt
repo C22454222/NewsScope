@@ -3,5 +3,5 @@ scipy==1.13.1
 numpy==1.26.4
 tqdm==4.66.2
 transformers==4.44.2
-tokenizers==0.19.1   # compatible with transformers 4.44.2
+tokenizers==0.19.1
 torch==2.3.1

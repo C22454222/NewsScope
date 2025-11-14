@@ -1,33 +1,31 @@
 from fastapi import FastAPI
-from app.routes import articles
+from app.routes import articles, users, sources
 
 
-app = FastAPI()
+app = FastAPI(title="NewsScope API")
 
 
-# Root route (so hitting "/" doesn't 404)
+# Root route
 @app.get("/")
 def root():
     return {
-        "message": (
-            "Welcome to NewsScope API. "
-            "Try /health to check status."
-        )
+        "message": "Welcome to NewsScope API. Try /health to check status."
     }
 
 
-# Add HEAD route so Render probes don't trigger 405
+# HEAD route (for Render probes)
 @app.head("/")
 def root_head():
-    # HEAD responses should be empty, just return 200 OK
     return {}
 
 
-# Health check route (used by Render)
+# Health check route
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
 
-# Include your articles router
+# Routers
 app.include_router(articles.router)
+app.include_router(users.router)
+app.include_router(sources.router)
