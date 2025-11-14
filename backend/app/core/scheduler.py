@@ -12,4 +12,5 @@ def start_scheduler():
 
 
 def add_job(func, minutes: int = 30):
-    scheduler.add_job(func, IntervalTrigger(minutes=minutes), max_instances=1, coalesce=True)
+    scheduler.add_job(func, IntervalTrigger
+    (minutes=minutes), max_instances=1, coalesce=True)

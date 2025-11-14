@@ -2,7 +2,6 @@
 import os
 import requests
 import feedparser
-from datetime import datetime
 from dateutil import parser as dtparser
 from app.db.supabase import supabase
 
