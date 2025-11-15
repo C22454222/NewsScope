@@ -6,7 +6,7 @@ on:
   pull_request:
     branches: [ "main" ]
   schedule:
-    - cron: '0 0 * * 0'   # weekly scan
+    - cron: '0 0 * * 0'
 
 jobs:
   analyze:
@@ -25,13 +25,23 @@ jobs:
         with:
           languages: ${{ matrix.language }}
 
-      # --- Kotlin/Gradle build ---
+      # --- Kotlin/Gradle build (Android module) ---
       - if: matrix.language == 'java-kotlin'
         name: Setup JDK
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
+
+      - if: matrix.language == 'java-kotlin'
+        name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.0'
+
+      - if: matrix.language == 'java-kotlin'
+        name: Export FLUTTER_ROOT
+        run: echo "FLUTTER_ROOT=$HOME/flutter" >> $GITHUB_ENV
 
       - if: matrix.language == 'java-kotlin'
         name: Build with Gradle (Android module)
