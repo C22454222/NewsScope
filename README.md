@@ -22,10 +22,3 @@ It uses AI/NLP to detect tone, political bias, and misinformation, presenting re
 [![Frontend CI](https://github.com/C22454222/NewsScope/actions/workflows/frontend-ci.yml/badge.svg)](https://github.com/C22454222/NewsScope/actions/workflows/frontend-ci.yml)
 
 [![NLP CI (Optional Heavy Job)](https://github.com/C22454222/NewsScope/actions/workflows/nlp-ci.yml/badge.svg)](https://github.com/C22454222/NewsScope/actions/workflows/nlp-ci.yml)
-
-## Getting Started
-### Backend
-```bash
-cd backend
-pip install -r requirements.txt
-uvicorn app.main:app --reload
