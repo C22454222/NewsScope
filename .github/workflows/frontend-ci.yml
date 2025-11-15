@@ -1,12 +1,13 @@
 name: Frontend CI
-permissions:
-  contents: read
 
 on:
   push:
     branches: [ main, dev ]
   pull_request:
     branches: [ main, dev ]
+
+permissions:
+  contents: read
 
 jobs:
   build:
