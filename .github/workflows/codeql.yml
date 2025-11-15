@@ -8,7 +8,6 @@ on:
   schedule:
     - cron: '0 0 * * 0'
 
-# 👇 Add this block at the top
 permissions:
   actions: read
   contents: read
@@ -36,7 +35,6 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      # 👇 Install Flutter and export FLUTTER_ROOT
       - if: matrix.language == 'java-kotlin'
         name: Setup Flutter
         uses: subosito/flutter-action@v2
