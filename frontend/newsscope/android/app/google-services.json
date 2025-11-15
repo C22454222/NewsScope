@@ -14,13 +14,21 @@
       },
       "oauth_client": [
         {
+          "client_id": "802242042695-toktmq558bur0pq7qcrjpjq0la0croa6.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.newsscope.app",
+            "certificate_hash": "fe1f2aeb8bd0d765416a677391e7aed99979e910"
+          }
+        },
+        {
           "client_id": "802242042695-jguoact6r327hmjjnloo79crdv2sqiph.apps.googleusercontent.com",
           "client_type": 3
         }
       ],
       "api_key": [
         {
-          "current_key": "AIzaSyD_ExFmDEaciTiiStG2GnHO5aUqcofJlgk"
+          "current_key": "AIzaSyBJuGpZybF3s_Zi1b1cqlGLFddYP9yDqhc"
         }
       ],
       "services": {
