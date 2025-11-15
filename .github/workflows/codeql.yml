@@ -1,2 +1,53 @@
-uses: github/codeql-action/init@v4
-uses: github/codeql-action/analyze@v4
+name: "CodeQL"
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  schedule:
+    - cron: '0 0 * * 0'   # weekly scan
+
+jobs:
+  analyze:
+    name: Analyze
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [ 'java-kotlin', 'python' ]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+
+      # --- Kotlin/Gradle build ---
+      - if: matrix.language == 'java-kotlin'
+        name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - if: matrix.language == 'java-kotlin'
+        name: Build with Gradle
+        run: ./gradlew clean build -x test
+
+      # --- Python setup ---
+      - if: matrix.language == 'python'
+        name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - if: matrix.language == 'python'
+        name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
