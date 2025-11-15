@@ -34,3 +34,6 @@ Thumbs.db
 # Virtual environments
 venv/
 backend/venv/
+
+# Firebase config
+google-services.json
