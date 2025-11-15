@@ -1,7 +1,6 @@
 # Core framework
 fastapi==0.117.1
 uvicorn[standard]==0.37.0
-starlette==0.48.0
 pydantic>=2.11.7,<3.0
 
 # HTTP clients
