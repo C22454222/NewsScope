@@ -6,11 +6,10 @@ on:
   pull_request:
     branches: [ "main" ]
   schedule:
-    - cron: '0 0 * * 0'   # weekly scan
+    - cron: '0 0 * * 0'
 
 jobs:
   analyze:
-    name: Analyze
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -36,7 +35,7 @@ jobs:
 
       - if: matrix.language == 'java-kotlin'
         name: Build with Gradle
-        run: ./gradlew clean build -x test
+        run: cd frontend/newsscope && ./gradlew clean build -x test
 
       # --- Python setup ---
       - if: matrix.language == 'python'
@@ -47,7 +46,7 @@ jobs:
 
       - if: matrix.language == 'python'
         name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r backend/requirements.txt
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4
