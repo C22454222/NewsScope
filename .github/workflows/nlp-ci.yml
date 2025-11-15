@@ -3,6 +3,9 @@ name: NLP CI (Optional Heavy Job)
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   nlp:
     runs-on: ubuntu-latest
