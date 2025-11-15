@@ -1,0 +1,2 @@
+uses: github/codeql-action/init@v4
+uses: github/codeql-action/analyze@v4
