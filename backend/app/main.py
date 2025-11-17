@@ -48,6 +48,13 @@ def health():
     return {"status": "ok"}
 
 
+# Debug route to trigger ingestion manually
+@app.post("/debug/ingest")
+async def debug_ingest():
+    run_ingestion_cycle()
+    return {"status": "ingestion triggered"}
+
+
 # Routers
 app.include_router(articles.router, prefix="/articles", tags=["articles"])
 app.include_router(users.router, prefix="/users", tags=["users"])
@@ -55,6 +62,9 @@ app.include_router(sources.router, prefix="/sources", tags=["sources"])
 
 
 # Favicon route
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
 @app.get("/favicon.ico")
 async def favicon():
-    return FileResponse(os.path.join("static", "favicon.ico"))
+    return FileResponse(os.path.join(BASE_DIR, "..", "static", "favicon.ico"))
