@@ -13,9 +13,9 @@ from app.jobs.archiving import archive_old_articles
 async def lifespan(app: FastAPI):
     # Startup logic
     start_scheduler()
-    add_job(run_ingestion_cycle, minutes=30)       # fetch new articles
-    add_job(analyze_unscored_articles, minutes=60) # sentiment/bias analysis
-    add_job(archive_old_articles, minutes=1440)    # daily archiving
+    add_job(run_ingestion_cycle, minutes=30)            # fetch new articles
+    add_job(analyze_unscored_articles, minutes=60)      # sentiment/bias analysis
+    add_job(archive_old_articles, minutes=1440)         # daily archiving
 
     yield  # <-- control passes to the application
 
