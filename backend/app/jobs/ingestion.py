@@ -9,12 +9,16 @@ from newspaper import Article   # pip install newspaper3k
 
 
 NEWSAPI_KEY = os.getenv("NEWSAPI_KEY")
-RSS_FEEDS = [s.strip() for s in os.getenv("RSS_FEEDS", "").split(",") if s.strip()]
+
+# RSS feeds: BBC + GB News
+RSS_FEEDS = [
+    "https://feeds.bbci.co.uk/news/world/rss.xml",
+    "https://www.gbnews.com/feeds/politics.rss"
+]
 
 
 def normalize_article(*, source_name: str, url: str, published_at,
                       bias_score=None, sentiment_score=None):
-    # published_at can be None or string → convert to ISO
     ts = None
     if published_at:
         try:
@@ -50,7 +54,6 @@ def fetch_content(url: str) -> str | None:
 
 
 def insert_article_if_new(article: dict):
-    # dedupe by URL
     exists = supabase.table("articles").select("id").eq("url", article["url"]).limit(1).execute().data
     if exists:
         return exists[0]["id"]
@@ -64,7 +67,7 @@ def insert_article_if_new(article: dict):
         "bias_score": article.get("bias_score"),
         "sentiment_score": article.get("sentiment_score"),
         "source_id": source_id,
-        "content": content,   # <-- new field
+        "content": content,
     }
     res = supabase.table("articles").insert(payload).execute().data
     return res[0]["id"]
@@ -74,8 +77,13 @@ def fetch_newsapi():
     if not NEWSAPI_KEY:
         return []
     url = "https://newsapi.org/v2/top-headlines"
-    params = {"language": "en", "pageSize": 50}
-    headers = {"Authorization": NEWSAPI_KEY}
+    # Explicitly request CNN and RTE sources
+    params = {
+        "language": "en",
+        "pageSize": 50,
+        "sources": "cnn,rte"
+    }
+    headers = {"X-Api-Key": NEWSAPI_KEY}   # correct header
     r = requests.get(url, params=params, headers=headers, timeout=15)
     r.raise_for_status()
     data = r.json()
