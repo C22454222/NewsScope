@@ -1,6 +1,8 @@
 # app/main.py
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
+from fastapi.responses import FileResponse
+import os
 
 from app.routes import articles, users, sources
 from app.core.scheduler import start_scheduler, add_job
@@ -17,7 +19,7 @@ async def lifespan(app: FastAPI):
     add_job(analyze_unscored_articles, minutes=60)      # sentiment/bias analysis
     add_job(archive_old_articles, minutes=1440)         # daily archiving
 
-    yield  # <-- control passes to the application
+    yield   # <-- control passes to the application
 
     # Shutdown logic (optional)
     # scheduler.shutdown(wait=False)
@@ -50,3 +52,9 @@ def health():
 app.include_router(articles.router, prefix="/articles", tags=["articles"])
 app.include_router(users.router, prefix="/users", tags=["users"])
 app.include_router(sources.router, prefix="/sources", tags=["sources"])
+
+
+# Favicon route
+@app.get("/favicon.ico")
+async def favicon():
+    return FileResponse(os.path.join("static", "favicon.ico"))
