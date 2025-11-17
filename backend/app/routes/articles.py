@@ -20,6 +20,7 @@ def add_article(article: ArticleCreate):
         "url": article.url,
         "bias_score": article.bias_score,
         "sentiment_score": article.sentiment_score,
-        "published_at": article.published_at
+        "published_at": article.published_at,
+        "content": article.content
     }).execute()
     return insert_response.data

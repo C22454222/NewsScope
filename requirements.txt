@@ -20,3 +20,5 @@ supabase==2.23.2
 apscheduler==3.10.4
 feedparser==6.0.11
 python-dateutil==2.9.0.post0
+
+newspaper3k
