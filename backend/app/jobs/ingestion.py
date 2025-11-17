@@ -1,16 +1,19 @@
-# app/jobs/ingestion.py
 import os
 import requests
 import feedparser
 from dateutil import parser as dtparser
 from app.db.supabase import supabase
 
+# For parsing article text
+from newspaper import Article   # pip install newspaper3k
+
 
 NEWSAPI_KEY = os.getenv("NEWSAPI_KEY")
 RSS_FEEDS = [s.strip() for s in os.getenv("RSS_FEEDS", "").split(",") if s.strip()]
 
 
-def normalize_article(*, source_name: str, url: str, published_at, bias_score=None, sentiment_score=None):
+def normalize_article(*, source_name: str, url: str, published_at,
+                      bias_score=None, sentiment_score=None):
     # published_at can be None or string → convert to ISO
     ts = None
     if published_at:
@@ -23,14 +26,11 @@ def normalize_article(*, source_name: str, url: str, published_at, bias_score=No
         "published_at": ts.isoformat() if ts else None,
         "bias_score": bias_score,
         "sentiment_score": sentiment_score,
-        # we store normalized source in sources table; attach later as source_id
-        # keep source_name for lookup/insert
         "source_name": source_name,
     }
 
 
 def upsert_source(name: str):
-    # get or create source row, return id
     existing = supabase.table("sources").select("id").eq("name", name).limit(1).execute().data
     if existing:
         return existing[0]["id"]
@@ -38,18 +38,33 @@ def upsert_source(name: str):
     return inserted[0]["id"]
 
 
+def fetch_content(url: str) -> str | None:
+    """Download and parse article text from URL."""
+    try:
+        art = Article(url)
+        art.download()
+        art.parse()
+        return art.text
+    except Exception:
+        return None
+
+
 def insert_article_if_new(article: dict):
     # dedupe by URL
     exists = supabase.table("articles").select("id").eq("url", article["url"]).limit(1).execute().data
     if exists:
         return exists[0]["id"]
+
     source_id = upsert_source(article["source_name"]) if article.get("source_name") else None
+    content = fetch_content(article["url"])
+
     payload = {
         "url": article["url"],
         "published_at": article["published_at"],
         "bias_score": article.get("bias_score"),
         "sentiment_score": article.get("sentiment_score"),
-        "source_id": source_id
+        "source_id": source_id,
+        "content": content,   # <-- new field
     }
     res = supabase.table("articles").insert(payload).execute().data
     return res[0]["id"]
@@ -107,6 +122,7 @@ def run_ingestion_cycle():
         articles += fetch_rss()
     except Exception:
         pass
+
     for a in articles:
         try:
             insert_article_if_new(a)

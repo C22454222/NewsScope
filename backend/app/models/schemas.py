@@ -11,6 +11,7 @@ class ArticleBase(BaseModel):
     bias_score: Optional[float] = None
     sentiment_score: Optional[float] = None
     published_at: Optional[datetime] = None
+    content: Optional[str] = None
 
 
 class ArticleCreate(ArticleBase):
