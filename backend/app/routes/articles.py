@@ -6,13 +6,13 @@ from app.models.schemas import ArticleCreate
 router = APIRouter()
 
 
-@router.get("/articles")
+@router.get("/")
 def get_articles():
     response = supabase.table("articles").select("*").execute()
     return response.data
 
 
-@router.post("/articles")
+@router.post("/")
 def add_article(article: ArticleCreate):
     insert_response = supabase.table("articles").insert({
         "source": article.source,
