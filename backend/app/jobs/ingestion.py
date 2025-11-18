@@ -74,16 +74,19 @@ def fetch_newsapi():
     if not NEWSAPI_KEY:
         return []
     url = "https://newsapi.org/v2/top-headlines"
-    # Explicitly request CNN and RTE sources
     params = {
         "language": "en",
         "pageSize": 50,
         "sources": "cnn,rte"
     }
-    headers = {"X-Api-Key": NEWSAPI_KEY}   # correct header
+    headers = {"X-Api-Key": NEWSAPI_KEY}
     r = requests.get(url, params=params, headers=headers, timeout=15)
     r.raise_for_status()
     data = r.json()
+
+    # 🔎 Debug log: show the raw JSON response
+    print("NewsAPI raw response:", data)
+
     normalized = []
     for a in data.get("articles", []):
         n = normalize_article(
