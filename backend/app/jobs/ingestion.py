@@ -5,12 +5,12 @@ from dateutil import parser as dtparser
 from app.db.supabase import supabase
 
 # For parsing article text
-from newspaper import Article   # pip install newspaper3k
+from newspaper import Article
 
 
 NEWSAPI_KEY = os.getenv("NEWSAPI_KEY")
 
-# RSS feeds configured via .env
+# RSS feeds configured via .env (BBC, GB News, RTÉ)
 RSS_FEEDS = [s.strip() for s in os.getenv("RSS_FEEDS", "").split(",") if s.strip()]
 
 
@@ -74,17 +74,18 @@ def fetch_newsapi():
     if not NEWSAPI_KEY:
         return []
     url = "https://newsapi.org/v2/top-headlines"
+    # Only CNN here – RTÉ is not supported by NewsAPI
     params = {
         "language": "en",
         "pageSize": 50,
-        "sources": "cnn,rte"
+        "sources": "cnn"
     }
     headers = {"X-Api-Key": NEWSAPI_KEY}
     r = requests.get(url, params=params, headers=headers, timeout=15)
     r.raise_for_status()
     data = r.json()
 
-    # 🔎 Debug log: show the raw JSON response
+    # 🔎 Debug log
     print("NewsAPI raw response:", data)
 
     normalized = []
@@ -96,7 +97,7 @@ def fetch_newsapi():
         )
         if n["url"]:
             normalized.append(n)
-    print(f"Fetched {len(normalized)} articles from NewsAPI (CNN/RTÉ)")
+    print(f"Fetched {len(normalized)} articles from NewsAPI (CNN)")
     return normalized
 
 
@@ -116,9 +117,10 @@ def fetch_rss():
                 )
                 if n["url"]:
                     normalized.append(n)
-        except Exception:
+        except Exception as e:
+            print(f"RSS fetch error for {feed}: {e}")
             continue
-    print(f"Fetched {len(normalized)} articles from RSS (BBC/GB)")
+    print(f"Fetched {len(normalized)} articles from RSS (BBC/GB/RTÉ)")
     return normalized
 
 
