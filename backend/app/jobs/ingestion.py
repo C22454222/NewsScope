@@ -10,11 +10,8 @@ from newspaper import Article   # pip install newspaper3k
 
 NEWSAPI_KEY = os.getenv("NEWSAPI_KEY")
 
-# RSS feeds: BBC + GB News
-RSS_FEEDS = [
-    "https://feeds.bbci.co.uk/news/world/rss.xml",
-    "https://www.gbnews.com/feeds/politics.rss"
-]
+# RSS feeds configured via .env
+RSS_FEEDS = [s.strip() for s in os.getenv("RSS_FEEDS", "").split(",") if s.strip()]
 
 
 def normalize_article(*, source_name: str, url: str, published_at,
@@ -96,6 +93,7 @@ def fetch_newsapi():
         )
         if n["url"]:
             normalized.append(n)
+    print(f"Fetched {len(normalized)} articles from NewsAPI (CNN/RTÉ)")
     return normalized
 
 
@@ -117,6 +115,7 @@ def fetch_rss():
                     normalized.append(n)
         except Exception:
             continue
+    print(f"Fetched {len(normalized)} articles from RSS (BBC/GB)")
     return normalized
 
 
@@ -124,15 +123,15 @@ def run_ingestion_cycle():
     articles = []
     try:
         articles += fetch_newsapi()
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"NewsAPI fetch failed: {e}")
     try:
         articles += fetch_rss()
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"RSS fetch failed: {e}")
 
     for a in articles:
         try:
             insert_article_if_new(a)
-        except Exception:
-            continue
+        except Exception as e:
+            print(f"Insert failed for {a.get('url')}: {e}")
