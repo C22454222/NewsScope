@@ -50,24 +50,38 @@ def fetch_content(url: str) -> str | None:
         return None
 
 
-def insert_article_if_new(article: dict):
-    exists = supabase.table("articles").select("id").eq("url", article["url"]).limit(1).execute().data
-    if exists:
-        return exists[0]["id"]
+def insert_articles_batch(articles: list[dict]):
+    """Batch insert new articles, skipping duplicates by URL."""
+    urls = [a["url"] for a in articles if a.get("url")]
+    if not urls:
+        return []
 
-    source_id = upsert_source(article["source_name"]) if article.get("source_name") else None
-    content = fetch_content(article["url"])
+    # Check existing URLs in one query
+    existing = supabase.table("articles").select("url").in_("url", urls).execute().data
+    existing_urls = {e["url"] for e in existing}
 
-    payload = {
-        "url": article["url"],
-        "published_at": article["published_at"],
-        "bias_score": article.get("bias_score"),
-        "sentiment_score": article.get("sentiment_score"),
-        "source_id": source_id,
-        "content": content,
-    }
-    res = supabase.table("articles").insert(payload).execute().data
-    return res[0]["id"]
+    payloads = []
+    for article in articles:
+        if not article.get("url") or article["url"] in existing_urls:
+            continue
+        source_id = upsert_source(article["source_name"]) if article.get("source_name") else None
+        content = fetch_content(article["url"])
+        payloads.append({
+            "url": article["url"],
+            "published_at": article["published_at"],
+            "bias_score": article.get("bias_score"),
+            "sentiment_score": article.get("sentiment_score"),
+            "source_id": source_id,
+            "content": content,
+        })
+
+    if payloads:
+        res = supabase.table("articles").insert(payloads).execute().data
+        print(f"Inserted {len(res)} new articles")
+        return [r["id"] for r in res]
+    else:
+        print("No new articles to insert")
+    return []
 
 
 def fetch_newsapi():
@@ -135,8 +149,7 @@ def run_ingestion_cycle():
     except Exception as e:
         print(f"RSS fetch failed: {e}")
 
-    for a in articles:
-        try:
-            insert_article_if_new(a)
-        except Exception as e:
-            print(f"Insert failed for {a.get('url')}: {e}")
+    try:
+        insert_articles_batch(articles)
+    except Exception as e:
+        print(f"Batch insert failed: {e}")
