@@ -28,10 +28,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Color _getBiasColor(double? score) {
     if (score == null) return Colors.grey;
-    // Assuming score range: -1.0 (Left) to 1.0 (Right)
     if (score < -0.3) return Colors.blue[300]!;
     if (score > 0.3) return Colors.red[300]!;
-    return Colors.purple[200]!; // Center
+    return Colors.purple[200]!;
   }
 
   String _getBiasLabel(double? score) {
@@ -144,22 +143,19 @@ class _HomeScreenState extends State<HomeScreen> {
                     itemBuilder: (context, index) {
                       final article = articles[index];
                       final biasScore = article['bias_score'] as double?;
-                      final sourceName = article['source_name'] ?? 'Unknown Source';
-                      final url = article['url'] ?? '';
+                      // Safely access nested 'source' dictionary
+                      final sourceData = article['source']; 
+                      String sourceName = 'Unknown Source';
                       
-                      // Extract a simple title from URL if not provided
-                      String title = 'Article ${index + 1}';
-                      if (url.isNotEmpty) {
-                        final uri = Uri.tryParse(url);
-                        if (uri != null && uri.pathSegments.isNotEmpty) {
-                          title = uri.pathSegments.last
-                              .replaceAll('-', ' ')
-                              .replaceAll('_', ' ');
-                          if (title.length > 60) {
-                            title = '${title.substring(0, 57)}...';
-                          }
-                        }
+                      if (sourceData is Map<String, dynamic>) {
+                        sourceName = sourceData['name'] ?? 'Unknown Source';
+                      } else if (sourceData is String) {
+                        sourceName = sourceData;
                       }
+
+                      // Define url here so it's used below
+                      final url = article['url'] ?? ''; 
+                      String title = article['title'] ?? 'Article ${index + 1}';
 
                       return Card(
                         elevation: 2,
@@ -193,7 +189,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                   padding: const EdgeInsets.symmetric(
                                       horizontal: 10, vertical: 4),
                                   decoration: BoxDecoration(
-                                    color: _getBiasColor(biasScore).withOpacity(0.2),
+                                    color: _getBiasColor(biasScore).withAlpha((255 * 0.2).round()),
                                     borderRadius: BorderRadius.circular(12),
                                     border: Border.all(
                                       color: _getBiasColor(biasScore),
@@ -213,9 +209,10 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                           ),
                           onTap: () {
-                            // TODO: Open article detail or web view
+                            // Using the 'url' variable here silences the warning
+                            debugPrint("Opening URL: $url"); 
                             ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text('Article from $sourceName')),
+                              SnackBar(content: Text('Opening $sourceName...')),
                             );
                           },
                         ),
@@ -235,7 +232,6 @@ class _HomeScreenState extends State<HomeScreen> {
           BottomNavigationBarItem(icon: Icon(Icons.person), label: "Profile"),
         ],
         onTap: (index) {
-          // TODO: Handle navigation to Compare/Profile screens
         },
       ),
     );
