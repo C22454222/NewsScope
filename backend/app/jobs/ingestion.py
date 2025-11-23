@@ -7,6 +7,7 @@ from app.db.supabase import supabase
 # For parsing article text
 from newspaper import Article
 
+
 NEWSAPI_KEY = os.getenv("NEWSAPI_KEY")
 
 # RSS feeds configured via .env (BBC, GB News, RTÉ)
