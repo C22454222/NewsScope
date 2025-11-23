@@ -7,7 +7,6 @@ from app.db.supabase import supabase
 # For parsing article text
 from newspaper import Article
 
-
 NEWSAPI_KEY = os.getenv("NEWSAPI_KEY")
 
 # RSS feeds configured via .env
@@ -86,11 +85,11 @@ def insert_articles_batch(articles: list[dict]):
     for article in articles:
         if not article.get("url") or article["url"] in existing_urls:
             continue
-            
+
         # Use 'source' key here, not source_name
         source_name_val = article.get("source")
         source_id = upsert_source(source_name_val) if source_name_val else None
-        
+
         content = fetch_content(article["url"])
         payloads.append(
             {
@@ -100,7 +99,7 @@ def insert_articles_batch(articles: list[dict]):
                 "sentiment_score": article.get("sentiment_score"),
                 "source_id": source_id,
                 "content": content,
-                "source": source_name_val, # Ensure raw source string is saved if needed
+                "source": source_name_val,  # Ensure raw source string is saved
             }
         )
 
@@ -119,7 +118,7 @@ def fetch_newsapi():
     url = "https://newsapi.org/v2/top-headlines"
     params = {
         "language": "en",
-        "pageSize": 5, 
+        "pageSize": 5,
         "sources": "cnn",
     }
     headers = {"X-Api-Key": NEWSAPI_KEY}
@@ -147,7 +146,7 @@ def fetch_rss():
     for feed in RSS_FEEDS:
         try:
             parsed = feedparser.parse(feed)
-            
+
             # 1. Try map
             source_name = FEED_NAME_MAP.get(feed)
             # 2. Try feed title
@@ -177,7 +176,7 @@ def fetch_rss():
 
 
 def run_ingestion_cycle():
-    articles: list[dict] = []
+    articles = []
     try:
         articles += fetch_newsapi()
     except Exception as exc:
