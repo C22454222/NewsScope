@@ -20,6 +20,7 @@ FEED_NAME_MAP = {
     "https://www.gbnews.com/feeds/politics.rss": "GB News",
 }
 
+
 def normalize_article(
     *, source_name: str, url: str, published_at,
     bias_score=None, sentiment_score=None
@@ -38,6 +39,7 @@ def normalize_article(
         "source": source_name,  # Using 'source' to match DB schema
     }
 
+
 def upsert_source(name: str):
     existing = (
         supabase.table("sources")
@@ -52,6 +54,7 @@ def upsert_source(name: str):
     inserted = supabase.table("sources").insert({"name": name}).execute().data
     return inserted[0]["id"]
 
+
 def fetch_content(url: str) -> str | None:
     """Download and parse article text from URL."""
     try:
@@ -61,6 +64,7 @@ def fetch_content(url: str) -> str | None:
         return art.text
     except Exception:
         return None
+
 
 def insert_articles_batch(articles: list[dict]):
     """Batch insert new articles, skipping duplicates by URL."""
@@ -108,6 +112,7 @@ def insert_articles_batch(articles: list[dict]):
         print("No new articles to insert")
     return []
 
+
 def fetch_newsapi():
     if not NEWSAPI_KEY:
         return []
@@ -135,6 +140,7 @@ def fetch_newsapi():
             normalized.append(n)
     print(f"Fetched {len(normalized)} articles from NewsAPI (CNN)")
     return normalized
+
 
 def fetch_rss():
     normalized = []
@@ -168,6 +174,7 @@ def fetch_rss():
             continue
     print(f"Fetched {len(normalized)} articles from RSS")
     return normalized
+
 
 def run_ingestion_cycle():
     articles: list[dict] = []
