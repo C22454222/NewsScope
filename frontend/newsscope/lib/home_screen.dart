@@ -89,50 +89,9 @@ class _HomeScreenState extends State<HomeScreen> {
                 if (snapshot.connectionState == ConnectionState.waiting) {
                   return const Center(child: CircularProgressIndicator());
                 } else if (snapshot.hasError) {
-                  return Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(24.0),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const Icon(Icons.error_outline, size: 64, color: Colors.redAccent),
-                          const SizedBox(height: 16),
-                          Text(
-                            "Error loading articles",
-                            style: Theme.of(context).textTheme.titleLarge,
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            snapshot.error.toString(),
-                            textAlign: TextAlign.center,
-                            style: TextStyle(color: Colors.grey[600]),
-                          ),
-                          const SizedBox(height: 24),
-                          ElevatedButton.icon(
-                            onPressed: _refreshArticles,
-                            icon: const Icon(Icons.refresh),
-                            label: const Text("Retry"),
-                          ),
-                        ],
-                      ),
-                    ),
-                  );
+                  return Center(child: Text("Error: ${snapshot.error}"));
                 } else if (!snapshot.hasData || snapshot.data!.isEmpty) {
-                  return Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.article_outlined, size: 64, color: Colors.grey[400]),
-                        const SizedBox(height: 16),
-                        const Text("No articles found."),
-                        const SizedBox(height: 8),
-                        ElevatedButton(
-                          onPressed: _refreshArticles,
-                          child: const Text("Refresh"),
-                        ),
-                      ],
-                    ),
-                  );
+                  return const Center(child: Text("No articles found."));
                 }
 
                 final articles = snapshot.data!;
@@ -146,19 +105,17 @@ class _HomeScreenState extends State<HomeScreen> {
                       final biasScore = article['bias_score'] as double?;
                       final sentimentScore = article['sentiment_score'] as double?;
                       
-                      // Correctly parse flat source_name from backend response
-                      final sourceName = article['source_name'] ?? 'Unknown Source';
+                      // Look for 'source' first (from ingestion fix), fallback to 'source_name'
+                      final sourceName = article['source'] ?? article['source_name'] ?? 'Unknown Source';
                       
                       final url = article['url'] ?? '';
                       final content = article['content'] ?? 'No content available.';
                       String title = article['title'] ?? 'Article ${index + 1}';
 
-                      // If title is missing (e.g., just 'Article X'), try to parse from URL
                       if (title == 'Article ${index + 1}' && url.isNotEmpty) {
                         final uri = Uri.tryParse(url);
                         if (uri != null && uri.pathSegments.isNotEmpty) {
                           String pathSegment = uri.pathSegments.last;
-                          // Basic cleanup: remove .html, replace hyphens/underscores
                           pathSegment = pathSegment.replaceAll('.html', '')
                                                    .replaceAll('.htm', '')
                                                    .replaceAll('-', ' ')
@@ -246,16 +203,6 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
         ],
-      ),
-      bottomNavigationBar: BottomNavigationBar(
-        items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.home), label: "Home"),
-          BottomNavigationBarItem(icon: Icon(Icons.search), label: "Compare"),
-          BottomNavigationBarItem(icon: Icon(Icons.person), label: "Profile"),
-        ],
-        onTap: (index) {
-          // TODO: Handle navigation
-        },
       ),
     );
   }

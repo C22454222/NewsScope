@@ -10,9 +10,15 @@ from newspaper import Article
 
 NEWSAPI_KEY = os.getenv("NEWSAPI_KEY")
 
-# RSS feeds configured via .env (BBC, GB News, RTÉ)
+# RSS feeds configured via .env
 RSS_FEEDS = [s.strip() for s in os.getenv("RSS_FEEDS", "").split(",") if s.strip()]
 
+# Map specific feed URLs to clean names
+FEED_NAME_MAP = {
+    "http://feeds.bbci.co.uk/news/rss.xml": "BBC News",
+    "https://www.rte.ie/news/rss/news-headlines.xml": "RTÉ News",
+    "https://www.gbnews.com/feeds/politics.rss": "GB News",
+}
 
 def normalize_article(
     *, source_name: str, url: str, published_at,
@@ -29,9 +35,8 @@ def normalize_article(
         "published_at": ts.isoformat() if ts else None,
         "bias_score": bias_score,
         "sentiment_score": sentiment_score,
-        "source_name": source_name,
+        "source": source_name,  # Using 'source' to match DB schema
     }
-
 
 def upsert_source(name: str):
     existing = (
@@ -47,7 +52,6 @@ def upsert_source(name: str):
     inserted = supabase.table("sources").insert({"name": name}).execute().data
     return inserted[0]["id"]
 
-
 def fetch_content(url: str) -> str | None:
     """Download and parse article text from URL."""
     try:
@@ -57,7 +61,6 @@ def fetch_content(url: str) -> str | None:
         return art.text
     except Exception:
         return None
-
 
 def insert_articles_batch(articles: list[dict]):
     """Batch insert new articles, skipping duplicates by URL."""
@@ -79,11 +82,11 @@ def insert_articles_batch(articles: list[dict]):
     for article in articles:
         if not article.get("url") or article["url"] in existing_urls:
             continue
-        source_id = (
-            upsert_source(article["source_name"])
-            if article.get("source_name")
-            else None
-        )
+            
+        # Use 'source' key here, not source_name
+        source_name_val = article.get("source")
+        source_id = upsert_source(source_name_val) if source_name_val else None
+        
         content = fetch_content(article["url"])
         payloads.append(
             {
@@ -93,6 +96,7 @@ def insert_articles_batch(articles: list[dict]):
                 "sentiment_score": article.get("sentiment_score"),
                 "source_id": source_id,
                 "content": content,
+                "source": source_name_val, # Ensure raw source string is saved if needed
             }
         )
 
@@ -104,15 +108,13 @@ def insert_articles_batch(articles: list[dict]):
         print("No new articles to insert")
     return []
 
-
 def fetch_newsapi():
     if not NEWSAPI_KEY:
         return []
     url = "https://newsapi.org/v2/top-headlines"
-    # Only CNN here – RTÉ is not supported by NewsAPI
     params = {
         "language": "en",
-        "pageSize": 5,  # limit to 5 articles for prototype
+        "pageSize": 5, 
         "sources": "cnn",
     }
     headers = {"X-Api-Key": NEWSAPI_KEY}
@@ -134,19 +136,26 @@ def fetch_newsapi():
     print(f"Fetched {len(normalized)} articles from NewsAPI (CNN)")
     return normalized
 
-
 def fetch_rss():
     normalized = []
     for feed in RSS_FEEDS:
         try:
             parsed = feedparser.parse(feed)
-            # limit to first 5 entries per RSS feed
+            
+            # 1. Try map
+            source_name = FEED_NAME_MAP.get(feed)
+            # 2. Try feed title
+            if not source_name:
+                source_name = parsed.feed.get("title", "Unknown Source")
+            # 3. Fix RTÉ specifically
+            if source_name == "News Headlines":
+                source_name = "RTÉ News"
+
             for e in parsed.entries[:5]:
                 url = getattr(e, "link", None)
                 published = getattr(e, "published", None) or getattr(
                     e, "updated", None
                 )
-                source_name = parsed.feed.get("title")
                 n = normalize_article(
                     source_name=source_name,
                     url=url,
@@ -157,9 +166,8 @@ def fetch_rss():
         except Exception as exc:
             print(f"RSS fetch error for {feed}: {exc}")
             continue
-    print(f"Fetched {len(normalized)} articles from RSS (BBC/GB/RTÉ)")
+    print(f"Fetched {len(normalized)} articles from RSS")
     return normalized
-
 
 def run_ingestion_cycle():
     articles: list[dict] = []

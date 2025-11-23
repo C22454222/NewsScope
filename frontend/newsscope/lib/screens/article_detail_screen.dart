@@ -42,7 +42,7 @@ class ArticleDetailScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Capture sentiment score locally to promote it to non-nullable if checked
+    // Capture local variable for null promotion
     final sentiment = sentimentScore;
 
     return Scaffold(
@@ -83,7 +83,6 @@ class ArticleDetailScreen extends StatelessWidget {
                   label: Text(_getBiasLabel(biasScore)),
                   backgroundColor: _getBiasColor(biasScore).withAlpha((255 * 0.3).round()),
                 ),
-                // Null check logic fixed here
                 if (sentiment != null)
                   Chip(
                     label: Text("Sentiment: ${sentiment.toStringAsFixed(2)}"),
