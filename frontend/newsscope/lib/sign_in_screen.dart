@@ -13,83 +13,157 @@ class SignInScreen extends StatefulWidget {
 class _SignInScreenState extends State<SignInScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
+  bool _isLoading = false;
 
-  Future<UserCredential> _signInWithGoogle() async {
-    // ✅ No scopes argument in v7
-    final GoogleSignIn googleSignIn = GoogleSignIn();
+  Future<UserCredential?> _signInWithGoogle() async {
+    setState(() => _isLoading = true);
+    try {
+      final GoogleSignIn googleSignIn = GoogleSignIn();
+      final GoogleSignInAccount? googleUser = await googleSignIn.signIn();
+      
+      if (googleUser == null) {
+        setState(() => _isLoading = false);
+        return null; // User canceled
+      }
 
-    final GoogleSignInAccount? googleUser = await googleSignIn.signIn();
-    if (googleUser == null) throw Exception("Google sign-in aborted");
+      final GoogleSignInAuthentication googleAuth = await googleUser.authentication;
+      final credential = GoogleAuthProvider.credential(
+        idToken: googleAuth.idToken,
+        accessToken: googleAuth.accessToken, // Often needed depending on version
+      );
 
-    // ✅ Must await the Future
-    final GoogleSignInAuthentication googleAuth = await googleUser.authentication;
-
-    // ✅ accessToken removed in v7; only idToken is needed for Firebase
-    final credential = GoogleAuthProvider.credential(
-      idToken: googleAuth.idToken,
-    );
-
-    return FirebaseAuth.instance.signInWithCredential(credential);
+      return await FirebaseAuth.instance.signInWithCredential(credential);
+    } on FirebaseAuthException catch (e) {
+      _showError(e.message ?? "Google Sign-In failed");
+      return null;
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 
   Future<void> _signInWithEmail() async {
+    if (_emailController.text.isEmpty || _passwordController.text.isEmpty) {
+      _showError("Please fill in all fields");
+      return;
+    }
+
+    setState(() => _isLoading = true);
     try {
       await FirebaseAuth.instance.signInWithEmailAndPassword(
         email: _emailController.text.trim(),
         password: _passwordController.text.trim(),
       );
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Signed in successfully")),
-      );
     } on FirebaseAuthException catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Error: ${e.message}")),
-      );
+      _showError(e.message ?? "Authentication failed");
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  void _showError(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: Colors.redAccent,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              TextField(
-                controller: _emailController,
-                decoration: const InputDecoration(labelText: "Email"),
-              ),
-              TextField(
-                controller: _passwordController,
-                decoration: const InputDecoration(labelText: "Password"),
-                obscureText: true,
-              ),
-              const SizedBox(height: 16),
-              ElevatedButton(
-                onPressed: _signInWithEmail,
-                child: const Text("Sign in with Email"),
-              ),
-              const SizedBox(height: 8),
-              ElevatedButton(
-                onPressed: _signInWithGoogle,
-                child: const Text("Sign in with Google"),
-              ),
-              const SizedBox(height: 8),
-              TextButton(
-                onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const SignUpScreen()),
-                  );
-                },
-                child: const Text("Create Account"),
-              ),
-            ],
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 24.0),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Icon(Icons.newspaper, size: 80, color: Colors.blueAccent),
+                const SizedBox(height: 16),
+                Text(
+                  "Welcome Back",
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black87,
+                      ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  "Sign in to continue to NewsScope",
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                        color: Colors.grey[600],
+                      ),
+                ),
+                const SizedBox(height: 48),
+                TextField(
+                  controller: _emailController,
+                  decoration: const InputDecoration(
+                    labelText: "Email",
+                    prefixIcon: Icon(Icons.email_outlined),
+                    border: OutlineInputBorder(),
+                  ),
+                  keyboardType: TextInputType.emailAddress,
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: _passwordController,
+                  decoration: const InputDecoration(
+                    labelText: "Password",
+                    prefixIcon: Icon(Icons.lock_outline),
+                    border: OutlineInputBorder(),
+                  ),
+                  obscureText: true,
+                ),
+                const SizedBox(height: 24),
+                _isLoading
+                    ? const Center(child: CircularProgressIndicator())
+                    : ElevatedButton(
+                        onPressed: _signInWithEmail,
+                        style: ElevatedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                        child: const Text("Sign In", style: TextStyle(fontSize: 16)),
+                      ),
+                const SizedBox(height: 16),
+                OutlinedButton.icon(
+                  onPressed: _isLoading ? null : _signInWithGoogle,
+                  icon: const Icon(Icons.login), // Use a Google icon asset ideally
+                  label: const Text("Sign in with Google"),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    side: BorderSide(color: Colors.grey[300]!),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 24),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Text("Don't have an account?"),
+                    TextButton(
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (_) => const SignUpScreen()),
+                        );
+                      },
+                      child: const Text("Sign Up"),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
       ),

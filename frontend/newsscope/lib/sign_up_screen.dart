@@ -12,8 +12,17 @@ class _SignUpScreenState extends State<SignUpScreen> {
   final _usernameController = TextEditingController();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
+  bool _isLoading = false;
 
   Future<void> _signUp() async {
+    if (_usernameController.text.isEmpty || 
+        _emailController.text.isEmpty || 
+        _passwordController.text.isEmpty) {
+      _showError("Please fill in all fields");
+      return;
+    }
+
+    setState(() => _isLoading = true);
     try {
       UserCredential userCred = await FirebaseAuth.instance
           .createUserWithEmailAndPassword(
@@ -25,46 +34,90 @@ class _SignUpScreenState extends State<SignUpScreen> {
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Account created successfully")),
+        const SnackBar(content: Text("Account created! Please sign in.")),
       );
 
-      Navigator.pop(context); // back to SignInScreen
+      Navigator.pop(context); // Go back to sign in
     } on FirebaseAuthException catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Error: ${e.message}")),
-      );
+      _showError(e.message ?? "Registration failed");
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  void _showError(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), backgroundColor: Colors.redAccent),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              TextField(
-                controller: _usernameController,
-                decoration: const InputDecoration(labelText: "Username"),
-              ),
-              TextField(
-                controller: _emailController,
-                decoration: const InputDecoration(labelText: "Email"),
-              ),
-              TextField(
-                controller: _passwordController,
-                decoration: const InputDecoration(labelText: "Password"),
-                obscureText: true,
-              ),
-              const SizedBox(height: 16),
-              ElevatedButton(
-                onPressed: _signUp,
-                child: const Text("Sign Up"),
-              ),
-            ],
+      appBar: AppBar(
+        title: const Text("Create Account"),
+        elevation: 0,
+        backgroundColor: Colors.transparent,
+        foregroundColor: Colors.black,
+      ),
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  "Join NewsScope",
+                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                    fontWeight: FontWeight.bold
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text("Create an account to track media bias and analyze news."),
+                const SizedBox(height: 32),
+                TextField(
+                  controller: _usernameController,
+                  decoration: const InputDecoration(
+                    labelText: "Username",
+                    prefixIcon: Icon(Icons.person_outline),
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: _emailController,
+                  decoration: const InputDecoration(
+                    labelText: "Email",
+                    prefixIcon: Icon(Icons.email_outlined),
+                    border: OutlineInputBorder(),
+                  ),
+                  keyboardType: TextInputType.emailAddress,
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: _passwordController,
+                  decoration: const InputDecoration(
+                    labelText: "Password",
+                    prefixIcon: Icon(Icons.lock_outline),
+                    border: OutlineInputBorder(),
+                  ),
+                  obscureText: true,
+                ),
+                const SizedBox(height: 24),
+                _isLoading 
+                  ? const Center(child: CircularProgressIndicator())
+                  : ElevatedButton(
+                      onPressed: _signUp,
+                      style: ElevatedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                      child: const Text("Sign Up", style: TextStyle(fontSize: 16)),
+                    ),
+              ],
+            ),
           ),
         ),
       ),
