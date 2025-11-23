@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../services/api_service.dart';
+import 'screens/article_detail_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -143,19 +144,32 @@ class _HomeScreenState extends State<HomeScreen> {
                     itemBuilder: (context, index) {
                       final article = articles[index];
                       final biasScore = article['bias_score'] as double?;
-                      // Safely access nested 'source' dictionary
-                      final sourceData = article['source']; 
-                      String sourceName = 'Unknown Source';
+                      final sentimentScore = article['sentiment_score'] as double?;
                       
-                      if (sourceData is Map<String, dynamic>) {
-                        sourceName = sourceData['name'] ?? 'Unknown Source';
-                      } else if (sourceData is String) {
-                        sourceName = sourceData;
-                      }
-
-                      // Define url here so it's used below
-                      final url = article['url'] ?? ''; 
+                      // Correctly parse flat source_name from backend response
+                      final sourceName = article['source_name'] ?? 'Unknown Source';
+                      
+                      final url = article['url'] ?? '';
+                      final content = article['content'] ?? 'No content available.';
                       String title = article['title'] ?? 'Article ${index + 1}';
+
+                      // If title is missing (e.g., just 'Article X'), try to parse from URL
+                      if (title == 'Article ${index + 1}' && url.isNotEmpty) {
+                        final uri = Uri.tryParse(url);
+                        if (uri != null && uri.pathSegments.isNotEmpty) {
+                          String pathSegment = uri.pathSegments.last;
+                          // Basic cleanup: remove .html, replace hyphens/underscores
+                          pathSegment = pathSegment.replaceAll('.html', '')
+                                                   .replaceAll('.htm', '')
+                                                   .replaceAll('-', ' ')
+                                                   .replaceAll('_', ' ');
+                          if (pathSegment.length > 60) {
+                            title = '${pathSegment.substring(0, 57)}...';
+                          } else {
+                            title = pathSegment;
+                          }
+                        }
+                      }
 
                       return Card(
                         elevation: 2,
@@ -209,10 +223,18 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                           ),
                           onTap: () {
-                            // Using the 'url' variable here silences the warning
-                            debugPrint("Opening URL: $url"); 
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text('Opening $sourceName...')),
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => ArticleDetailScreen(
+                                  title: title,
+                                  sourceName: sourceName,
+                                  content: content,
+                                  url: url,
+                                  biasScore: biasScore,
+                                  sentimentScore: sentimentScore,
+                                ),
+                              ),
                             );
                           },
                         ),
@@ -232,6 +254,7 @@ class _HomeScreenState extends State<HomeScreen> {
           BottomNavigationBarItem(icon: Icon(Icons.person), label: "Profile"),
         ],
         onTap: (index) {
+          // TODO: Handle navigation
         },
       ),
     );
