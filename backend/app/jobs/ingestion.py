@@ -3,25 +3,24 @@ import requests
 import feedparser
 from dateutil import parser as dtparser
 from app.db.supabase import supabase
-
-# For parsing article text
 from newspaper import Article
+
 
 NEWSAPI_KEY = os.getenv("NEWSAPI_KEY")
 
-# RSS feeds configured via .env
+
 RSS_FEEDS = [s.strip() for s in os.getenv("RSS_FEEDS", "").split(",") if s.strip()]
 
-# Map specific feed URLs to clean names
+
 FEED_NAME_MAP = {
     "http://feeds.bbci.co.uk/news/rss.xml": "BBC News",
     "https://www.rte.ie/news/rss/news-headlines.xml": "RTÉ News",
-    "https://www.gbnews.com/feeds/politics.rss": "GB News",
+    "https://www.gbnews.com/feeds/news.rss": "GB News",
 }
 
 
 def normalize_article(
-    *, source_name: str, url: str, published_at,
+    *, source_name: str, url: str, title: str, published_at,
     bias_score=None, sentiment_score=None
 ):
     ts = None
@@ -31,11 +30,12 @@ def normalize_article(
         except Exception:
             ts = None
     return {
+        "title": title,
         "url": url,
         "published_at": ts.isoformat() if ts else None,
         "bias_score": bias_score,
         "sentiment_score": sentiment_score,
-        "source": source_name,  # Using 'source' to match DB schema
+        "source": source_name,
     }
 
 
@@ -55,7 +55,6 @@ def upsert_source(name: str):
 
 
 def fetch_content(url: str) -> str | None:
-    """Download and parse article text from URL."""
     try:
         art = Article(url)
         art.download()
@@ -66,12 +65,10 @@ def fetch_content(url: str) -> str | None:
 
 
 def insert_articles_batch(articles: list[dict]):
-    """Batch insert new articles, skipping duplicates by URL."""
     urls = [a["url"] for a in articles if a.get("url")]
     if not urls:
         return []
 
-    # Check existing URLs in one query
     existing = (
         supabase.table("articles")
         .select("url")
@@ -86,20 +83,20 @@ def insert_articles_batch(articles: list[dict]):
         if not article.get("url") or article["url"] in existing_urls:
             continue
 
-        # Use 'source' key here, not source_name
         source_name_val = article.get("source")
         source_id = upsert_source(source_name_val) if source_name_val else None
-
         content = fetch_content(article["url"])
+
         payloads.append(
             {
+                "title": article.get("title"),
                 "url": article["url"],
                 "published_at": article["published_at"],
                 "bias_score": article.get("bias_score"),
                 "sentiment_score": article.get("sentiment_score"),
                 "source_id": source_id,
                 "content": content,
-                "source": source_name_val,  # Ensure raw source string is saved
+                "source": source_name_val,
             }
         )
 
@@ -133,6 +130,7 @@ def fetch_newsapi():
         n = normalize_article(
             source_name=(a.get("source") or {}).get("name"),
             url=a.get("url"),
+            title=a.get("title"),
             published_at=a.get("publishedAt"),
         )
         if n["url"]:
@@ -146,24 +144,22 @@ def fetch_rss():
     for feed in RSS_FEEDS:
         try:
             parsed = feedparser.parse(feed)
-
-            # 1. Try map
             source_name = FEED_NAME_MAP.get(feed)
-            # 2. Try feed title
             if not source_name:
                 source_name = parsed.feed.get("title", "Unknown Source")
-            # 3. Fix RTÉ specifically
             if source_name == "News Headlines":
                 source_name = "RTÉ News"
 
             for e in parsed.entries[:5]:
                 url = getattr(e, "link", None)
+                title = getattr(e, "title", None)
                 published = getattr(e, "published", None) or getattr(
                     e, "updated", None
                 )
                 n = normalize_article(
                     source_name=source_name,
                     url=url,
+                    title=title,
                     published_at=published,
                 )
                 if n["url"]:
