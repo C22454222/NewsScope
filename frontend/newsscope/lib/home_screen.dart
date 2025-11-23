@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../services/api_service.dart';
 import 'screens/article_detail_screen.dart';
+import 'screens/placeholders.dart'; // Import the new placeholders
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -11,6 +12,50 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  int _currentIndex = 0; // Track active tab
+
+  // List of screens for navigation
+  final List<Widget> _screens = [
+    const HomeFeedTab(),
+    const CompareScreen(),
+    const ProfileScreen(),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      // We move the AppBar to the individual tabs or keep a generic one here
+      // For this design, we'll let the tabs handle their own content area
+      body: IndexedStack(
+        index: _currentIndex,
+        children: _screens,
+      ),
+      bottomNavigationBar: BottomNavigationBar(
+        currentIndex: _currentIndex,
+        items: const [
+          BottomNavigationBarItem(icon: Icon(Icons.home), label: "Home"),
+          BottomNavigationBarItem(icon: Icon(Icons.compare_arrows), label: "Compare"),
+          BottomNavigationBarItem(icon: Icon(Icons.person), label: "Profile"),
+        ],
+        onTap: (index) {
+          setState(() {
+            _currentIndex = index;
+          });
+        },
+      ),
+    );
+  }
+}
+
+// Extracted the Feed logic into its own widget to keep code clean
+class HomeFeedTab extends StatefulWidget {
+  const HomeFeedTab({super.key});
+
+  @override
+  State<HomeFeedTab> createState() => _HomeFeedTabState();
+}
+
+class _HomeFeedTabState extends State<HomeFeedTab> {
   final user = FirebaseAuth.instance.currentUser;
   final ApiService _apiService = ApiService();
   late Future<List<dynamic>> _articlesFuture;
@@ -28,16 +73,16 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Color _getBiasColor(double? score) {
-    if (score == null) return Colors.grey;
+    if (score == null) return Colors.grey[300]!; // Placeholder color
     if (score < -0.3) return Colors.blue[300]!;
     if (score > 0.3) return Colors.red[300]!;
     return Colors.purple[200]!;
   }
 
   String _getBiasLabel(double? score) {
-    if (score == null) return "Pending";
-    if (score < -0.3) return "Left";
-    if (score > 0.3) return "Right";
+    if (score == null) return "Pending Analysis"; // Clear placeholder text
+    if (score < -0.3) return "Left Leaning";
+    if (score > 0.3) return "Right Leaning";
     return "Center";
   }
 
@@ -69,7 +114,7 @@ class _HomeScreenState extends State<HomeScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  "Hello, ${user?.displayName ?? user?.email?.split('@')[0] ?? 'Reader'}!",
+                  "Hello, ${user?.displayName ?? 'Reader'}!",
                   style: Theme.of(context).textTheme.titleLarge?.copyWith(
                         fontWeight: FontWeight.bold,
                       ),
@@ -104,14 +149,12 @@ class _HomeScreenState extends State<HomeScreen> {
                       final article = articles[index];
                       final biasScore = article['bias_score'] as double?;
                       final sentimentScore = article['sentiment_score'] as double?;
-                      
-                      // Look for 'source' first (from ingestion fix), fallback to 'source_name'
                       final sourceName = article['source'] ?? article['source_name'] ?? 'Unknown Source';
-                      
                       final url = article['url'] ?? '';
                       final content = article['content'] ?? 'No content available.';
                       String title = article['title'] ?? 'Article ${index + 1}';
 
+                      // Title cleanup logic
                       if (title == 'Article ${index + 1}' && url.isNotEmpty) {
                         final uri = Uri.tryParse(url);
                         if (uri != null && uri.pathSegments.isNotEmpty) {
@@ -144,38 +187,58 @@ class _HomeScreenState extends State<HomeScreen> {
                           ),
                           subtitle: Padding(
                             padding: const EdgeInsets.only(top: 8.0),
-                            child: Row(
+                            child: Column( // Changed to Column for better chip layout
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Icon(Icons.source, size: 16, color: Colors.grey[600]),
-                                const SizedBox(width: 4),
-                                Expanded(
-                                  child: Text(
-                                    sourceName,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(fontSize: 13),
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 10, vertical: 4),
-                                  decoration: BoxDecoration(
-                                    color: _getBiasColor(biasScore).withAlpha((255 * 0.2).round()),
-                                    borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(
-                                      color: _getBiasColor(biasScore),
-                                      width: 1.5,
+                                Row(
+                                  children: [
+                                    Icon(Icons.source, size: 16, color: Colors.grey[600]),
+                                    const SizedBox(width: 4),
+                                    Expanded(
+                                      child: Text(
+                                        sourceName,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(fontSize: 13),
+                                      ),
                                     ),
-                                  ),
-                                  child: Text(
-                                    _getBiasLabel(biasScore),
-                                    style: const TextStyle(
-                                      color: Colors.black87,
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
+                                  ],
                                 ),
+                                const SizedBox(height: 8),
+                                // Bias/Sentiment Placeholders
+                                Wrap(
+                                  spacing: 8,
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: _getBiasColor(biasScore).withAlpha((255 * 0.2).round()),
+                                        borderRadius: BorderRadius.circular(12),
+                                        border: Border.all(color: _getBiasColor(biasScore)),
+                                      ),
+                                      child: Text(
+                                        _getBiasLabel(biasScore),
+                                        style: TextStyle(
+                                          fontSize: 11, 
+                                          fontWeight: FontWeight.w600,
+                                          color: biasScore == null ? Colors.grey[700] : Colors.black,
+                                        ),
+                                      ),
+                                    ),
+                                    if (sentimentScore == null)
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                        decoration: BoxDecoration(
+                                          color: Colors.grey[200],
+                                          borderRadius: BorderRadius.circular(12),
+                                          border: Border.all(color: Colors.grey),
+                                        ),
+                                        child: const Text(
+                                          "Sentiment: --",
+                                          style: TextStyle(fontSize: 11, color: Colors.grey),
+                                        ),
+                                      ),
+                                  ],
+                                )
                               ],
                             ),
                           ),
