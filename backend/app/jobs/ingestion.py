@@ -7,15 +7,16 @@ from app.db.supabase import supabase
 # For parsing article text
 from newspaper import Article
 
-
 NEWSAPI_KEY = os.getenv("NEWSAPI_KEY")
 
 # RSS feeds configured via .env (BBC, GB News, RTÉ)
 RSS_FEEDS = [s.strip() for s in os.getenv("RSS_FEEDS", "").split(",") if s.strip()]
 
 
-def normalize_article(*, source_name: str, url: str, published_at,
-                      bias_score=None, sentiment_score=None):
+def normalize_article(
+    *, source_name: str, url: str, published_at,
+    bias_score=None, sentiment_score=None
+):
     ts = None
     if published_at:
         try:
@@ -32,7 +33,14 @@ def normalize_article(*, source_name: str, url: str, published_at,
 
 
 def upsert_source(name: str):
-    existing = supabase.table("sources").select("id").eq("name", name).limit(1).execute().data
+    existing = (
+        supabase.table("sources")
+        .select("id")
+        .eq("name", name)
+        .limit(1)
+        .execute()
+        .data
+    )
     if existing:
         return existing[0]["id"]
     inserted = supabase.table("sources").insert({"name": name}).execute().data
@@ -57,23 +65,35 @@ def insert_articles_batch(articles: list[dict]):
         return []
 
     # Check existing URLs in one query
-    existing = supabase.table("articles").select("url").in_("url", urls).execute().data
+    existing = (
+        supabase.table("articles")
+        .select("url")
+        .in_("url", urls)
+        .execute()
+        .data
+    )
     existing_urls = {e["url"] for e in existing}
 
     payloads = []
     for article in articles:
         if not article.get("url") or article["url"] in existing_urls:
             continue
-        source_id = upsert_source(article["source_name"]) if article.get("source_name") else None
+        source_id = (
+            upsert_source(article["source_name"])
+            if article.get("source_name")
+            else None
+        )
         content = fetch_content(article["url"])
-        payloads.append({
-            "url": article["url"],
-            "published_at": article["published_at"],
-            "bias_score": article.get("bias_score"),
-            "sentiment_score": article.get("sentiment_score"),
-            "source_id": source_id,
-            "content": content,
-        })
+        payloads.append(
+            {
+                "url": article["url"],
+                "published_at": article["published_at"],
+                "bias_score": article.get("bias_score"),
+                "sentiment_score": article.get("sentiment_score"),
+                "source_id": source_id,
+                "content": content,
+            }
+        )
 
     if payloads:
         res = supabase.table("articles").insert(payloads).execute().data
@@ -91,15 +111,14 @@ def fetch_newsapi():
     # Only CNN here – RTÉ is not supported by NewsAPI
     params = {
         "language": "en",
-        "pageSize": 50,
-        "sources": "cnn"
+        "pageSize": 5,  # limit to 5 articles for prototype
+        "sources": "cnn",
     }
     headers = {"X-Api-Key": NEWSAPI_KEY}
     r = requests.get(url, params=params, headers=headers, timeout=15)
     r.raise_for_status()
     data = r.json()
 
-    # 🔎 Debug log
     print("NewsAPI raw response:", data)
 
     normalized = []
@@ -120,9 +139,12 @@ def fetch_rss():
     for feed in RSS_FEEDS:
         try:
             parsed = feedparser.parse(feed)
-            for e in parsed.entries:
+            # limit to first 5 entries per RSS feed
+            for e in parsed.entries[:5]:
                 url = getattr(e, "link", None)
-                published = getattr(e, "published", None) or getattr(e, "updated", None)
+                published = getattr(e, "published", None) or getattr(
+                    e, "updated", None
+                )
                 source_name = parsed.feed.get("title")
                 n = normalize_article(
                     source_name=source_name,
@@ -131,25 +153,25 @@ def fetch_rss():
                 )
                 if n["url"]:
                     normalized.append(n)
-        except Exception as e:
-            print(f"RSS fetch error for {feed}: {e}")
+        except Exception as exc:
+            print(f"RSS fetch error for {feed}: {exc}")
             continue
     print(f"Fetched {len(normalized)} articles from RSS (BBC/GB/RTÉ)")
     return normalized
 
 
 def run_ingestion_cycle():
-    articles = []
+    articles: list[dict] = []
     try:
         articles += fetch_newsapi()
-    except Exception as e:
-        print(f"NewsAPI fetch failed: {e}")
+    except Exception as exc:
+        print(f"NewsAPI fetch failed: {exc}")
     try:
         articles += fetch_rss()
-    except Exception as e:
-        print(f"RSS fetch failed: {e}")
+    except Exception as exc:
+        print(f"RSS fetch failed: {exc}")
 
     try:
         insert_articles_batch(articles)
-    except Exception as e:
-        print(f"Batch insert failed: {e}")
+    except Exception as exc:
+        print(f"Batch insert failed: {exc}")
