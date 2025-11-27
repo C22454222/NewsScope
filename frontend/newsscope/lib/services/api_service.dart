@@ -3,7 +3,7 @@ import 'package:http/http.dart' as http;
 
 class ApiService {
 
-  final String baseUrl = "http://192.168.1.8:8000";
+  final String baseUrl = "https://newsscope.onrender.com";
 
   Future<List<dynamic>> getArticles() async {
     try {
