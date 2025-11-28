@@ -13,58 +13,90 @@ from app.jobs.archiving import archive_old_articles
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """
+    Application lifespan context.
+
+    Used to hook into FastAPI startup/shutdown events so that
+    background jobs (ingestion, analysis, archiving) can be
+    scheduled when the service starts.
+    """
     # Startup logic
     start_scheduler()
-    add_job(run_ingestion_cycle, minutes=30)            # fetch new articles
-    add_job(analyze_unscored_articles, minutes=60)      # sentiment/bias analysis
-    add_job(archive_old_articles, minutes=1440)         # daily archiving
+    # Fetch new articles on a fixed interval
+    add_job(run_ingestion_cycle, minutes=30)
+    # Enrich articles with sentiment and bias scores
+    add_job(analyze_unscored_articles, minutes=60)
+    # Archive older content daily
+    add_job(archive_old_articles, minutes=1440)
 
-    yield   # <-- control passes to the application
+    # Yield control back to FastAPI
+    yield
 
-    # Shutdown logic (optional)
+    # Shutdown logic (kept simple for this prototype)
     # scheduler.shutdown(wait=False)
 
 
+# Main FastAPI application instance
 app = FastAPI(title="NewsScope API", lifespan=lifespan)
 
 
-# Root route
 @app.get("/")
 def root():
+    """
+    Simple root endpoint used for smoke testing.
+
+    Visible when opening the Render URL in a browser.
+    """
     return {
         "message": "Welcome to NewsScope API. Try /health to check status."
     }
 
 
-# HEAD route (for Render probes)
 @app.head("/")
 def root_head():
+    """
+    Lightweight HEAD endpoint for platform health probes.
+
+    Render uses this to verify that the service is online.
+    """
     return {}
 
 
-# Health check route
 @app.get("/health")
 def health():
+    """
+    Health check endpoint for uptime monitoring.
+
+    Called by cron-job.org to keep the Render free tier awake.
+    """
     return {"status": "ok"}
 
 
-# Debug route to trigger ingestion manually
 @app.post("/debug/ingest")
 async def debug_ingest():
+    """
+    Manually trigger a single ingestion run.
+
+    Useful during development and debugging without
+    waiting for the scheduler interval.
+    """
     run_ingestion_cycle()
     return {"status": "ingestion triggered"}
 
 
-# Routers
+# Register route modules with path prefixes and tags
 app.include_router(articles.router, prefix="/articles", tags=["articles"])
 app.include_router(users.router, prefix="/users", tags=["users"])
 app.include_router(sources.router, prefix="/sources", tags=["sources"])
 
 
-# Favicon route
+# Resolve path to static assets (e.g. favicon)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 @app.get("/favicon.ico")
 async def favicon():
+    """
+    Serve a small favicon so browsers do not log 404s.
+    """
     return FileResponse(os.path.join(BASE_DIR, "..", "static", "favicon.ico"))
