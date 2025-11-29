@@ -1,5 +1,8 @@
+// lib/screens/placeholders.dart
 import 'package:flutter/material.dart';
 
+/// Placeholder screen for future comparison features.
+/// Will allow users to view articles side-by-side.
 class CompareScreen extends StatelessWidget {
   const CompareScreen({super.key});
 
@@ -21,6 +24,8 @@ class CompareScreen extends StatelessWidget {
   }
 }
 
+/// Placeholder screen for user profile settings.
+/// Will include bias tracking and reading history preferences.
 class ProfileScreen extends StatelessWidget {
   const ProfileScreen({super.key});
 
