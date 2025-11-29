@@ -18,24 +18,18 @@ BIAS_MODEL = os.getenv("HF_BIAS_MODEL", "bucketresearch/politicalBiasBERT")
 client = InferenceClient(token=HF_API_TOKEN)
 
 
-def _call_model(model: str, text: str):
+def _call_classification(model: str, text: str):
     """
-    Safe wrapper around InferenceClient with retries for loading models.
+    Safe wrapper around InferenceClient.text_classification with retries.
     """
     # Truncate to 512 chars to avoid model errors
     truncated_text = text[:512]
 
     for _ in range(3):  # Retry loop
         try:
-            # We use the specific HTTP post method to get raw JSON
-            # This allows us to manually parse the weird list-of-lists format
-            response = client.post(
-                json={"inputs": truncated_text},
-                model=model
-            )
-            # client.post returns bytes, we need json
-            import json
-            return json.loads(response.decode("utf-8"))
+            # This method returns a list of ClassificationOutput objects
+            # e.g. [TextClassificationOutput(label='POSITIVE', score=0.99), ...]
+            return client.text_classification(truncated_text, model=model)
 
         except Exception as e:
             error_str = str(e)
@@ -52,17 +46,15 @@ def _call_model(model: str, text: str):
 
 def _sentiment_score(text: str):
     try:
-        out = _call_model(SENTIMENT_MODEL, text)
-        if not out or isinstance(out, dict) and "error" in out:
+        results = _call_classification(SENTIMENT_MODEL, text)
+        if not results:
             return None
 
-        # Output format: [[{'label': 'POSITIVE', 'score': 0.9}]]
-        top = out[0]
-        if isinstance(top, list):
-            top = sorted(top, key=lambda x: x['score'], reverse=True)[0]
+        # Find the top result (highest score)
+        top = max(results, key=lambda x: x.score)
 
-        label = top['label'].upper()
-        score = top['score']
+        label = top.label.upper()
+        score = top.score
 
         if "POS" in label:
             return score
@@ -77,19 +69,17 @@ def _sentiment_score(text: str):
 
 def _bias_score(text: str):
     try:
-        result = _call_model(BIAS_MODEL, text)
-        if not result or isinstance(result, dict) and "error" in result:
+        results = _call_classification(BIAS_MODEL, text)
+        if not results:
             return None
 
-        # Output format: [[{'label': 'LEFT', 'score': 0.9}, ...]]
-        scores = result[0] if isinstance(result[0], list) else result
-
+        # Parse list of objects: [Output(label='LEFT', score=0.9), ...]
         left_score = 0.0
         right_score = 0.0
 
-        for item in scores:
-            lbl = item['label'].upper()
-            scr = item['score']
+        for item in results:
+            lbl = item.label.upper()
+            scr = item.score
             if 'LEFT' in lbl:
                 left_score = scr
             if 'RIGHT' in lbl:
