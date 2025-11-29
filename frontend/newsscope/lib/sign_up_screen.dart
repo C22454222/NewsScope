@@ -1,3 +1,4 @@
+// lib/screens/sign_up_screen.dart
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
@@ -14,6 +15,8 @@ class _SignUpScreenState extends State<SignUpScreen> {
   final _passwordController = TextEditingController();
   bool _isLoading = false;
 
+  /// Handles new user registration via Firebase Auth.
+  /// Updates the display name immediately after creation.
   Future<void> _signUp() async {
     if (_usernameController.text.isEmpty || 
         _emailController.text.isEmpty || 
@@ -30,6 +33,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
         password: _passwordController.text.trim(),
       );
 
+      // Set the display name so the home screen can greet the user
       await userCred.user?.updateDisplayName(_usernameController.text.trim());
 
       if (!mounted) return;
@@ -37,7 +41,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
         const SnackBar(content: Text("Account created! Please sign in.")),
       );
 
-      Navigator.pop(context); // Go back to sign in
+      Navigator.pop(context); // Return to sign-in screen
     } on FirebaseAuthException catch (e) {
       _showError(e.message ?? "Registration failed");
     } finally {
@@ -77,6 +81,8 @@ class _SignUpScreenState extends State<SignUpScreen> {
                 const SizedBox(height: 8),
                 const Text("Create an account to track media bias and analyze news."),
                 const SizedBox(height: 32),
+                
+                // Username
                 TextField(
                   controller: _usernameController,
                   decoration: const InputDecoration(
@@ -86,6 +92,8 @@ class _SignUpScreenState extends State<SignUpScreen> {
                   ),
                 ),
                 const SizedBox(height: 16),
+                
+                // Email
                 TextField(
                   controller: _emailController,
                   decoration: const InputDecoration(
@@ -96,6 +104,8 @@ class _SignUpScreenState extends State<SignUpScreen> {
                   keyboardType: TextInputType.emailAddress,
                 ),
                 const SizedBox(height: 16),
+                
+                // Password
                 TextField(
                   controller: _passwordController,
                   decoration: const InputDecoration(
@@ -106,6 +116,8 @@ class _SignUpScreenState extends State<SignUpScreen> {
                   obscureText: true,
                 ),
                 const SizedBox(height: 24),
+                
+                // Sign Up Button
                 _isLoading 
                   ? const Center(child: CircularProgressIndicator())
                   : ElevatedButton(

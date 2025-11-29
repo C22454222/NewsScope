@@ -1,3 +1,4 @@
+// lib/screens/home_screen.dart
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../services/api_service.dart';
@@ -12,9 +13,9 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  int _currentIndex = 0; // Track active tab
+  int _currentIndex = 0; // Tracks the currently active bottom tab
 
-  // List of screens for navigation
+  // List of primary screens for the bottom navigation
   final List<Widget> _screens = [
     const HomeFeedTab(),
     const CompareScreen(),
@@ -24,8 +25,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      // We move the AppBar to the individual tabs or keep a generic one here
-      // For this design, we'll let the tabs handle their own content area
+      // IndexedStack preserves the state of each tab when switching
       body: IndexedStack(
         index: _currentIndex,
         children: _screens,
@@ -47,7 +47,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-// Extracted the Feed logic into its own widget to keep code clean
+// Extracted Home Feed logic into a separate widget for modularity
 class HomeFeedTab extends StatefulWidget {
   const HomeFeedTab({super.key});
 
@@ -63,24 +63,28 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
   @override
   void initState() {
     super.initState();
+    // Initialize the fetch operation once when the widget loads
     _articlesFuture = _apiService.getArticles();
   }
 
   Future<void> _refreshArticles() async {
     setState(() {
+      // Re-trigger the API call to refresh data
       _articlesFuture = _apiService.getArticles();
     });
   }
 
+  /// Helper to map bias score to UI colors
   Color _getBiasColor(double? score) {
-    if (score == null) return Colors.grey[300]!; // Placeholder color
+    if (score == null) return Colors.grey[300]!; // Neutral placeholder
     if (score < -0.3) return Colors.blue[300]!;
     if (score > 0.3) return Colors.red[300]!;
     return Colors.purple[200]!;
   }
 
+  /// Helper to map bias score to text labels
   String _getBiasLabel(double? score) {
-    if (score == null) return "Pending Analysis"; // Clear placeholder text
+    if (score == null) return "Pending Analysis";
     if (score < -0.3) return "Left Leaning";
     if (score > 0.3) return "Right Leaning";
     return "Center";
@@ -108,6 +112,7 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Welcome Header
           Padding(
             padding: const EdgeInsets.all(16.0),
             child: Column(
@@ -127,6 +132,8 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
               ],
             ),
           ),
+          
+          // Article Feed List
           Expanded(
             child: FutureBuilder<List<dynamic>>(
               future: _articlesFuture,
@@ -154,15 +161,15 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                       final content = article['content'] ?? 'No content available.';
                       String title = article['title'] ?? 'Article ${index + 1}';
 
-                      // Title cleanup logic
+                      // Clean up filenames that sometimes appear as titles from raw scraping
                       if (title == 'Article ${index + 1}' && url.isNotEmpty) {
                         final uri = Uri.tryParse(url);
                         if (uri != null && uri.pathSegments.isNotEmpty) {
                           String pathSegment = uri.pathSegments.last;
                           pathSegment = pathSegment.replaceAll('.html', '')
-                                                   .replaceAll('.htm', '')
-                                                   .replaceAll('-', ' ')
-                                                   .replaceAll('_', ' ');
+                                                 .replaceAll('.htm', '')
+                                                 .replaceAll('-', ' ')
+                                                 .replaceAll('_', ' ');
                           if (pathSegment.length > 60) {
                             title = '${pathSegment.substring(0, 57)}...';
                           } else {
@@ -187,9 +194,10 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                           ),
                           subtitle: Padding(
                             padding: const EdgeInsets.only(top: 8.0),
-                            child: Column( // Changed to Column for better chip layout
+                            child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
+                                // Source Icon and Name
                                 Row(
                                   children: [
                                     Icon(Icons.source, size: 16, color: Colors.grey[600]),
@@ -204,7 +212,8 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                                   ],
                                 ),
                                 const SizedBox(height: 8),
-                                // Bias/Sentiment Placeholders
+                                
+                                // Bias and Sentiment Status Chips
                                 Wrap(
                                   spacing: 8,
                                   children: [

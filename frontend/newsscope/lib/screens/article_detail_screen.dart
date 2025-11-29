@@ -1,7 +1,9 @@
+// lib/screens/article_detail_screen.dart
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class ArticleDetailScreen extends StatelessWidget {
+  // Core article metadata passed from the feed
   final String title;
   final String sourceName;
   final String? content;
@@ -19,6 +21,8 @@ class ArticleDetailScreen extends StatelessWidget {
     this.sentimentScore,
   });
 
+  /// Determines the color of the bias chip based on the score range.
+  /// Returns purple for Center, blue for Left, red for Right.
   Color _getBiasColor(double? score) {
     if (score == null) return Colors.grey;
     if (score < -0.3) return Colors.blue[300]!;
@@ -26,6 +30,7 @@ class ArticleDetailScreen extends StatelessWidget {
     return Colors.purple[200]!;
   }
 
+  /// Maps the numerical bias score to a human-readable label.
   String _getBiasLabel(double? score) {
     if (score == null) return "Pending";
     if (score < -0.3) return "Left";
@@ -33,6 +38,7 @@ class ArticleDetailScreen extends StatelessWidget {
     return "Center";
   }
 
+  /// Opens the full article in the default external browser.
   Future<void> _launchURL() async {
     final uri = Uri.parse(url);
     if (await canLaunchUrl(uri)) {
@@ -42,7 +48,7 @@ class ArticleDetailScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Capture local variable for null promotion
+    // Capture local variable for null promotion within the widget tree
     final sentiment = sentimentScore;
 
     return Scaffold(
@@ -61,7 +67,7 @@ class ArticleDetailScreen extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Title
+            // Article Title
             Text(
               title,
               style: Theme.of(context).textTheme.headlineSmall?.copyWith(
@@ -70,7 +76,7 @@ class ArticleDetailScreen extends StatelessWidget {
             ),
             const SizedBox(height: 12),
 
-            // Source & Bias chips
+            // Metadata Chips (Source, Bias, Sentiment)
             Wrap(
               spacing: 8,
               runSpacing: 8,
@@ -93,7 +99,7 @@ class ArticleDetailScreen extends StatelessWidget {
 
             const Divider(height: 32),
 
-            // Content
+            // Article Content or Fallback
             if (content != null && content!.isNotEmpty)
               Text(
                 content!,

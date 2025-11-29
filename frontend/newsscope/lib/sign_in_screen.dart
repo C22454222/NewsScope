@@ -1,3 +1,4 @@
+// lib/screens/sign_in_screen.dart
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
@@ -15,6 +16,7 @@ class _SignInScreenState extends State<SignInScreen> {
   final _passwordController = TextEditingController();
   bool _isLoading = false;
 
+  /// Triggers the Google OAuth flow and signs in to Firebase.
   Future<UserCredential?> _signInWithGoogle() async {
     setState(() => _isLoading = true);
     try {
@@ -23,13 +25,13 @@ class _SignInScreenState extends State<SignInScreen> {
       
       if (googleUser == null) {
         setState(() => _isLoading = false);
-        return null; // User canceled
+        return null; // User canceled the sign-in flow
       }
 
       final GoogleSignInAuthentication googleAuth = await googleUser.authentication;
       final credential = GoogleAuthProvider.credential(
         idToken: googleAuth.idToken,
-        accessToken: googleAuth.accessToken, // Often needed depending on version
+        accessToken: googleAuth.accessToken,
       );
 
       return await FirebaseAuth.instance.signInWithCredential(credential);
@@ -41,6 +43,7 @@ class _SignInScreenState extends State<SignInScreen> {
     }
   }
 
+  /// Standard email/password authentication.
   Future<void> _signInWithEmail() async {
     if (_emailController.text.isEmpty || _passwordController.text.isEmpty) {
       _showError("Please fill in all fields");
@@ -101,6 +104,8 @@ class _SignInScreenState extends State<SignInScreen> {
                       ),
                 ),
                 const SizedBox(height: 48),
+                
+                // Email Input
                 TextField(
                   controller: _emailController,
                   decoration: const InputDecoration(
@@ -111,6 +116,8 @@ class _SignInScreenState extends State<SignInScreen> {
                   keyboardType: TextInputType.emailAddress,
                 ),
                 const SizedBox(height: 16),
+                
+                // Password Input
                 TextField(
                   controller: _passwordController,
                   decoration: const InputDecoration(
@@ -121,6 +128,8 @@ class _SignInScreenState extends State<SignInScreen> {
                   obscureText: true,
                 ),
                 const SizedBox(height: 24),
+                
+                // Login Button
                 _isLoading
                     ? const Center(child: CircularProgressIndicator())
                     : ElevatedButton(
@@ -134,9 +143,11 @@ class _SignInScreenState extends State<SignInScreen> {
                         child: const Text("Sign In", style: TextStyle(fontSize: 16)),
                       ),
                 const SizedBox(height: 16),
+                
+                // Google Sign In Button
                 OutlinedButton.icon(
                   onPressed: _isLoading ? null : _signInWithGoogle,
-                  icon: const Icon(Icons.login), // Use a Google icon asset ideally
+                  icon: const Icon(Icons.login),
                   label: const Text("Sign in with Google"),
                   style: OutlinedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 16),
@@ -147,6 +158,8 @@ class _SignInScreenState extends State<SignInScreen> {
                   ),
                 ),
                 const SizedBox(height: 24),
+                
+                // Link to Sign Up
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
