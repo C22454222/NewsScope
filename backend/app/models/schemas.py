@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from datetime import datetime
 from typing import Optional
 from uuid import UUID
@@ -34,9 +34,8 @@ class Article(ArticleBase):
     id: UUID
     created_at: datetime
 
-    class Config:
-        # Allow construction from ORM/DB objects where attributes are present
-        from_attributes = True
+    # Allow construction from ORM/DB objects where attributes are present
+    model_config = ConfigDict(from_attributes=True)
 
 
 # User schemas for profile and preference management
@@ -66,8 +65,7 @@ class User(UserBase):
     id: UUID
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # Source schemas representing news outlets (BBC, CNN, etc.)
@@ -86,5 +84,4 @@ class Source(SourceBase):
     """
     id: UUID
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
