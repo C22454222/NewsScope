@@ -27,7 +27,8 @@ def _hf_post(model: str, inputs: str):
     Raises:
         requests.HTTPError: if the Hugging Face API returns a non-2xx response after retries.
     """
-    url = f"https://api-inference.huggingface.co/models/{model}"
+    # UPDATED URL HERE: using 'router' instead of 'api-inference'
+    url = f"https://router.huggingface.co/models/{model}"
     headers = {"Authorization": f"Bearer {HF_API_TOKEN}"}
 
     # Truncate text to 512 chars to fit BERT model limits (crucial for performance)
