@@ -29,14 +29,28 @@ def archive_old_articles():
         .data
     )
     if not rows:
+        print("No old articles to archive.")
         return
+
+    print(f"Archiving {len(rows)} articles...")
 
     # Write one JSON file per article into the archive bucket
     for row in rows:
         key = f"{row['id']}.json"
-        content = json.dumps(row, default=str)
-        # Assumes the bucket exists and the service key can write to it
-        supabase.storage.from_(BUCKET).upload(key, content)
+        content_str = json.dumps(row, default=str)
+        # Convert string to bytes so Supabase uploads it as file content
+        content_bytes = content_str.encode("utf-8")
+
+        try:
+            # Assumes the bucket exists and the service key can write to it
+            supabase.storage.from_(BUCKET).upload(
+                path=key,
+                file=content_bytes,
+                file_options={"content-type": "application/json"}
+            )
+            print(f"Archived {key}")
+        except Exception as e:
+            print(f"Failed to archive {key}: {e}")
 
     # Optional clean-up step to remove or flag archived rows
     # supabase.table("articles").delete().lte("published_at", cutoff).execute()
