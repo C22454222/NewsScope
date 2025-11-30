@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../services/api_service.dart';
 import '../screens/article_detail_screen.dart';
 import '../screens/placeholders.dart';
+import '../models/article.dart'; // IMPORT THE MODEL
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -58,7 +59,9 @@ class HomeFeedTab extends StatefulWidget {
 class _HomeFeedTabState extends State<HomeFeedTab> {
   final user = FirebaseAuth.instance.currentUser;
   final ApiService _apiService = ApiService();
-  late Future<List<dynamic>> _articlesFuture;
+  
+  // CORRECTED: Use the Article type, not dynamic
+  late Future<List<Article>> _articlesFuture;
 
   @override
   void initState() {
@@ -151,7 +154,7 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
 
           // Article Feed List
           Expanded(
-            child: FutureBuilder<List<dynamic>>(
+            child: FutureBuilder<List<Article>>( // CORRECTED TYPE HERE TOO
               future: _articlesFuture,
               builder: (context, snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting) {
@@ -171,18 +174,13 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                     itemBuilder: (context, index) {
                       final article = articles[index];
                       
-                      // Safely parse scores (backend can send int or double)
-                      final biasScore = article['bias_score'] != null 
-                          ? (article['bias_score'] as num).toDouble() 
-                          : null;
-                      final sentimentScore = article['sentiment_score'] != null 
-                          ? (article['sentiment_score'] as num).toDouble() 
-                          : null;
-                      
-                      final sourceName = article['source'] ?? article['source_name'] ?? 'Unknown Source';
-                      final url = article['url'] ?? '';
-                      final content = article['content'] ?? 'No content available.';
-                      String title = article['title'] ?? 'Article ${index + 1}';
+                      // Now these access properties of the Article object directly
+                      final biasScore = article.biasScore;
+                      final sentimentScore = article.sentimentScore;
+                      final sourceName = article.source;
+                      final url = article.url;
+                      final content = article.content;
+                      String title = article.title;
 
                       // Clean up filenames/URLs appearing as titles
                       if ((title.startsWith('http') || title.contains('.html')) && url.isNotEmpty) {
