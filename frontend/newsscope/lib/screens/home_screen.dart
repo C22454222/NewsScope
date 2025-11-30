@@ -369,7 +369,7 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                                 ),
                               ),
                             );
-                          }).toList(), // Convert the map to a List<Widget>
+                          }), // Convert the map to a List<Widget>
                         ],
                       );
                     },
