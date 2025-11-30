@@ -1,9 +1,9 @@
-// lib/screens/home_screen.dart
+// lib/widgets/home_screen.dart
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../services/api_service.dart';
-import 'screens/article_detail_screen.dart';
-import 'screens/placeholders.dart'; // Import the new placeholders
+import '../screens/article_detail_screen.dart';
+import '../screens/placeholders.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -77,17 +77,33 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
   /// Helper to map bias score to UI colors
   Color _getBiasColor(double? score) {
     if (score == null) return Colors.grey[300]!; // Neutral placeholder
-    if (score < -0.3) return Colors.blue[300]!;
-    if (score > 0.3) return Colors.red[300]!;
-    return Colors.purple[200]!;
+    if (score < -0.1) return Colors.blue[700]!;
+    if (score > 0.1) return Colors.red[700]!;
+    return Colors.purple[400]!;
   }
 
   /// Helper to map bias score to text labels
   String _getBiasLabel(double? score) {
-    if (score == null) return "Pending Analysis";
-    if (score < -0.3) return "Left Leaning";
-    if (score > 0.3) return "Right Leaning";
+    if (score == null) return "Unscored";
+    if (score < -0.1) return "Left";
+    if (score > 0.1) return "Right";
     return "Center";
+  }
+
+  /// Helper to map sentiment score to UI colors
+  Color _getSentimentColor(double? score) {
+    if (score == null) return Colors.grey;
+    if (score > 0.1) return Colors.green[700]!;
+    if (score < -0.1) return Colors.orange[800]!;
+    return Colors.grey[600]!;
+  }
+
+  /// Helper to map sentiment score to text labels
+  String _getSentimentLabel(double? score) {
+    if (score == null) return "--";
+    if (score > 0.1) return "Positive";
+    if (score < -0.1) return "Negative";
+    return "Neutral";
   }
 
   @override
@@ -132,7 +148,7 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
               ],
             ),
           ),
-          
+
           // Article Feed List
           Expanded(
             child: FutureBuilder<List<dynamic>>(
@@ -154,103 +170,37 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                     padding: const EdgeInsets.symmetric(horizontal: 16),
                     itemBuilder: (context, index) {
                       final article = articles[index];
-                      final biasScore = article['bias_score'] as double?;
-                      final sentimentScore = article['sentiment_score'] as double?;
+                      
+                      // Safely parse scores (backend can send int or double)
+                      final biasScore = article['bias_score'] != null 
+                          ? (article['bias_score'] as num).toDouble() 
+                          : null;
+                      final sentimentScore = article['sentiment_score'] != null 
+                          ? (article['sentiment_score'] as num).toDouble() 
+                          : null;
+                      
                       final sourceName = article['source'] ?? article['source_name'] ?? 'Unknown Source';
                       final url = article['url'] ?? '';
                       final content = article['content'] ?? 'No content available.';
                       String title = article['title'] ?? 'Article ${index + 1}';
 
-                      // Clean up filenames that sometimes appear as titles from raw scraping
-                      if (title == 'Article ${index + 1}' && url.isNotEmpty) {
+                      // Clean up filenames/URLs appearing as titles
+                      if ((title.startsWith('http') || title.contains('.html')) && url.isNotEmpty) {
                         final uri = Uri.tryParse(url);
                         if (uri != null && uri.pathSegments.isNotEmpty) {
                           String pathSegment = uri.pathSegments.last;
-                          pathSegment = pathSegment.replaceAll('.html', '')
-                                                 .replaceAll('.htm', '')
-                                                 .replaceAll('-', ' ')
-                                                 .replaceAll('_', ' ');
-                          if (pathSegment.length > 60) {
-                            title = '${pathSegment.substring(0, 57)}...';
-                          } else {
-                            title = pathSegment;
-                          }
+                          title = pathSegment
+                              .replaceAll('.html', '')
+                              .replaceAll('.htm', '')
+                              .replaceAll('-', ' ')
+                              .replaceAll('_', ' ');
                         }
                       }
 
                       return Card(
                         elevation: 2,
                         margin: const EdgeInsets.only(bottom: 12),
-                        child: ListTile(
-                          contentPadding: const EdgeInsets.all(16),
-                          title: Text(
-                            title,
-                            style: const TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 15,
-                            ),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          subtitle: Padding(
-                            padding: const EdgeInsets.only(top: 8.0),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                // Source Icon and Name
-                                Row(
-                                  children: [
-                                    Icon(Icons.source, size: 16, color: Colors.grey[600]),
-                                    const SizedBox(width: 4),
-                                    Expanded(
-                                      child: Text(
-                                        sourceName,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(fontSize: 13),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 8),
-                                
-                                // Bias and Sentiment Status Chips
-                                Wrap(
-                                  spacing: 8,
-                                  children: [
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                      decoration: BoxDecoration(
-                                        color: _getBiasColor(biasScore).withAlpha((255 * 0.2).round()),
-                                        borderRadius: BorderRadius.circular(12),
-                                        border: Border.all(color: _getBiasColor(biasScore)),
-                                      ),
-                                      child: Text(
-                                        _getBiasLabel(biasScore),
-                                        style: TextStyle(
-                                          fontSize: 11, 
-                                          fontWeight: FontWeight.w600,
-                                          color: biasScore == null ? Colors.grey[700] : Colors.black,
-                                        ),
-                                      ),
-                                    ),
-                                    if (sentimentScore == null)
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                        decoration: BoxDecoration(
-                                          color: Colors.grey[200],
-                                          borderRadius: BorderRadius.circular(12),
-                                          border: Border.all(color: Colors.grey),
-                                        ),
-                                        child: const Text(
-                                          "Sentiment: --",
-                                          style: TextStyle(fontSize: 11, color: Colors.grey),
-                                        ),
-                                      ),
-                                  ],
-                                )
-                              ],
-                            ),
-                          ),
+                        child: InkWell(
                           onTap: () {
                             Navigator.push(
                               context,
@@ -266,6 +216,94 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                               ),
                             );
                           },
+                          child: Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                // Title
+                                Text(
+                                  title,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 15,
+                                  ),
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                const SizedBox(height: 8),
+
+                                // Source Name
+                                Row(
+                                  children: [
+                                    Icon(Icons.source, size: 14, color: Colors.grey[600]),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      sourceName,
+                                      style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 12),
+
+                                // Badges Row
+                                Row(
+                                  children: [
+                                    // Bias Badge
+                                    if (biasScore != null)
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                        decoration: BoxDecoration(
+                                          color: _getBiasColor(biasScore).withValues(alpha: 0.15),
+                                          borderRadius: BorderRadius.circular(12),
+                                          border: Border.all(color: _getBiasColor(biasScore), width: 1),
+                                        ),
+                                        child: Text(
+                                          _getBiasLabel(biasScore),
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.bold,
+                                            color: _getBiasColor(biasScore),
+                                          ),
+                                        ),
+                                      ),
+                                    
+                                    const SizedBox(width: 8),
+
+                                    // Sentiment Badge
+                                    if (sentimentScore != null)
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                        decoration: BoxDecoration(
+                                          color: _getSentimentColor(sentimentScore).withValues(alpha: 0.15),
+                                          borderRadius: BorderRadius.circular(12),
+                                          border: Border.all(color: _getSentimentColor(sentimentScore), width: 1),
+                                        ),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(
+                                              sentimentScore > 0 ? Icons.sentiment_satisfied : Icons.sentiment_dissatisfied,
+                                              size: 12,
+                                              color: _getSentimentColor(sentimentScore),
+                                            ),
+                                            const SizedBox(width: 4),
+                                            Text(
+                                              _getSentimentLabel(sentimentScore),
+                                              style: TextStyle(
+                                                fontSize: 11,
+                                                fontWeight: FontWeight.bold,
+                                                color: _getSentimentColor(sentimentScore),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
                         ),
                       );
                     },

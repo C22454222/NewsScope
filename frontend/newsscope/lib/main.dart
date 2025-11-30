@@ -1,7 +1,7 @@
 // lib/main.dart
-import 'package:flutter/material.dart' show BuildContext, Colors, MaterialApp, StatelessWidget, ThemeData, Widget, WidgetsFlutterBinding, runApp;
+import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'auth_gate.dart';
+import 'screens/auth_gate.dart';
 
 void main() async {
   // Ensure framework binding is initialized before calling native code (Firebase)
