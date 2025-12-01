@@ -100,7 +100,7 @@ def analyze_unscored_articles():
         supabase.table("articles")
         .select("id, content, title")
         .is_("sentiment_score", "null")
-        .limit(5)
+        .limit(20)
         .execute()
     )
     articles = response.data
