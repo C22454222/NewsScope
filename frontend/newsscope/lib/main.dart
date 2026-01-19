@@ -19,6 +19,7 @@ class NewsScopeApp extends StatelessWidget {
       title: 'NewsScope',
       theme: ThemeData(primarySwatch: Colors.blue),
       // Use AuthGate to decide initial screen based on login status
+      debugShowCheckedModeBanner: false, 
       home: const AuthGate(),
     );
   }

@@ -2,8 +2,8 @@
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+
 class ArticleDetailScreen extends StatelessWidget {
-  // Core article metadata passed from the feed
   final String title;
   final String sourceName;
   final String? content;
@@ -22,7 +22,6 @@ class ArticleDetailScreen extends StatelessWidget {
   });
 
   /// Determines the color of the bias chip based on the score range.
-  /// Returns purple for Center, blue for Left, red for Right.
   Color _getBiasColor(double? score) {
     if (score == null) return Colors.grey;
     if (score < -0.3) return Colors.blue[300]!;
@@ -38,6 +37,22 @@ class ArticleDetailScreen extends StatelessWidget {
     return "Center";
   }
 
+  /// Determines sentiment chip color.
+  Color _getSentimentColor(double? score) {
+    if (score == null) return Colors.grey;
+    if (score > 0.1) return Colors.green[300]!;
+    if (score < -0.1) return Colors.orange[300]!;
+    return Colors.grey[300]!;
+  }
+
+  /// Maps sentiment score to human-readable label.
+  String _getSentimentLabel(double? score) {
+    if (score == null) return "Pending";
+    if (score > 0.1) return "Positive";
+    if (score < -0.1) return "Negative";
+    return "Neutral";
+  }
+
   /// Opens the full article in the default external browser.
   Future<void> _launchURL() async {
     final uri = Uri.parse(url);
@@ -48,19 +63,11 @@ class ArticleDetailScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Capture local variable for null promotion within the widget tree
     final sentiment = sentimentScore;
 
     return Scaffold(
       appBar: AppBar(
         title: const Text("Article"),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.open_in_browser),
-            onPressed: _launchURL,
-            tooltip: "Open in browser",
-          ),
-        ],
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16.0),
@@ -87,12 +94,20 @@ class ArticleDetailScreen extends StatelessWidget {
                 ),
                 Chip(
                   label: Text(_getBiasLabel(biasScore)),
-                  backgroundColor: _getBiasColor(biasScore).withAlpha((255 * 0.3).round()),
+                  backgroundColor:
+                      _getBiasColor(biasScore).withAlpha((255 * 0.3).round()),
                 ),
                 if (sentiment != null)
                   Chip(
-                    label: Text("Sentiment: ${sentiment.toStringAsFixed(2)}"),
-                    backgroundColor: Colors.amber[100],
+                    avatar: Icon(
+                      sentiment > 0
+                          ? Icons.sentiment_satisfied
+                          : Icons.sentiment_dissatisfied,
+                      size: 18,
+                    ),
+                    label: Text(_getSentimentLabel(sentiment)),
+                    backgroundColor: _getSentimentColor(sentiment)
+                        .withAlpha((255 * 0.3).round()),
                   ),
               ],
             ),
@@ -103,12 +118,16 @@ class ArticleDetailScreen extends StatelessWidget {
             if (content != null && content!.isNotEmpty)
               Text(
                 content!,
-                style: Theme.of(context).textTheme.bodyLarge?.copyWith(height: 1.6),
+                style: Theme.of(context)
+                    .textTheme
+                    .bodyLarge
+                    ?.copyWith(height: 1.6),
               )
             else
               Column(
                 children: [
-                  const Icon(Icons.article_outlined, size: 64, color: Colors.grey),
+                  const Icon(Icons.article_outlined,
+                      size: 64, color: Colors.grey),
                   const SizedBox(height: 16),
                   const Text("Content not yet available."),
                   const SizedBox(height: 8),
