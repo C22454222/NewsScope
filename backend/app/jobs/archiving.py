@@ -4,23 +4,21 @@ import os
 from datetime import datetime, timedelta
 from app.db.supabase import supabase
 
-# Number of days after which articles are eligible for archiving
 ARCHIVE_DAYS = int(os.getenv("ARCHIVE_DAYS", "30"))
-# Supabase storage bucket used to store archived article snapshots
 BUCKET = os.getenv("ARCHIVE_BUCKET", "articles-archive")
 
 
 def archive_old_articles():
     """
-    Archive older articles to Supabase storage.
-
-    This job finds articles older than ARCHIVE_DAYS, writes a JSON
-    snapshot of each record into object storage, and leaves a hook
-    to optionally delete or mark rows as archived.
+    Archive articles older than 30 days daily.
+    Run at 2 AM UTC (off-peak).
     """
-    cutoff = (datetime.utcnow() - timedelta(days=ARCHIVE_DAYS)).isoformat()
+    cutoff = (
+        datetime.utcnow() - timedelta(days=ARCHIVE_DAYS)
+    ).isoformat()
 
-    # Fetch all articles with a published_at older than the cutoff
+    print(f"🗄️ Archiving articles published before {cutoff}...")
+
     rows = (
         supabase.table("articles")
         .select("*")
@@ -28,29 +26,30 @@ def archive_old_articles():
         .execute()
         .data
     )
+
     if not rows:
-        print("No old articles to archive.")
+        print("ℹ️ No old articles to archive.")
         return
 
-    print(f"Archiving {len(rows)} articles...")
+    print(f"📦 Archiving {len(rows)} articles...")
 
-    # Write one JSON file per article into the archive bucket
+    archived_count = 0
     for row in rows:
         key = f"{row['id']}.json"
         content_str = json.dumps(row, default=str)
-        # Convert string to bytes so Supabase uploads it as file content
         content_bytes = content_str.encode("utf-8")
 
         try:
-            # Assumes the bucket exists and the service key can write to it
             supabase.storage.from_(BUCKET).upload(
                 path=key,
                 file=content_bytes,
-                file_options={"content-type": "application/json"}
+                file_options={
+                    "content-type": "application/json",
+                    "upsert": "true"
+                }
             )
-            print(f"Archived {key}")
+            archived_count += 1
         except Exception as e:
-            print(f"Failed to archive {key}: {e}")
+            print(f"❌ Failed to archive {key}: {e}")
 
-    # Optional clean-up step to remove or flag archived rows
-    # supabase.table("articles").delete().lte("published_at", cutoff).execute()
+    print(f"✅ Archived {archived_count}/{len(rows)} articles")

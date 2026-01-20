@@ -2,9 +2,8 @@ name: Keep Render Alive
 
 on:
   schedule:
-    # Run every 9 minutes
-    - cron: '*/9 * * * *'
-  workflow_dispatch: # Allows manual triggering
+    - cron: '*/14 * * * *'
+  workflow_dispatch:
 
 jobs:
   ping:
@@ -12,4 +11,17 @@ jobs:
     steps:
       - name: Ping Render Backend
         run: |
-          curl -X GET https://newsscope-backend.onrender.com/health
+          response=$(curl -s -o /dev/null -w "%{http_code}" \
+            https://newsscope-backend.onrender.com/health)
+          if [ $response -eq 200 ]; then
+            echo "✅ Server is alive (HTTP $response)"
+          else
+            echo "⚠️ Server returned HTTP $response"
+            exit 1
+          fi
+      
+      - name: Trigger Debug Analysis
+        run: |
+          curl -X POST \
+            https://newsscope-backend.onrender.com/debug/analyze
+          echo "🔬 Analysis job triggered"
