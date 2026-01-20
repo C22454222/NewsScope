@@ -4,7 +4,9 @@ import time
 from app.db.supabase import supabase
 from huggingface_hub import InferenceClient
 
+
 HF_API_TOKEN = os.getenv("HF_API_TOKEN")
+
 
 SENTIMENT_MODEL = os.getenv(
     "HF_SENTIMENT_MODEL",
@@ -14,6 +16,7 @@ BIAS_MODEL = os.getenv(
     "HF_BIAS_MODEL",
     "bucketresearch/politicalBiasBERT"
 )
+
 
 client = InferenceClient(token=HF_API_TOKEN)
 
@@ -105,23 +108,36 @@ def analyze_unscored_articles():
     print(f"Analyzing {len(articles)} articles...")
 
     for article in articles:
-        content = article.get("content") or article.get("title") or ""
+        # Use content if available, fallback to title
+        content = article.get("content") or ""
+        title = article.get("title") or ""
 
-        if len(content) < 50:
-            print(f"Skipping article {article['id']} - too short")
+        # Combine title and content for better analysis
+        text = f"{title}. {content}".strip()
+
+        # Lowered threshold from 50 to 10 characters
+        if len(text) < 10:
+            print(
+                f"Skipping article {article['id']} - "
+                f"no title or content"
+            )
             continue
 
-        sentiment = _sentiment_score(content)
-        bias = _bias_score(content)
+        sentiment = _sentiment_score(text)
+        bias = _bias_score(text)
 
         print(f"Article {article['id']}: S={sentiment}, B={bias}")
 
-        if sentiment is not None and bias is not None:
+        # Save even if only one score is available
+        if sentiment is not None or bias is not None:
+            update_data = {}
+            if sentiment is not None:
+                update_data["sentiment_score"] = sentiment
+            if bias is not None:
+                update_data["bias_score"] = bias
+
             supabase.table("articles").update(
-                {
-                    "sentiment_score": sentiment,
-                    "bias_score": bias,
-                }
+                update_data
             ).eq("id", article["id"]).execute()
 
     print("Analysis job complete.")
