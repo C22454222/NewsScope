@@ -90,7 +90,7 @@ def _bias_score(text: str):
 
 
 def analyze_unscored_articles():
-    print("Starting analysis job...")
+    print("Starting analysis job....")
 
     response = (
         supabase.table("articles")
