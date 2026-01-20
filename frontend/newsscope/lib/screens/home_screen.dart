@@ -67,7 +67,6 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
   @override
   void initState() {
     super.initState();
-    // Defer API call to let UI render first
     Future.delayed(const Duration(milliseconds: 100), () {
       if (mounted) {
         setState(() {
@@ -81,6 +80,12 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
     setState(() {
       _articlesFuture = _apiService.getArticles();
     });
+  }
+
+  Future<void> _handleLogout() async {
+    await FirebaseAuth.instance.signOut();
+    if (!mounted) return;
+    Navigator.of(context).popUntil((route) => route.isFirst);
   }
 
   Color _getBiasColor(double? score) {
@@ -124,9 +129,8 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
           ),
           IconButton(
             icon: const Icon(Icons.logout),
-            onPressed: () async {
-              await FirebaseAuth.instance.signOut();
-            },
+            onPressed: _handleLogout,
+            tooltip: "Sign Out",
           ),
         ],
       ),
