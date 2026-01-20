@@ -7,7 +7,6 @@ import 'article_detail_screen.dart';
 import 'settings_screen.dart';
 
 
-/// Comparison screen for viewing how different outlets cover the same topic.
 class CompareScreen extends StatefulWidget {
   const CompareScreen({super.key});
 
@@ -232,7 +231,6 @@ class _CompareScreenState extends State<CompareScreen> {
 }
 
 
-/// Profile screen showing reading history and bias profile.
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
 
