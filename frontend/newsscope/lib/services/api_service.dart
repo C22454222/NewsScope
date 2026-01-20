@@ -48,7 +48,6 @@ class ApiService {
 
   /// Fetches user's reading history (mock data for now).
   Future<List<Article>> getUserReadingHistory(String userId) async {
-    // TODO: Replace with real API call in Phase 2 backend
     await Future.delayed(const Duration(seconds: 1));
 
     return [
@@ -84,7 +83,6 @@ class ApiService {
 
   /// Gets aggregated bias profile stats (mock for now).
   Future<Map<String, int>> getBiasProfile(String userId) async {
-    // TODO: Replace with real API call in Phase 2 backend
     await Future.delayed(const Duration(seconds: 1));
 
     return {

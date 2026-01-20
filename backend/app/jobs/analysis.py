@@ -1,20 +1,20 @@
-# app/jobs/analysis.py (Hugging Face integration)
+# app/jobs/analysis.py
 import os
 import time
 from app.db.supabase import supabase
 from huggingface_hub import InferenceClient
 
-# Hugging Face API credentials
 HF_API_TOKEN = os.getenv("HF_API_TOKEN")
 
-# Models
 SENTIMENT_MODEL = os.getenv(
     "HF_SENTIMENT_MODEL",
     "distilbert-base-uncased-finetuned-sst-2-english",
 )
-BIAS_MODEL = os.getenv("HF_BIAS_MODEL", "bucketresearch/politicalBiasBERT")
+BIAS_MODEL = os.getenv(
+    "HF_BIAS_MODEL",
+    "bucketresearch/politicalBiasBERT"
+)
 
-# Initialize Client
 client = InferenceClient(token=HF_API_TOKEN)
 
 
@@ -22,18 +22,14 @@ def _call_classification(model: str, text: str):
     """
     Safe wrapper around InferenceClient.text_classification with retries.
     """
-    # Truncate to 512 chars to avoid model errors
     truncated_text = text[:512]
 
-    for _ in range(3):  # Retry loop
+    for _ in range(3):
         try:
-            # This method returns a list of ClassificationOutput objects
-            # e.g. [TextClassificationOutput(label='POSITIVE', score=0.99), ...]
             return client.text_classification(truncated_text, model=model)
 
         except Exception as e:
             error_str = str(e)
-            # Check if model is loading (503 error hidden in exception)
             if "503" in error_str or "loading" in error_str.lower():
                 print(f"Model {model} loading... waiting 5s")
                 time.sleep(5)
@@ -50,7 +46,6 @@ def _sentiment_score(text: str):
         if not results:
             return None
 
-        # Find the top result (highest score)
         top = max(results, key=lambda x: x.score)
 
         label = top.label.upper()
@@ -73,7 +68,6 @@ def _bias_score(text: str):
         if not results:
             return None
 
-        # Parse list of objects: [Output(label='LEFT', score=0.9), ...]
         left_score = 0.0
         right_score = 0.0
 
@@ -85,7 +79,6 @@ def _bias_score(text: str):
             if 'RIGHT' in lbl:
                 right_score = scr
 
-        # Heuristic: Right - Left = -1.0 (Left) to 1.0 (Right)
         return right_score - left_score
 
     except Exception as e:
@@ -115,13 +108,13 @@ def analyze_unscored_articles():
         content = article.get("content") or article.get("title") or ""
 
         if len(content) < 50:
-            print(f"Skipping article {article['id']} - content too short")
+            print(f"Skipping article {article['id']} - too short")
             continue
 
         sentiment = _sentiment_score(content)
         bias = _bias_score(content)
 
-        print(f"Article {article['id']}: Sentiment={sentiment}, Bias={bias}")
+        print(f"Article {article['id']}: S={sentiment}, B={bias}")
 
         if sentiment is not None and bias is not None:
             supabase.table("articles").update(

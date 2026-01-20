@@ -1,31 +1,32 @@
 # app/routes/articles.py
 from fastapi import APIRouter
+from datetime import datetime, timedelta
 from app.db.supabase import supabase
 from app.models.schemas import ArticleCreate
 
-# Router for article-related endpoints
 router = APIRouter()
 
 
 @router.get("")
 def get_articles():
     """
-    Retrieve all articles from the database.
-
-    This is used by the mobile app to populate the home feed.
+    Retrieve articles from the last 30 days, sorted newest first.
     """
-    response = supabase.table("articles").select("*").execute()
+    cutoff = (datetime.utcnow() - timedelta(days=30)).isoformat()
+
+    response = (
+        supabase.table("articles")
+        .select("*")
+        .gte("published_at", cutoff)
+        .order("published_at", desc=True)
+        .limit(1000)
+        .execute()
+    )
     return response.data
 
 
 @router.post("")
 def add_article(article: ArticleCreate):
-    """
-    Insert a single article record into the database.
-
-    Primarily useful for testing or manual insertion rather than
-    the main ingestion pipeline.
-    """
     insert_response = (
         supabase.table("articles")
         .insert(
