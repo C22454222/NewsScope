@@ -105,7 +105,7 @@ def analyze_unscored_articles():
         print("No unscored articles found.")
         return
 
-    print(f"Analyzing {len(articles)} articles...")
+    print(f"Analyzing {len(articles)} articles....")
 
     for article in articles:
         # Use content if available, fallback to title
