@@ -86,7 +86,7 @@ def archive_old_articles():
             batch = archived_ids[i:i + 1000]
             try:
                 supabase.table("articles").delete().in_("id", batch).execute()
-                print(f"Deleted batch {i//1000 + 1}: {len(batch)} articles")
+                print(f"Deleted batch {i//1000 + 1}: {len(batch)}")
             except Exception as e:
                 print(f"❌ Failed to delete batch: {e}")
 
