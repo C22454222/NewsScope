@@ -29,7 +29,5 @@ lxml_html_clean
 # Testing
 pytest
 
+# ML/NLP
 huggingface_hub
-
-APScheduler==3.10.4
-requests==2.31.0
