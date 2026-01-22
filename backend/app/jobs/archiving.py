@@ -41,24 +41,30 @@ def archive_old_articles():
     batch_size = 500
 
     # Process in batches using pagination
-    while offset < total:
+    while True:
         batch_num = offset // batch_size + 1
         print(
             f"Processing batch {batch_num} "
-            f"(articles {offset}-{offset + batch_size})..."
+            f"(offset {offset}, expecting ~{min(batch_size, total - offset)} articles)..."
         )
 
+        # CRITICAL: Filter by date AND use range
         rows = (
             supabase.table("articles")
             .select("*")
             .lte("published_at", cutoff)
+            .order("published_at", desc=False)  # Ensure consistent ordering
             .range(offset, offset + batch_size - 1)
             .execute()
             .data
         )
 
+        # Stop if no more rows
         if not rows:
+            print(f"No more articles found at offset {offset}")
             break
+
+        print(f"Retrieved {len(rows)} articles in this batch")
 
         # Archive each article in this batch
         for row in rows:
@@ -80,7 +86,12 @@ def archive_old_articles():
             except Exception as e:
                 print(f"❌ Failed to archive {key}: {e}")
 
-        offset += batch_size
+        offset += len(rows)
+
+        # Stop if we've processed all expected articles
+        if archived_count >= total:
+            print(f"Reached expected total of {total} articles")
+            break
 
     print(f"✅ Archived {archived_count}/{total} articles to storage")
 

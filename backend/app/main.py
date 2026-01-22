@@ -11,6 +11,7 @@ from app.core.scheduler import start_scheduler, add_job
 from app.jobs.ingestion import run_ingestion_cycle
 from app.jobs.analysis import analyze_unscored_articles
 from app.jobs.archiving import archive_old_articles
+from app.jobs.keep_alive import start_keep_alive
 
 
 @asynccontextmanager
@@ -18,12 +19,23 @@ async def lifespan(app: FastAPI):
     """
     Application lifespan context with immediate startup jobs.
     """
+    # Start the APScheduler for background jobs
     start_scheduler()
 
+    # Add scheduled jobs
     add_job(run_ingestion_cycle, minutes=30)
     add_job(analyze_unscored_articles, minutes=5)
     add_job(archive_old_articles, minutes=1440)
 
+    # Start keep-alive scheduler in production
+    env = os.getenv("ENVIRONMENT", "development")
+    print(f"🌍 Environment: {env}")
+    if env == "production":
+        start_keep_alive()
+    else:
+        print("ℹ️ Keep-alive disabled in development")
+
+    # Run startup jobs
     asyncio.create_task(_run_startup_jobs())
 
     yield
@@ -93,6 +105,7 @@ app.include_router(
 )
 app.include_router(users.router, prefix="/users", tags=["users"])
 app.include_router(sources.router, prefix="/sources", tags=["sources"])
+
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
