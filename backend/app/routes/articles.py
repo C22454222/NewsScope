@@ -1,8 +1,9 @@
 # app/routes/articles.py
 from fastapi import APIRouter
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from app.db.supabase import supabase
 from app.models.schemas import ArticleCreate
+
 
 router = APIRouter()
 
@@ -12,7 +13,9 @@ def get_articles():
     """
     Retrieve articles from the last 30 days, sorted newest first.
     """
-    cutoff = (datetime.utcnow() - timedelta(days=30)).isoformat()
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(days=30)
+    ).isoformat()
 
     response = (
         supabase.table("articles")
