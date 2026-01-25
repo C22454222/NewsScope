@@ -12,29 +12,25 @@ BUCKET = os.getenv("ARCHIVE_BUCKET", "articles-archive")
 def archive_old_articles():
     """
     Archive ALL articles older than 30 days and delete them from the database.
-    Logic:
-    - Today: 2026-01-23
-    - Cutoff: 2025-12-24 (30 days ago)
-    - Archives: All articles published BEFORE 2025-12-24
-    Steps:
-    1. Count articles older than 30 days
-    2. Fetch them in batches of 500 (pagination)
-    3. Upload each to Supabase storage bucket as JSON
-    4. Delete successfully archived articles from database in batches of 1000
-    """
-    # Calculate cutoff date: exactly 30 days ago from now
-    cutoff = (
-        datetime.now(timezone.utc) - timedelta(days=ARCHIVE_DAYS)
-    ).isoformat()
 
-    print(f"🗄️ Archiving articles published before {cutoff}...")
+    Example: If today is 2026-01-23, archives articles published
+    BEFORE 2025-12-24 (exactly 30 days ago).
+    """
+    # Calculate cutoff date: 30 days ago from now (FIXED)
+    now = datetime.now(timezone.utc)
+    cutoff_datetime = now - timedelta(days=ARCHIVE_DAYS)
+    cutoff = cutoff_datetime.isoformat()
+
+    print(f"🗄️ Today: {now.isoformat()}")
+    print(f"🗄️ Cutoff (30 days ago): {cutoff}")
+    print(f"🗄️ Archiving articles published BEFORE {cutoff}...")
 
     # Step 1: Count total articles to archive
     try:
         count_response = (
             supabase.table("articles")
             .select("id", count="exact")
-            .lte("published_at", cutoff)
+            .lt("published_at", cutoff)  # CHANGED: Use .lt() not .lte()
             .execute()
         )
         total = count_response.count
@@ -57,17 +53,18 @@ def archive_old_articles():
     while True:
         batch_num = offset // batch_size + 1
         expected = min(batch_size, total - offset)
+
         print(
             f"📥 Processing batch {batch_num} "
             f"(offset {offset}, expecting ~{expected} articles)..."
         )
 
         try:
-            # Fetch batch of old articles, ordered by date for consistency
+            # Fetch batch of old articles
             rows = (
                 supabase.table("articles")
                 .select("*")
-                .lte("published_at", cutoff)
+                .lt("published_at", cutoff)  # CHANGED: Use .lt() not .lte()
                 .order("published_at", desc=False)
                 .range(offset, offset + batch_size - 1)
                 .execute()
@@ -101,10 +98,9 @@ def archive_old_articles():
                     }
                 )
                 archived_count += 1
-                archived_ids.append(article_id)
+                archived_ids.append(str(article_id))  # CHANGED: Convert to string
             except Exception as e:
                 print(f"❌ Failed to archive article {article_id}: {e}")
-                # Continue archiving other articles even if one fails
 
         offset += len(rows)
 
@@ -124,21 +120,23 @@ def archive_old_articles():
 
         deleted_total = 0
 
-        # Delete in batches of 1000 (Supabase limit for .in_() operator)
-        for i in range(0, len(archived_ids), 1000):
-            batch = archived_ids[i:i + 1000]
-            batch_num = i // 1000 + 1
+        # Delete in smaller batches of 100 (CHANGED from 1000)
+        for i in range(0, len(archived_ids), 100):
+            batch = archived_ids[i:i + 100]
+            batch_num = i // 100 + 1
 
             try:
-                supabase.table("articles").delete().in_("id", batch).execute()
+                # Use filter instead of .in_() for better reliability
+                for article_id in batch:
+                    supabase.table("articles").delete().eq("id", article_id).execute()
+
                 deleted_total += len(batch)
                 print(
                     f"✅ Deleted batch {batch_num}: {len(batch)} articles "
-                    f"(total: {deleted_total})"
+                    f"(total: {deleted_total}/{len(archived_ids)})"
                 )
             except Exception as e:
                 print(f"❌ Failed to delete batch {batch_num}: {e}")
-                # Continue deleting other batches even if one fails
 
         print(
             f"✅ Cleanup complete! "
