@@ -35,7 +35,7 @@ async def lifespan(app: FastAPI):
         coalesce=True
     )
 
-    # Schedule analysis every hour at :15 (15 min after ingestion)
+    # Schedule analysis every hour at :15 (15 min after ingestions)
     scheduler.add_job(
         analyze_unscored_articles,
         trigger=CronTrigger(minute=15),
