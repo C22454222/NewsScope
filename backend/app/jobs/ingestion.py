@@ -6,6 +6,7 @@ from dateutil import parser as dtparser
 from app.db.supabase import supabase
 from newspaper import Article
 
+
 NEWSAPI_KEY = os.getenv("NEWSAPI_KEY")
 RSS_FEEDS = [
     s.strip()
@@ -29,6 +30,7 @@ def normalize_article(
     bias_score=None,
     sentiment_score=None,
 ):
+    """Normalize article data from various sources into common format."""
     ts = None
     if published_at:
         try:
@@ -47,6 +49,7 @@ def normalize_article(
 
 
 def upsert_source(name: str):
+    """Get or create source by name, return source ID."""
     existing = (
         supabase.table("sources")
         .select("id")
@@ -68,6 +71,7 @@ def upsert_source(name: str):
 
 
 def fetch_content(url: str) -> str | None:
+    """Scrape full article content using newspaper3k."""
     try:
         art = Article(url)
         art.download()
@@ -78,6 +82,7 @@ def fetch_content(url: str) -> str | None:
 
 
 def insert_articles_batch(articles: list[dict]):
+    """Insert new articles, skip duplicates based on URL."""
     urls = [a["url"] for a in articles if a.get("url")]
     if not urls:
         return []
@@ -127,6 +132,7 @@ def insert_articles_batch(articles: list[dict]):
 
 
 def fetch_newsapi():
+    """Fetch top headlines from NewsAPI (CNN source)."""
     if not NEWSAPI_KEY:
         return []
 
@@ -157,6 +163,7 @@ def fetch_newsapi():
 
 
 def fetch_rss():
+    """Fetch articles from configured RSS feeds."""
     normalized = []
     for feed in RSS_FEEDS:
         try:
@@ -171,9 +178,9 @@ def fetch_rss():
             for e in parsed.entries[:10]:
                 url = getattr(e, "link", None)
                 title = getattr(e, "title", None)
-                published = getattr(
-                    e, "published", None
-                ) or getattr(e, "updated", None)
+                published = (
+                    getattr(e, "published", None) or getattr(e, "updated", None)
+                )
 
                 n = normalize_article(
                     source_name=source_name,
@@ -195,6 +202,7 @@ def run_ingestion_cycle():
     """
     Fetch from NewsAPI (20) + RSS feeds (4 sources × 10 = 40).
     Total: ~60 articles per run, filtered down to ~20 new ones.
+    Runs every hour at :00.
     """
     print("🔄 Starting ingestion cycle...")
     articles = []

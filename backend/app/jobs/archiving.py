@@ -11,7 +11,8 @@ BUCKET = os.getenv("ARCHIVE_BUCKET", "articles-archive")
 
 def archive_old_articles():
     """
-    Archive ALL articles older than 30 days and delete them from the database.
+    Archive ALL articles older than 30 days and delete from database.
+    Runs daily at 3:00 AM.
 
     Example: If today is 2026-01-26, archives articles published
     BEFORE 2025-12-27 (exactly 30 days ago).
@@ -20,9 +21,6 @@ def archive_old_articles():
     now = datetime.now(timezone.utc)
     cutoff_datetime = now - timedelta(days=ARCHIVE_DAYS)
     cutoff = cutoff_datetime.isoformat()
-
-    # DEBUG: Verify the calculation is working
-    print(f"🔧 DEBUG: now={now}, cutoff_datetime={cutoff_datetime}, ARCHIVE_DAYS={ARCHIVE_DAYS}")
 
     print(f"🗄️ Today: {now.isoformat()}")
     print(f"🗄️ Cutoff (30 days ago): {cutoff}")
@@ -117,8 +115,8 @@ def archive_old_articles():
     # Step 4: Delete archived articles from database
     if archived_ids:
         print(
-            f"🗑️ Deleting {len(archived_ids)} successfully archived articles "
-            f"from database..."
+            f"🗑️ Deleting {len(archived_ids)} successfully archived "
+            f"articles from database..."
         )
 
         deleted_total = 0
@@ -131,12 +129,15 @@ def archive_old_articles():
             try:
                 # Delete each article individually for reliability
                 for article_id in batch:
-                    supabase.table("articles").delete().eq("id", article_id).execute()
+                    supabase.table("articles").delete().eq(
+                        "id", article_id
+                    ).execute()
 
                 deleted_total += len(batch)
                 print(
-                    f"✅ Deleted batch {batch_num}: {len(batch)} articles "
-                    f"(total: {deleted_total}/{len(archived_ids)})"
+                    f"✅ Deleted batch {batch_num}: {len(batch)} "
+                    f"articles (total: {deleted_total}/"
+                    f"{len(archived_ids)})"
                 )
             except Exception as e:
                 print(f"❌ Failed to delete batch {batch_num}: {e}")
@@ -146,4 +147,4 @@ def archive_old_articles():
             f"Archived: {archived_count}, Deleted: {deleted_total}"
         )
     else:
-        print("ℹ️ No articles were successfully archived, skipping deletion")
+        print("ℹ️ No articles successfully archived, skipping deletion")
