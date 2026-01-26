@@ -7,7 +7,6 @@ from huggingface_hub import InferenceClient
 
 HF_API_TOKEN = os.getenv("HF_API_TOKEN")
 
-
 SENTIMENT_MODEL = os.getenv(
     "HF_SENTIMENT_MODEL",
     "distilbert-base-uncased-finetuned-sst-2-english",
@@ -17,19 +16,22 @@ BIAS_MODEL = os.getenv(
     "bucketresearch/politicalBiasBERT"
 )
 
-
 client = InferenceClient(token=HF_API_TOKEN)
 
 
 def _call_classification(model: str, text: str):
     """
-    Safe wrapper around InferenceClient.text_classification with retries.
+    Safe wrapper around InferenceClient.text_classification.
+    Retries on model loading errors (503).
     """
     truncated_text = text[:512]
 
     for _ in range(3):
         try:
-            return client.text_classification(truncated_text, model=model)
+            return client.text_classification(
+                truncated_text,
+                model=model
+            )
 
         except Exception as e:
             error_str = str(e)
@@ -44,6 +46,10 @@ def _call_classification(model: str, text: str):
 
 
 def _sentiment_score(text: str):
+    """
+    Analyze sentiment using Hugging Face model.
+    Returns float: positive (0 to 1), negative (-1 to 0), or None.
+    """
     try:
         results = _call_classification(SENTIMENT_MODEL, text)
         if not results:
@@ -66,6 +72,10 @@ def _sentiment_score(text: str):
 
 
 def _bias_score(text: str):
+    """
+    Analyze political bias using Hugging Face model.
+    Returns float: left (-1) to right (+1), or None.
+    """
     try:
         results = _call_classification(BIAS_MODEL, text)
         if not results:
@@ -90,7 +100,11 @@ def _bias_score(text: str):
 
 
 def analyze_unscored_articles():
-    print("Starting analysis job.....")
+    """
+    Analyze articles missing sentiment or bias scores.
+    Runs every hour at :15 (15 minutes after ingestion).
+    """
+    print("Starting analysis job...")
 
     response = (
         supabase.table("articles")
@@ -105,7 +119,7 @@ def analyze_unscored_articles():
         print("No unscored articles found.")
         return
 
-    print(f"Analyzing {len(articles)} articles....")
+    print(f"Analyzing {len(articles)} articles...")
 
     for article in articles:
         # Use content if available, fallback to title
@@ -115,7 +129,6 @@ def analyze_unscored_articles():
         # Combine title and content for better analysis
         text = f"{title}. {content}".strip()
 
-        # Lowered threshold from 50 to 10 characters
         if len(text) < 10:
             print(
                 f"Skipping article {article['id']} - "
@@ -124,6 +137,10 @@ def analyze_unscored_articles():
             continue
 
         sentiment = _sentiment_score(text)
+
+        # Small delay to avoid rate limits
+        time.sleep(0.5)
+
         bias = _bias_score(text)
 
         print(f"Article {article['id']}: S={sentiment}, B={bias}")

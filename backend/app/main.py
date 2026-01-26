@@ -7,7 +7,7 @@ from fastapi import FastAPI, BackgroundTasks
 from fastapi.responses import FileResponse
 
 from app.routes import articles, users, sources
-from app.core.scheduler import start_scheduler, add_job
+from app.core.scheduler import start_scheduler
 from app.jobs.ingestion import run_ingestion_cycle
 from app.jobs.analysis import analyze_unscored_articles
 from app.jobs.archiving import archive_old_articles
@@ -20,16 +20,41 @@ async def lifespan(app: FastAPI):
     Application lifespan context manager.
     Handles startup and shutdown of background jobs.
     """
-    # Start the APScheduler for background jobs
+    from apscheduler.triggers.cron import CronTrigger
+    from app.core.scheduler import scheduler
+
+    # Start the APScheduler
     start_scheduler()
 
-    # Schedule recurring jobs
-    add_job(run_ingestion_cycle, minutes=30)      # Every 30 minutes
-    add_job(analyze_unscored_articles, minutes=5)  # Every 5 minutes
-    add_job(archive_old_articles, minutes=1440)    # Every 24 hours (1440 min)
+    # Schedule ingestion every hour at :00
+    scheduler.add_job(
+        run_ingestion_cycle,
+        trigger=CronTrigger(minute=0),
+        id="ingestion",
+        max_instances=1,
+        coalesce=True
+    )
 
-    # Start keep-alive scheduler in production only
-    env = os.getenv("ENVIRONMENT", "development")
+    # Schedule analysis every hour at :15 (15 min after ingestion)
+    scheduler.add_job(
+        analyze_unscored_articles,
+        trigger=CronTrigger(minute=15),
+        id="analysis",
+        max_instances=1,
+        coalesce=True
+    )
+
+    # Schedule archiving daily at 3 AM
+    scheduler.add_job(
+        archive_old_articles,
+        trigger=CronTrigger(hour=3, minute=0),
+        id="archiving",
+        max_instances=1,
+        coalesce=True
+    )
+
+    # Start keep-alive in production
+    env = os.getenv("ENVIRONMENT", "production")
     print(f"🌍 Environment: {env}")
 
     if env == "production":
@@ -43,7 +68,7 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Shutdown logic (runs when server stops)
+    # Shutdown logic
     print("🛑 Server shutting down...")
 
 
@@ -73,7 +98,9 @@ app = FastAPI(title="NewsScope API", lifespan=lifespan)
 def root():
     """Root endpoint with welcome message."""
     return {
-        "message": "Welcome to NewsScope API. Try /health to check status.",
+        "message": (
+            "Welcome to NewsScope API. Try /health to check status."
+        ),
         "version": "1.0.0",
         "docs": "/docs"
     }
@@ -81,7 +108,7 @@ def root():
 
 @app.head("/")
 def root_head():
-    """HEAD request for root endpoint (used by some monitoring tools)."""
+    """HEAD request for root endpoint (used by monitoring tools)."""
     return {}
 
 
@@ -110,7 +137,7 @@ async def debug_analyze(background_tasks: BackgroundTasks):
 
 @app.post("/debug/archive")
 async def debug_archive(background_tasks: BackgroundTasks):
-    """Manually trigger archiving job (archives articles >30 days old)."""
+    """Manually trigger archiving job (>30 days old)."""
     background_tasks.add_task(archive_old_articles)
     return {"status": "archiving triggered in background"}
 
@@ -143,20 +170,3 @@ async def favicon():
     if os.path.exists(file_path):
         return FileResponse(file_path)
     return {"status": "no icon"}
-
-
-@app.post("/debug/test-date")
-async def test_date_calculation():
-    """Test if timedelta subtraction works"""
-    from datetime import datetime, timedelta, timezone
-
-    now = datetime.now(timezone.utc)
-    delta = timedelta(days=30)
-    result = now - delta
-
-    return {
-        "now": now.isoformat(),
-        "delta_days": 30,
-        "result": result.isoformat(),
-        "subtraction_worked": result != now
-    }
