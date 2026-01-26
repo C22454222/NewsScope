@@ -6,20 +6,23 @@ from app.db.supabase import supabase
 
 
 ARCHIVE_DAYS = int(os.getenv("ARCHIVE_DAYS", "30"))
-BUCKET = os.getenv("ARCHIVE_BUCKET", "articles-archive ")
+BUCKET = os.getenv("ARCHIVE_BUCKET", "articles-archive")
 
 
 def archive_old_articles():
     """
     Archive ALL articles older than 30 days and delete them from the database.
 
-    Example: If today is 2026-01-23, archives articles published
-    BEFORE 2025-12-24 (exactly 30 days ago).
+    Example: If today is 2026-01-26, archives articles published
+    BEFORE 2025-12-27 (exactly 30 days ago).
     """
-    # Calculate cutoff date: 30 days ago from now (FIXED)
+    # Calculate cutoff date: 30 days ago from now
     now = datetime.now(timezone.utc)
     cutoff_datetime = now - timedelta(days=ARCHIVE_DAYS)
     cutoff = cutoff_datetime.isoformat()
+
+    # DEBUG: Verify the calculation is working
+    print(f"🔧 DEBUG: now={now}, cutoff_datetime={cutoff_datetime}, ARCHIVE_DAYS={ARCHIVE_DAYS}")
 
     print(f"🗄️ Today: {now.isoformat()}")
     print(f"🗄️ Cutoff (30 days ago): {cutoff}")
@@ -30,7 +33,7 @@ def archive_old_articles():
         count_response = (
             supabase.table("articles")
             .select("id", count="exact")
-            .lt("published_at", cutoff)  # CHANGED: Use .lt() not .lte()
+            .lt("published_at", cutoff)
             .execute()
         )
         total = count_response.count
@@ -64,7 +67,7 @@ def archive_old_articles():
             rows = (
                 supabase.table("articles")
                 .select("*")
-                .lt("published_at", cutoff)  # CHANGED: Use .lt() not .lte()
+                .lt("published_at", cutoff)
                 .order("published_at", desc=False)
                 .range(offset, offset + batch_size - 1)
                 .execute()
@@ -98,7 +101,7 @@ def archive_old_articles():
                     }
                 )
                 archived_count += 1
-                archived_ids.append(str(article_id))  # CHANGED: Convert to string
+                archived_ids.append(str(article_id))
             except Exception as e:
                 print(f"❌ Failed to archive article {article_id}: {e}")
 
@@ -120,13 +123,13 @@ def archive_old_articles():
 
         deleted_total = 0
 
-        # Delete in smaller batches of 100 (CHANGED from 1000)
+        # Delete in smaller batches of 100
         for i in range(0, len(archived_ids), 100):
             batch = archived_ids[i:i + 100]
             batch_num = i // 100 + 1
 
             try:
-                # Use filter instead of .in_() for better reliability
+                # Delete each article individually for reliability
                 for article_id in batch:
                     supabase.table("articles").delete().eq("id", article_id).execute()
 
