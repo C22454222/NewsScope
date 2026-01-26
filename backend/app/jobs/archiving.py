@@ -6,7 +6,7 @@ from app.db.supabase import supabase
 
 
 ARCHIVE_DAYS = int(os.getenv("ARCHIVE_DAYS", "30"))
-BUCKET = os.getenv("ARCHIVE_BUCKET", "articles-archive")
+BUCKET = os.getenv("ARCHIVE_BUCKET", "articles-archive ")
 
 
 def archive_old_articles():
