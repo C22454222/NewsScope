@@ -143,3 +143,20 @@ async def favicon():
     if os.path.exists(file_path):
         return FileResponse(file_path)
     return {"status": "no icon"}
+
+
+@app.post("/debug/test-date")
+async def test_date_calculation():
+    """Test if timedelta subtraction works"""
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    delta = timedelta(days=30)
+    result = now - delta
+
+    return {
+        "now": now.isoformat(),
+        "delta_days": 30,
+        "result": result.isoformat(),
+        "subtraction_worked": result != now
+    }
