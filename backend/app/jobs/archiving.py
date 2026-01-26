@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from app.db.supabase import supabase
 
 
-ARCHIVE_DAYS = int(os.getenv("ARCHIVE_DAYS", "30"))
+ARCHIVE_DAYS = int(os.getenv("ARCHIVE_DAYS", "0"))
 BUCKET = os.getenv("ARCHIVE_BUCKET", "articles-archive")
 
 
