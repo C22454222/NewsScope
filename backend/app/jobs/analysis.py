@@ -83,38 +83,10 @@ def _sentiment_score(text: str):
         return None
 
 
-def _detect_if_biased(text: str):
-    """
-    Step 1: Use AI to detect IF article is biased.
-    Returns: True (biased), False (unbiased), or None (error).
-    """
-    try:
-        results = _call_classification(BIAS_MODEL, text)
-        if not results:
-            return None
-
-        for item in results:
-            label = item.label.upper()
-            score = item.score
-
-            # Check if model says "Biased" with high confidence
-            if 'BIASED' in label and 'NON' not in label:
-                # If >60% confident it's biased, return True
-                return score > 0.6
-            elif 'NON-BIASED' in label or 'NEUTRAL' in label:
-                # If >60% confident it's unbiased, return False
-                return score < 0.4
-
-        return None
-
-    except Exception as e:
-        print(f"Bias detection error: {e}")
-        return None
-
-
 def _get_source_political_leaning(source_name: str):
     """
-    Get source's known political leaning from database.
+    Retrieve source's political leaning from database.
+    Uses AllSides/Ground News methodology.
     Returns float: -1 (Left) to +1 (Right).
     """
     try:
@@ -142,44 +114,100 @@ def _get_source_political_leaning(source_name: str):
         return 0.0
 
 
-def _hybrid_bias_score(text: str, source_name: str):
+def _detect_article_bias(text: str):
     """
-    Hybrid bias detection (article-level + source-level).
+    Article-level bias detection using RoBERTa-based model.
+    Returns tuple: (is_biased: bool, intensity: float)
 
-    Step 1: AI analyzes article text to detect IF it's biased
-    Step 2a: If biased → map to source's political leaning
-    Step 2b: If unbiased → return Center (0.0)
-
-    This combines RoBERTa-based bias detection with known
-    source ratings (AllSides methodology).
+    - is_biased: True if article contains bias, False if neutral
+    - intensity: 0.0 (unbiased) to 1.0 (highly biased)
     """
-    # Step 1: Check if THIS specific article is biased
-    is_biased = _detect_if_biased(text)
+    try:
+        results = _call_classification(BIAS_MODEL, text)
+        if not results:
+            return (None, None)
 
+        biased_score = 0.0
+        neutral_score = 0.0
+
+        for item in results:
+            label = item.label.upper()
+            score = item.score
+
+            if 'BIASED' in label and 'NON' not in label:
+                biased_score = score
+            elif 'NON-BIASED' in label or 'NEUTRAL' in label:
+                neutral_score = score
+
+        # Article is biased if confidence > 60%
+        is_biased = biased_score > 0.6
+
+        # Intensity = biased confidence score
+        intensity = biased_score if is_biased else (1.0 - neutral_score)
+
+        return (is_biased, intensity)
+
+    except Exception as e:
+        print(f"Bias detection error: {e}")
+        return (None, None)
+
+
+def _hybrid_bias_analysis(text: str, source_name: str):
+    """
+    Hybrid bias detection methodology combining:
+    1. Article-level AI bias detection (RoBERTa)
+    2. Source-level political leaning (AllSides methodology)
+
+    Returns tuple: (political_direction, bias_intensity)
+
+    Logic:
+    - If article is UNBIASED: direction=0.0 (Center), low intensity
+    - If article is BIASED: direction=source_leaning, AI intensity
+    - If AI fails: fallback to source rating, moderate intensity
+    """
+    # Step 1: Detect if article is biased (article-level)
+    is_biased, intensity = _detect_article_bias(text)
+
+    # Fallback if AI fails
     if is_biased is None:
-        # AI failed, fallback to source rating
-        print(f"   AI failed, using source rating for {source_name}")
-        return _get_source_political_leaning(source_name)
-
-    if is_biased:
-        # Article IS biased → use source's known leaning
-        leaning = _get_source_political_leaning(source_name)
+        direction = _get_source_political_leaning(source_name)
         print(
-            f"   Article is BIASED → "
-            f"mapped to {source_name} leaning: {leaning}"
+            f"   AI failed → fallback to source: "
+            f"{source_name} = {direction}"
         )
-        return leaning
+        return (direction, 0.5)
+
+    # Step 2: Determine political direction
+    if is_biased:
+        # Article IS biased → map to source's political leaning
+        direction = _get_source_political_leaning(source_name)
+        print(
+            f"   BIASED (intensity={intensity:.2f}) → "
+            f"{source_name} leaning = {direction}"
+        )
+        return (direction, intensity)
     else:
-        # Article is NOT biased → return Center
-        print("   Article is UNBIASED → returning Center (0.0)")
-        return 0.0
+        # Article is UNBIASED → center regardless of source
+        print(
+            f"   UNBIASED (intensity={intensity:.2f}) → "
+            f"Center (0.0)"
+        )
+        return (0.0, intensity)
 
 
 def analyze_unscored_articles():
     """
-    Analyze articles using hybrid approach:
-    - Sentiment: DistilBERT AI analysis (Sanh et al., 2019)
-    - Bias: Article-level detection + source mapping
+    Analyze articles using hybrid transformer-based approach.
+
+    Sentiment Analysis:
+      - Model: DistilBERT (Sanh et al., 2019)
+      - Method: Article-level sentiment classification
+      - Output: sentiment_score (-1 to +1)
+
+    Bias Detection:
+      - Model: RoBERTa-based (Liu et al., 2019)
+      - Method: Hybrid article-level + source-level
+      - Output: bias_score (-1 to +1), bias_intensity (0 to 1)
 
     Runs every hour at :15 (15 minutes after ingestion).
     """
@@ -198,7 +226,10 @@ def analyze_unscored_articles():
         print("No unscored articles found.")
         return
 
-    print(f"Analyzing {len(articles)} articles (hybrid method)...")
+    print(
+        f"Analyzing {len(articles)} articles "
+        f"(hybrid methodology)..."
+    )
 
     for article in articles:
         content = article.get("content") or ""
@@ -216,18 +247,24 @@ def analyze_unscored_articles():
         time.sleep(1.0)
 
         # Hybrid bias detection (AI + source mapping)
-        bias = _hybrid_bias_score(text, source)
+        direction, intensity = _hybrid_bias_analysis(text, source)
 
         print(
             f"Article {article['id']}: "
-            f"Sentiment={sentiment}, Bias={bias} ({source})"
+            f"Sentiment={sentiment:.3f}, "
+            f"Bias={direction:.2f}, "
+            f"Intensity={intensity:.2f} "
+            f"({source})"
         )
 
+        # Update database
         update_data = {}
         if sentiment is not None:
             update_data["sentiment_score"] = sentiment
-        if bias is not None:
-            update_data["bias_score"] = bias
+        if direction is not None:
+            update_data["bias_score"] = direction
+        if intensity is not None:
+            update_data["bias_intensity"] = intensity
 
         if update_data:
             supabase.table("articles").update(
