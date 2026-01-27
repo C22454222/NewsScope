@@ -1,7 +1,7 @@
 # app/routes/users.py
 from fastapi import APIRouter
 from app.db.supabase import supabase
-from app.models.schemas import UserCreate
+from backend.app.schemas import UserCreate
 
 # Router for user profile and preference management
 router = APIRouter()

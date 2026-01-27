@@ -1,14 +1,27 @@
 // lib/services/api_service.dart
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/article.dart';
 
-
 class ApiService {
-  final String baseUrl = "https://newsscope-backend.onrender.com";
+  static const String baseUrl =
+      'https://newsscope-backend.onrender.com';
 
-  /// Fetches the list of processed articles from the backend.
-  /// Returns a list of Article objects.
+  final supabase = Supabase.instance.client;
+
+  /// Get authentication token from Supabase
+  Future<String?> _getToken() async {
+    try {
+      final session = supabase.auth.currentSession;
+      return session?.accessToken;
+    } catch (e) {
+      print('Error getting token: $e');
+      return null;
+    }
+  }
+
+  /// Fetches the list of processed articles from the backend
   Future<List<Article>> getArticles() async {
     try {
       final response = await http.get(
@@ -20,75 +33,112 @@ class ApiService {
         final List<dynamic> data = json.decode(response.body);
         return data.map((json) => Article.fromJson(json)).toList();
       } else {
-        throw Exception("Failed to load articles: ${response.statusCode}");
+        throw Exception(
+          'Failed to load articles: ${response.statusCode}'
+        );
       }
     } catch (e) {
-      throw Exception("Error connecting to backend: $e");
+      throw Exception('Error connecting to backend: $e');
     }
   }
 
-  /// Fetches articles matching a search topic for comparison.
-  Future<List<Article>> compareArticles(String topic) async {
+  /// Track reading time for bias profile
+  Future<void> trackReading({
+    required String articleId,
+    required int timeSpentSeconds,
+  }) async {
+    final token = await _getToken();
+    if (token == null) {
+      print('No auth token available');
+      return;
+    }
+
+    try {
+      final response = await http.post(
+        Uri.parse('$baseUrl/api/reading-history'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({
+          'article_id': articleId,
+          'time_spent_seconds': timeSpentSeconds,
+        }),
+      );
+
+      if (response.statusCode != 200) {
+        print('Failed to track reading: ${response.statusCode}');
+      }
+    } catch (e) {
+      print('Error tracking reading: $e');
+    }
+  }
+
+  /// Get user's bias profile
+  Future<Map<String, dynamic>?> getBiasProfile() async {
+    final token = await _getToken();
+    if (token == null) return null;
+
     try {
       final response = await http.get(
-        Uri.parse('$baseUrl/articles/compare?topic=${Uri.encodeComponent(topic)}'),
-        headers: {'Content-Type': 'application/json'},
+        Uri.parse('$baseUrl/api/bias-profile'),
+        headers: {
+          'Authorization': 'Bearer $token',
+        },
       );
 
       if (response.statusCode == 200) {
-        final List<dynamic> data = json.decode(response.body);
-        return data.map((json) => Article.fromJson(json)).toList();
+        return jsonDecode(response.body);
       } else {
-        throw Exception("Failed to compare articles: ${response.statusCode}");
+        print('Failed to load bias profile: ${response.statusCode}');
       }
     } catch (e) {
-      throw Exception("Error fetching comparison: $e");
+      print('Error fetching bias profile: $e');
     }
+    return null;
   }
 
-  /// Fetches user's reading history (mock data for now).
-  Future<List<Article>> getUserReadingHistory(String userId) async {
-    await Future.delayed(const Duration(seconds: 1));
+  /// Compare articles by topic
+  Future<Map<String, dynamic>?> compareArticles(
+    String topic, {
+    int limit = 5,
+  }) async {
+    try {
+      final response = await http.post(
+        Uri.parse('$baseUrl/api/articles/compare'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'topic': topic,
+          'limit': limit,
+        }),
+      );
 
-    return [
-      Article(
-        id: '1',
-        title: 'Climate Policy Debate Heats Up',
-        source: 'BBC News',
-        url: 'https://bbc.co.uk/news/climate',
-        publishedAt: DateTime.now().subtract(const Duration(days: 1)),
-        biasScore: -0.4,
-        sentimentScore: -0.2,
-      ),
-      Article(
-        id: '2',
-        title: 'Economic Growth Continues',
-        source: 'CNN',
-        url: 'https://cnn.com/business',
-        publishedAt: DateTime.now().subtract(const Duration(days: 2)),
-        biasScore: -0.1,
-        sentimentScore: 0.6,
-      ),
-      Article(
-        id: '3',
-        title: 'Government Announces Tax Cuts',
-        source: 'GB News',
-        url: 'https://gbnews.com/politics',
-        publishedAt: DateTime.now().subtract(const Duration(days: 3)),
-        biasScore: 0.5,
-        sentimentScore: 0.3,
-      ),
-    ];
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body);
+      } else {
+        print(
+          'Failed to compare articles: ${response.statusCode}'
+        );
+      }
+    } catch (e) {
+      print('Error comparing articles: $e');
+    }
+    return null;
   }
 
-  /// Gets aggregated bias profile stats (mock for now).
-  Future<Map<String, int>> getBiasProfile(String userId) async {
-    await Future.delayed(const Duration(seconds: 1));
+  /// Get fact-checks for an article
+  Future<List<dynamic>?> getFactChecks(String articleId) async {
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/api/fact-checks/$articleId'),
+      );
 
-    return {
-      'Left': 7,
-      'Center': 2,
-      'Right': 1,
-    };
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body);
+      }
+    } catch (e) {
+      print('Error fetching fact-checks: $e');
+    }
+    return null;
   }
 }

@@ -2,22 +2,28 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'screens/auth_gate.dart';
 
-
 void main() async {
-  // Ensure framework binding is initialized before calling native code (Firebase)
   WidgetsFlutterBinding.ensureInitialized();
-  
-  // Disable debug output in release mode for cleaner logs
+
+  // Disable debug output in release mode
   if (kReleaseMode) {
     debugPrint = (String? message, {int? wrapWidth}) {};
   }
-  
+
+  // Initialize Firebase
   await Firebase.initializeApp();
+
+  // Initialize Supabase
+  await Supabase.initialize(
+    url: 'YOUR_SUPABASE_URL',
+    anonKey: 'YOUR_SUPABASE_ANON_KEY',
+  );
+
   runApp(const NewsScopeApp());
 }
-
 
 class NewsScopeApp extends StatelessWidget {
   const NewsScopeApp({super.key});
@@ -26,7 +32,12 @@ class NewsScopeApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'NewsScope',
-      theme: ThemeData(primarySwatch: Colors.blue),
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.blue,
+        ),
+        useMaterial3: true,
+      ),
       debugShowCheckedModeBanner: false,
       home: const AuthGate(),
     );
