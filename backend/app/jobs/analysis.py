@@ -96,16 +96,23 @@ def _bias_score(text: str):
         if not results:
             return None
 
+        # DEBUG: Print what the model actually returns
+        print(f"🔍 Bias model output: {results}")
+
         # Parse bias labels
         bias_map = {}
         for item in results:
             label = item.label.upper()
             score = item.score
 
+            print(f"   Label: {label}, Score: {score}")
+
             # Handle various label formats
             if 'LEFT' in label or 'LIBERAL' in label:
                 bias_map['left'] = score
-            elif 'CENTER' in label or 'NEUTRAL' in label or 'MODERATE' in label:
+            elif (
+                'CENTER' in label or 'NEUTRAL' in label or 'MODERATE' in label
+            ):
                 bias_map['center'] = score
             elif 'RIGHT' in label or 'CONSERVATIVE' in label:
                 bias_map['right'] = score
@@ -124,11 +131,12 @@ def _bias_score(text: str):
             total = left + center + right
             if total > 0:
                 # Map to -1 to +1 scale
-                # Left contributes negative, Right positive
                 bias_value = (right - left) / total
+                print(f"   Final bias: {bias_value}")
                 return bias_value
 
         # Fallback: return 0 (neutral) if unclear
+        print("   No bias labels found, returning 0.0")
         return 0.0
 
     except Exception as e:
@@ -138,8 +146,8 @@ def _bias_score(text: str):
 
 def analyze_unscored_articles():
     """
-    Analyze articles using RoBERTa-based models (Liu et al., 2019).
-    Article-level bias and sentiment detection as per interim report.
+    Analyze articles using RoBERTa (Liu et al., 2019).
+    Article-level bias and sentiment detection.
     Runs every hour at :15 (15 minutes after ingestion).
     """
     print("Starting analysis job...")
