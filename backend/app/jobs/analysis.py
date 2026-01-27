@@ -12,6 +12,11 @@ SENTIMENT_MODEL = os.getenv(
     "cardiffnlp/twitter-roberta-base-sentiment-latest"
 ).strip()
 
+BIAS_MODEL = os.getenv(
+    "HF_BIAS_MODEL",
+    "d4data/bias-detection-model"
+).strip()
+
 client = InferenceClient(token=HF_API_TOKEN)
 
 
@@ -78,11 +83,38 @@ def _sentiment_score(text: str):
         return None
 
 
-def _get_source_bias(source_name: str):
+def _detect_if_biased(text: str):
     """
-    Get political bias from source rating.
-    Uses source-level classification similar to AllSides/Ground
-    News (as referenced in interim report).
+    Step 1: Use AI to detect IF article is biased.
+    Returns: True (biased), False (unbiased), or None (error).
+    """
+    try:
+        results = _call_classification(BIAS_MODEL, text)
+        if not results:
+            return None
+
+        for item in results:
+            label = item.label.upper()
+            score = item.score
+
+            # Check if model says "Biased" with high confidence
+            if 'BIASED' in label and 'NON' not in label:
+                # If >60% confident it's biased, return True
+                return score > 0.6
+            elif 'NON-BIASED' in label or 'NEUTRAL' in label:
+                # If >60% confident it's unbiased, return False
+                return score < 0.4
+
+        return None
+
+    except Exception as e:
+        print(f"Bias detection error: {e}")
+        return None
+
+
+def _get_source_political_leaning(source_name: str):
+    """
+    Get source's known political leaning from database.
     Returns float: -1 (Left) to +1 (Right).
     """
     try:
@@ -96,7 +128,6 @@ def _get_source_bias(source_name: str):
 
         rating = response.data.get("bias_rating")
 
-        # Map to numerical scale (-1 to +1)
         bias_map = {
             "Left": -1.0,
             "Center-Left": -0.5,
@@ -108,15 +139,48 @@ def _get_source_bias(source_name: str):
         return bias_map.get(rating, 0.0)
 
     except Exception:
-        # Default to center if source not found
+        return 0.0
+
+
+def _hybrid_bias_score(text: str, source_name: str):
+    """
+    Hybrid bias detection (article-level + source-level).
+
+    Step 1: AI analyzes article text to detect IF it's biased
+    Step 2a: If biased → map to source's political leaning
+    Step 2b: If unbiased → return Center (0.0)
+
+    This combines RoBERTa-based bias detection with known
+    source ratings (AllSides methodology).
+    """
+    # Step 1: Check if THIS specific article is biased
+    is_biased = _detect_if_biased(text)
+
+    if is_biased is None:
+        # AI failed, fallback to source rating
+        print(f"   AI failed, using source rating for {source_name}")
+        return _get_source_political_leaning(source_name)
+
+    if is_biased:
+        # Article IS biased → use source's known leaning
+        leaning = _get_source_political_leaning(source_name)
+        print(
+            f"   Article is BIASED → "
+            f"mapped to {source_name} leaning: {leaning}"
+        )
+        return leaning
+    else:
+        # Article is NOT biased → return Center
+        print("   Article is UNBIASED → returning Center (0.0)")
         return 0.0
 
 
 def analyze_unscored_articles():
     """
-    Analyze articles using transformer models.
-    Sentiment: DistilBERT (Sanh et al., 2019)
-    Bias: Source-level ratings (AllSides methodology)
+    Analyze articles using hybrid approach:
+    - Sentiment: DistilBERT AI analysis (Sanh et al., 2019)
+    - Bias: Article-level detection + source mapping
+
     Runs every hour at :15 (15 minutes after ingestion).
     """
     print("Starting analysis job...")
@@ -134,7 +198,7 @@ def analyze_unscored_articles():
         print("No unscored articles found.")
         return
 
-    print(f"Analyzing {len(articles)} articles...")
+    print(f"Analyzing {len(articles)} articles (hybrid method)...")
 
     for article in articles:
         content = article.get("content") or ""
@@ -147,12 +211,12 @@ def analyze_unscored_articles():
             print(f"Skipping article {article['id']} - no content")
             continue
 
-        # Get sentiment from AI (DistilBERT)
+        # Sentiment analysis (AI)
         sentiment = _sentiment_score(text)
-        time.sleep(0.5)
+        time.sleep(1.0)
 
-        # Get bias from source rating
-        bias = _get_source_bias(source)
+        # Hybrid bias detection (AI + source mapping)
+        bias = _hybrid_bias_score(text, source)
 
         print(
             f"Article {article['id']}: "
