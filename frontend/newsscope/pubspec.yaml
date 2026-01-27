@@ -1,6 +1,6 @@
 name: newsscope
 description: "NewsScope - A global, bias-aware news aggregator."
-publish_to: 'none' # Prevent accidental publishing
+publish_to: 'none'
 
 version: 1.0.0+1
 
@@ -26,13 +26,16 @@ dependencies:
   # Icons & UI
   cupertino_icons: ^1.0.8
 
-  # Firebase (latest stable versions)
+  # Firebase
   firebase_core: ^4.2.1
   firebase_auth: ^6.1.2
   google_sign_in: ^5.4.2
 
+  # Supabase
+  supabase_flutter: ^2.0.0
+
   # Utilities
-  url_launcher: ^6.2.0  # <-- Moved inside dependencies
+  url_launcher: ^6.2.0
 
 dev_dependencies:
   flutter_test:
@@ -43,7 +46,6 @@ dev_dependencies:
 flutter:
   uses-material-design: true
 
-# Launcher icon configuration
 flutter_icons:
   android: true
   image_path: "assets/icons/NewsScopeIcon.png"

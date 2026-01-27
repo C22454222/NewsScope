@@ -2,7 +2,7 @@
 from fastapi import APIRouter
 from datetime import datetime, timedelta, timezone
 from app.db.supabase import supabase
-from app.models.schemas import ArticleCreate
+from backend.app.schemas import ArticleCreate
 
 
 router = APIRouter()

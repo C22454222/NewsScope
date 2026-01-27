@@ -1,7 +1,7 @@
 # app/routes/sources.py
 from fastapi import APIRouter
 from app.db.supabase import supabase
-from app.models.schemas import SourceBase
+from backend.app.schemas import SourceBase
 
 # Router for news source metadata (BBC, CNN, etc.)
 router = APIRouter()

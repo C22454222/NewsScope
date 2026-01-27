@@ -3,9 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../services/api_service.dart';
 import '../screens/article_detail_screen.dart';
-import '../screens/placeholders.dart';
+import '../screens/compare_screen.dart';
+import '../screens/profile_screen.dart';
 import '../models/article.dart';
-
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -14,14 +14,13 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-
 class _HomeScreenState extends State<HomeScreen> {
   int _currentIndex = 0;
 
-  final List<Widget> _screens = [
-    const HomeFeedTab(),
-    const CompareScreen(),
-    const ProfileScreen(),
+  final List<Widget> _screens = const [
+    HomeFeedTab(),
+    CompareScreen(),
+    ProfileScreen(),
   ];
 
   @override
@@ -34,10 +33,18 @@ class _HomeScreenState extends State<HomeScreen> {
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _currentIndex,
         items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.home), label: "Home"),
           BottomNavigationBarItem(
-              icon: Icon(Icons.compare_arrows), label: "Compare"),
-          BottomNavigationBarItem(icon: Icon(Icons.person), label: "Profile"),
+            icon: Icon(Icons.home),
+            label: 'Home',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.compare_arrows),
+            label: 'Compare',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.person),
+            label: 'Profile',
+          ),
         ],
         onTap: (index) {
           setState(() {
@@ -49,14 +56,12 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-
 class HomeFeedTab extends StatefulWidget {
   const HomeFeedTab({super.key});
 
   @override
   State<HomeFeedTab> createState() => _HomeFeedTabState();
 }
-
 
 class _HomeFeedTabState extends State<HomeFeedTab> {
   final user = FirebaseAuth.instance.currentUser;
@@ -90,16 +95,16 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
 
   Color _getBiasColor(double? score) {
     if (score == null) return Colors.grey[300]!;
-    if (score < -0.1) return Colors.blue[700]!;
-    if (score > 0.1) return Colors.red[700]!;
+    if (score < -0.3) return Colors.blue[700]!;
+    if (score > 0.3) return Colors.red[700]!;
     return Colors.purple[400]!;
   }
 
   String _getBiasLabel(double? score) {
-    if (score == null) return "Unscored";
-    if (score < -0.1) return "Left";
-    if (score > 0.1) return "Right";
-    return "Center";
+    if (score == null) return 'Unscored';
+    if (score < -0.3) return 'Left';
+    if (score > 0.3) return 'Right';
+    return 'Center';
   }
 
   Color _getSentimentColor(double? score) {
@@ -110,17 +115,17 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
   }
 
   String _getSentimentLabel(double? score) {
-    if (score == null) return "--";
-    if (score > 0.1) return "Positive";
-    if (score < -0.1) return "Negative";
-    return "Neutral";
+    if (score == null) return '--';
+    if (score > 0.1) return 'Positive';
+    if (score < -0.1) return 'Negative';
+    return 'Neutral';
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text("NewsScope"),
+        title: const Text('NewsScope'),
         centerTitle: true,
         actions: [
           IconButton(
@@ -130,7 +135,7 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
           IconButton(
             icon: const Icon(Icons.logout),
             onPressed: _handleLogout,
-            tooltip: "Sign Out",
+            tooltip: 'Sign Out',
           ),
         ],
       ),
@@ -143,14 +148,14 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  "Hello, ${user?.displayName ?? 'Reader'}!",
+                  'Hello, ${user?.displayName ?? 'Reader'}!',
                   style: Theme.of(context).textTheme.titleLarge?.copyWith(
                         fontWeight: FontWeight.bold,
                       ),
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  "Latest articles from your feed.",
+                  'Latest articles from your feed.',
                   style: Theme.of(context).textTheme.bodyMedium,
                 ),
               ],
@@ -163,9 +168,45 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                 if (snapshot.connectionState == ConnectionState.waiting) {
                   return const Center(child: CircularProgressIndicator());
                 } else if (snapshot.hasError) {
-                  return Center(child: Text("Error: ${snapshot.error}"));
+                  return Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(
+                          Icons.error_outline,
+                          size: 64,
+                          color: Colors.red,
+                        ),
+                        const SizedBox(height: 16),
+                        Text('Error: ${snapshot.error}'),
+                        const SizedBox(height: 16),
+                        ElevatedButton(
+                          onPressed: _refreshArticles,
+                          child: const Text('Retry'),
+                        ),
+                      ],
+                    ),
+                  );
                 } else if (!snapshot.hasData || snapshot.data!.isEmpty) {
-                  return const Center(child: Text("No articles found."));
+                  return Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.article_outlined,
+                          size: 64,
+                          color: Colors.grey.shade400,
+                        ),
+                        const SizedBox(height: 16),
+                        const Text('No articles found.'),
+                        const SizedBox(height: 16),
+                        ElevatedButton(
+                          onPressed: _refreshArticles,
+                          child: const Text('Refresh'),
+                        ),
+                      ],
+                    ),
+                  );
                 }
 
                 final articles = snapshot.data!;
@@ -174,8 +215,8 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                 for (var article in articles) {
                   final date = article.publishedAt;
                   final key = date != null
-                      ? "${date.year}-${date.month}-${date.day}"
-                      : "Unknown Date";
+                      ? '${date.year}-${date.month}-${date.day}'
+                      : 'Unknown Date';
 
                   if (!groupedArticles.containsKey(key)) {
                     groupedArticles[key] = [];
@@ -185,14 +226,20 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
 
                 final sortedKeys = groupedArticles.keys.toList()
                   ..sort((a, b) {
-                    if (a == "Unknown Date") return 1;
-                    if (b == "Unknown Date") return -1;
+                    if (a == 'Unknown Date') return 1;
+                    if (b == 'Unknown Date') return -1;
                     final partsA = a.split('-');
                     final partsB = b.split('-');
-                    final dA = DateTime(int.parse(partsA[0]),
-                        int.parse(partsA[1]), int.parse(partsA[2]));
-                    final dB = DateTime(int.parse(partsB[0]),
-                        int.parse(partsB[1]), int.parse(partsB[2]));
+                    final dA = DateTime(
+                      int.parse(partsA[0]),
+                      int.parse(partsA[1]),
+                      int.parse(partsA[2]),
+                    );
+                    final dB = DateTime(
+                      int.parse(partsB[0]),
+                      int.parse(partsB[1]),
+                      int.parse(partsB[2]),
+                    );
                     return dB.compareTo(dA);
                   });
 
@@ -207,19 +254,19 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
 
                       String headerText = dateKey;
                       final now = DateTime.now();
-                      final todayKey = "${now.year}-${now.month}-${now.day}";
+                      final todayKey = '${now.year}-${now.month}-${now.day}';
                       final yesterday =
                           now.subtract(const Duration(days: 1));
                       final yesterdayKey =
-                          "${yesterday.year}-${yesterday.month}-${yesterday.day}";
+                          '${yesterday.year}-${yesterday.month}-${yesterday.day}';
 
                       if (dateKey == todayKey) {
-                        headerText = "Today";
+                        headerText = 'Today';
                       } else if (dateKey == yesterdayKey) {
-                        headerText = "Yesterday";
-                      } else if (dateKey != "Unknown Date") {
+                        headerText = 'Yesterday';
+                      } else if (dateKey != 'Unknown Date') {
                         final parts = dateKey.split('-');
-                        headerText = "${parts[2]}/${parts[1]}/${parts[0]}";
+                        headerText = '${parts[2]}/${parts[1]}/${parts[0]}';
                       }
 
                       return Column(
@@ -227,17 +274,21 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                         children: [
                           Padding(
                             padding: const EdgeInsets.only(
-                                top: 16.0, bottom: 8.0),
+                              top: 16.0,
+                              bottom: 8.0,
+                            ),
                             child: Text(
                               headerText,
                               style: TextStyle(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.grey[800]),
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.grey[800],
+                              ),
                             ),
                           ),
                           ...sectionArticles.map((article) {
                             final biasScore = article.biasScore;
+                            final biasIntensity = article.biasIntensity;
                             final sentimentScore = article.sentimentScore;
                             final sourceName = article.source;
                             final url = article.url;
@@ -268,11 +319,13 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                                     context,
                                     MaterialPageRoute(
                                       builder: (_) => ArticleDetailScreen(
+                                        id: article.id,
                                         title: title,
                                         sourceName: sourceName,
                                         content: content,
                                         url: url,
                                         biasScore: biasScore,
+                                        biasIntensity: biasIntensity,
                                         sentimentScore: sentimentScore,
                                       ),
                                     ),
@@ -296,15 +349,18 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                                       const SizedBox(height: 8),
                                       Row(
                                         children: [
-                                          Icon(Icons.source,
-                                              size: 14,
-                                              color: Colors.grey[600]),
+                                          Icon(
+                                            Icons.source,
+                                            size: 14,
+                                            color: Colors.grey[600],
+                                          ),
                                           const SizedBox(width: 4),
                                           Text(
                                             sourceName,
                                             style: TextStyle(
-                                                fontSize: 12,
-                                                color: Colors.grey[700]),
+                                              fontSize: 12,
+                                              color: Colors.grey[700],
+                                            ),
                                           ),
                                         ],
                                       ),
@@ -315,17 +371,20 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                                             Container(
                                               padding:
                                                   const EdgeInsets.symmetric(
-                                                      horizontal: 8,
-                                                      vertical: 4),
+                                                horizontal: 8,
+                                                vertical: 4,
+                                              ),
                                               decoration: BoxDecoration(
                                                 color: _getBiasColor(biasScore)
-                                                    .withValues(alpha: 0.15),
+                                                    .withAlpha(
+                                                        (255 * 0.15).round()),
                                                 borderRadius:
                                                     BorderRadius.circular(12),
                                                 border: Border.all(
-                                                    color: _getBiasColor(
-                                                        biasScore),
-                                                    width: 1),
+                                                  color:
+                                                      _getBiasColor(biasScore),
+                                                  width: 1,
+                                                ),
                                               ),
                                               child: Text(
                                                 _getBiasLabel(biasScore),
@@ -342,18 +401,21 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                                             Container(
                                               padding:
                                                   const EdgeInsets.symmetric(
-                                                      horizontal: 8,
-                                                      vertical: 4),
+                                                horizontal: 8,
+                                                vertical: 4,
+                                              ),
                                               decoration: BoxDecoration(
                                                 color: _getSentimentColor(
                                                         sentimentScore)
-                                                    .withValues(alpha: 0.15),
+                                                    .withAlpha(
+                                                        (255 * 0.15).round()),
                                                 borderRadius:
                                                     BorderRadius.circular(12),
                                                 border: Border.all(
-                                                    color: _getSentimentColor(
-                                                        sentimentScore),
-                                                    width: 1),
+                                                  color: _getSentimentColor(
+                                                      sentimentScore),
+                                                  width: 1,
+                                                ),
                                               ),
                                               child: Row(
                                                 mainAxisSize: MainAxisSize.min,
@@ -382,6 +444,15 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                                                     ),
                                                   ),
                                                 ],
+                                              ),
+                                            ),
+                                          const SizedBox(width: 8),
+                                          if (biasIntensity != null)
+                                            Text(
+                                              '${(biasIntensity * 100).round()}% biased',
+                                              style: TextStyle(
+                                                fontSize: 11,
+                                                color: Colors.grey[600],
                                               ),
                                             ),
                                         ],
