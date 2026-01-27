@@ -1,12 +1,12 @@
 // lib/services/api_service.dart
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/article.dart';
 
 class ApiService {
-  static const String baseUrl =
-      'https://newsscope-backend.onrender.com';
+  static const String baseUrl = 'https://newsscope-backend.onrender.com';
 
   final supabase = Supabase.instance.client;
 
@@ -16,7 +16,7 @@ class ApiService {
       final session = supabase.auth.currentSession;
       return session?.accessToken;
     } catch (e) {
-      print('Error getting token: $e');
+      debugPrint('Error getting token: $e');
       return null;
     }
   }
@@ -33,9 +33,7 @@ class ApiService {
         final List<dynamic> data = json.decode(response.body);
         return data.map((json) => Article.fromJson(json)).toList();
       } else {
-        throw Exception(
-          'Failed to load articles: ${response.statusCode}'
-        );
+        throw Exception('Failed to load articles: ${response.statusCode}');
       }
     } catch (e) {
       throw Exception('Error connecting to backend: $e');
@@ -49,7 +47,7 @@ class ApiService {
   }) async {
     final token = await _getToken();
     if (token == null) {
-      print('No auth token available');
+      debugPrint('No auth token available for tracking');
       return;
     }
 
@@ -67,10 +65,10 @@ class ApiService {
       );
 
       if (response.statusCode != 200) {
-        print('Failed to track reading: ${response.statusCode}');
+        debugPrint('Failed to track reading: ${response.statusCode}');
       }
     } catch (e) {
-      print('Error tracking reading: $e');
+      debugPrint('Error tracking reading: $e');
     }
   }
 
@@ -90,10 +88,10 @@ class ApiService {
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
       } else {
-        print('Failed to load bias profile: ${response.statusCode}');
+        debugPrint('Failed to load bias profile: ${response.statusCode}');
       }
     } catch (e) {
-      print('Error fetching bias profile: $e');
+      debugPrint('Error fetching bias profile: $e');
     }
     return null;
   }
@@ -116,12 +114,10 @@ class ApiService {
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
       } else {
-        print(
-          'Failed to compare articles: ${response.statusCode}'
-        );
+        debugPrint('Failed to compare articles: ${response.statusCode}');
       }
     } catch (e) {
-      print('Error comparing articles: $e');
+      debugPrint('Error comparing articles: $e');
     }
     return null;
   }
@@ -137,7 +133,7 @@ class ApiService {
         return jsonDecode(response.body);
       }
     } catch (e) {
-      print('Error fetching fact-checks: $e');
+      debugPrint('Error fetching fact-checks: $e');
     }
     return null;
   }
