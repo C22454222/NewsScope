@@ -14,7 +14,7 @@ SENTIMENT_MODEL = os.getenv(
 
 BIAS_MODEL = os.getenv(
     "HF_BIAS_MODEL",
-    "bucketresearch/politicalBiasBERT"
+    "premsa/political-bias-prediction-allsides-BERT"
 ).strip()
 
 client = InferenceClient(token=HF_API_TOKEN)
