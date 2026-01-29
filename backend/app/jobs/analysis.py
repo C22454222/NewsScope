@@ -29,10 +29,11 @@ def _call_classification(model: str, text: str):
 
     for attempt in range(3):
         try:
-            return client.text_classification(
+            result = client.text_classification(
                 truncated_text,
                 model=model
             )
+            return result
 
         except Exception as e:
             error_str = str(e)
@@ -116,7 +117,7 @@ def _get_source_political_leaning(source_name: str):
 
 def _detect_political_bias_ai(text: str):
     """
-    Article-level political bias detection using politicalBiasBERT.
+    Political bias detection using premsa AllSides BERT.
 
     Returns tuple: (bias_score: float, confidence: float)
     - bias_score: -1.0 (Left) to +1.0 (Right)
@@ -129,34 +130,82 @@ def _detect_political_bias_ai(text: str):
         if not results:
             return (None, None)
 
-        # politicalBiasBERT returns: left, center, right
-        # Find the prediction with highest score
-        predictions = {item.label.lower(): item.score for item in results}
+        # DEBUG: Print raw model output
+        print(f"   🔍 Raw results type: {type(results)}")
+        print(f"   🔍 Raw results: {results}")
 
-        # Get the top prediction
-        top_label = max(predictions, key=predictions.get)
-        confidence = predictions[top_label]
+        # Extract all predictions with labels and scores
+        predictions = []
+        for item in results:
+            predictions.append((item.label, item.score))
+            print(f"   🔍   {item.label}: {item.score:.4f}")
 
-        # Map to -1.0 to +1.0 scale
-        bias_map = {
-            'left': -1.0,
-            'center': 0.0,
-            'right': 1.0,
+        # Find top prediction
+        top_label, confidence = max(predictions, key=lambda x: x[1])
+
+        print(f"   🔍 Top prediction: {top_label} "
+              f"(confidence={confidence:.4f})")
+
+        # Handle multiple label formats
+        # Format 1: LABEL_0, LABEL_1, LABEL_2 (most common)
+        # Format 2: left, center, right (word-based)
+        # Format 3: 0, 1, 2 (numeric)
+
+        label_map = {
+            # LABEL_X format (AllSides dataset standard)
+            'LABEL_0': (-1.0, 'LEFT'),
+            'LABEL_1': (0.0, 'CENTER'),
+            'LABEL_2': (1.0, 'RIGHT'),
+            # Word format
+            'left': (-1.0, 'LEFT'),
+            'center': (0.0, 'CENTER'),
+            'right': (1.0, 'RIGHT'),
+            # Numeric format
+            '0': (-1.0, 'LEFT'),
+            '1': (0.0, 'CENTER'),
+            '2': (1.0, 'RIGHT'),
         }
 
-        bias_score = bias_map.get(top_label, 0.0)
+        # Try exact match first
+        if top_label in label_map:
+            bias_score, label = label_map[top_label]
+        else:
+            # Try case-insensitive partial match
+            top_label_lower = top_label.lower()
+            if 'left' in top_label_lower and 'center' not in top_label_lower:
+                bias_score, label = -1.0, 'LEFT'
+            elif ('right' in top_label_lower and 'center' not in top_label_lower):
+                bias_score, label = 1.0, 'RIGHT'
+            elif ('center' in top_label_lower or 'neutral' in top_label_lower):
+                bias_score, label = 0.0, 'CENTER'
+            elif '0' in top_label:
+                bias_score, label = -1.0, 'LEFT'
+            elif '2' in top_label:
+                bias_score, label = 1.0, 'RIGHT'
+            else:
+                # Unknown format - default to center and log warning
+                print(f"   ⚠️  UNKNOWN LABEL FORMAT: '{top_label}' "
+                      f"- defaulting to CENTER")
+                bias_score, label = 0.0, 'CENTER'
+
+        print(f"   ✅ Mapped to: {label} (score={bias_score:.2f}, "
+              f"confidence={confidence:.2%})")
 
         return (bias_score, confidence)
 
     except Exception as e:
-        print(f"Political bias detection error: {e}")
+        print(f"❌ Political bias detection error: {e}")
+        import traceback
+        traceback.print_exc()
         return (None, None)
 
 
 def _hybrid_bias_analysis(text: str, source_name: str):
     """
-    Hybrid bias detection methodology combining:
-    1. Article-level AI political bias (politicalBiasBERT)
+    Hybrid bias detection methodology.
+
+    Combines:
+    1. Article-level AI political bias (premsa AllSides BERT)
     2. Source-level political leaning (AllSides methodology)
 
     Returns tuple: (bias_score, bias_intensity)
@@ -175,11 +224,14 @@ def _hybrid_bias_analysis(text: str, source_name: str):
         # AI succeeded - use article-level classification
         bias_intensity = abs(ai_bias)  # Distance from center (0.0 to 1.0)
 
-        label = "LEFT" if ai_bias < -0.3 else "RIGHT" if ai_bias > 0.3 else "CENTER"
+        label = ("LEFT" if ai_bias < -0.3 else
+                 "RIGHT" if ai_bias > 0.3 else
+                 "CENTER")
 
         print(
-            f"   ✅ AI: {label} (score={ai_bias:.2f}, "
-            f"confidence={ai_confidence:.2%}, intensity={bias_intensity:.2f})"
+            f"Article AI result: {label} (score={ai_bias:.2f}, "
+            f"confidence={ai_confidence:.2%}, "
+            f"intensity={bias_intensity:.2f})"
         )
         return (ai_bias, bias_intensity)
 
@@ -199,12 +251,13 @@ def analyze_unscored_articles():
     Analyze articles using hybrid transformer-based approach.
 
     Sentiment Analysis:
-      - Model: RoBERTa sentiment (CardiffNLP)
+      - Model: cardiffnlp/twitter-roberta-base-sentiment-latest
       - Method: Article-level sentiment classification
       - Output: sentiment_score (-1 to +1)
 
     Political Bias Detection:
-      - Model: politicalBiasBERT (bucketresearch)
+      - Model: premsa/political-bias-prediction-allsides-BERT
+      - Training: AllSides dataset, 90.4% F1 score
       - Method: Hybrid article-level AI + source-level fallback
       - Output: bias_score (-1 to +1), bias_intensity (0 to 1)
 
