@@ -13,3 +13,19 @@ def test_health_check():
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+# tests/test_api.py
+def test_get_articles():
+    response = client.get("/articles")
+    assert response.status_code == 200
+    assert isinstance(response.json(), list)
+
+
+def test_compare_articles():
+    response = client.post("/api/articles/compare", json={
+        "topic": "climate",
+        "limit": 5
+    })
+    assert response.status_code == 200
+    assert "left_articles" in response.json()
