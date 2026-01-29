@@ -13,6 +13,12 @@ class Settings:
     # Simple identifier used in logs and metadata
     PROJECT_NAME: str = "NewsScope API"
 
+    def __init__(self):
+        if not self.SUPABASE_URL:
+            raise ValueError("SUPABASE_URL not set")
+        if not self.SUPABASE_KEY:
+            raise ValueError("SUPABASE_KEY not set")
+
 
 # Single settings instance imported by other modules
 settings = Settings()
