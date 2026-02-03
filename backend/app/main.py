@@ -47,7 +47,7 @@ def init_firebase():
         else:
             # Fallback to file (for local development)
             cred = credentials.Certificate("firebase-service-account.json")
-        
+
         firebase_admin.initialize_app(cred)
         print("✅ Firebase Admin initialized")
     except ValueError:
@@ -162,10 +162,10 @@ def get_current_user(authorization: Optional[str] = Header(None)):
         # Verify Firebase ID token
         decoded_token = auth.verify_id_token(token)
         user_id = decoded_token['uid']
-        
+
         print(f"✅ Authenticated user: {user_id}")
         return user_id
-        
+
     except auth.InvalidIdTokenError:
         raise HTTPException(
             status_code=401,
@@ -255,7 +255,7 @@ async def track_reading(
     """
     try:
         print(f"📊 Tracking reading: user={user_id}, article={data.article_id}, time={data.time_spent_seconds}s")
-        
+
         response = supabase.table("reading_history").upsert({
             "user_id": user_id,
             "article_id": data.article_id,
@@ -263,7 +263,7 @@ async def track_reading(
             "opened_at": datetime.utcnow().isoformat()
         }, on_conflict="user_id,article_id").execute()
 
-        print(f"✅ Reading tracked successfully")
+        print("Reading tracked successfully")
         return {"success": True, "data": response.data}
 
     except Exception as e:
@@ -279,7 +279,7 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
     """
     try:
         print(f"📊 Fetching bias profile for user: {user_id}")
-        
+
         response = (
             supabase.table("reading_history")
             .select("time_spent_seconds, articles(*)")
