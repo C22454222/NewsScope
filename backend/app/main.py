@@ -1,5 +1,6 @@
 # app/main.py
 import os
+import json
 import asyncio
 from contextlib import asynccontextmanager
 from collections import Counter
@@ -15,6 +16,10 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse
 
+# Firebase Admin imports
+import firebase_admin
+from firebase_admin import credentials, auth
+
 from app.routes import articles, users, sources
 from app.core.scheduler import start_scheduler
 from app.jobs.ingestion import run_ingestion_cycle
@@ -29,6 +34,31 @@ from app.schemas import (
     ComparisonResponse
 )
 from app.db.supabase import supabase
+
+
+def init_firebase():
+    """Initialize Firebase Admin SDK."""
+    try:
+        # Try environment variable first (for Render)
+        service_account = os.getenv("FIREBASE_SERVICE_ACCOUNT")
+        if service_account:
+            cred_dict = json.loads(service_account)
+            cred = credentials.Certificate(cred_dict)
+        else:
+            # Fallback to file (for local development)
+            cred = credentials.Certificate("firebase-service-account.json")
+        
+        firebase_admin.initialize_app(cred)
+        print("✅ Firebase Admin initialized")
+    except ValueError:
+        # Already initialized
+        print("ℹ️  Firebase Admin already initialized")
+    except Exception as e:
+        print(f"⚠️  Firebase Admin init failed: {e}")
+
+
+# Initialize Firebase before creating the app
+init_firebase()
 
 
 @asynccontextmanager
@@ -129,12 +159,27 @@ def get_current_user(authorization: Optional[str] = Header(None)):
     token = authorization.replace("Bearer ", "")
 
     try:
-        user = supabase.auth.get_user(token)
-        return user.user.id
+        # Verify Firebase ID token
+        decoded_token = auth.verify_id_token(token)
+        user_id = decoded_token['uid']
+        
+        print(f"✅ Authenticated user: {user_id}")
+        return user_id
+        
+    except auth.InvalidIdTokenError:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid authentication token"
+        )
+    except auth.ExpiredIdTokenError:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication token expired"
+        )
     except Exception as e:
         raise HTTPException(
             status_code=401,
-            detail=f"Invalid token: {e}"
+            detail=f"Authentication failed: {e}"
         )
 
 
@@ -209,6 +254,8 @@ async def track_reading(
     Called when user exits article view in mobile app.
     """
     try:
+        print(f"📊 Tracking reading: user={user_id}, article={data.article_id}, time={data.time_spent_seconds}s")
+        
         response = supabase.table("reading_history").upsert({
             "user_id": user_id,
             "article_id": data.article_id,
@@ -216,9 +263,11 @@ async def track_reading(
             "opened_at": datetime.utcnow().isoformat()
         }, on_conflict="user_id,article_id").execute()
 
+        print(f"✅ Reading tracked successfully")
         return {"success": True, "data": response.data}
 
     except Exception as e:
+        print(f"❌ Error tracking reading: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -229,6 +278,8 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
     Weighted by time spent on each article.
     """
     try:
+        print(f"📊 Fetching bias profile for user: {user_id}")
+        
         response = (
             supabase.table("reading_history")
             .select("time_spent_seconds, articles(*)")
@@ -237,6 +288,7 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
         )
 
         history = response.data
+        print(f"📚 Found {len(history)} articles in reading history")
 
         if not history:
             return BiasProfile(
@@ -319,6 +371,7 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
         )
 
     except Exception as e:
+        print(f"❌ Error fetching bias profile: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

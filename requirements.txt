@@ -31,3 +31,5 @@ pytest
 
 # ML/NLP
 huggingface_hub
+
+firebase-admin==6.5.0
