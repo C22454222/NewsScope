@@ -2,21 +2,27 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../models/article.dart';
 
 class ApiService {
   static const String baseUrl = 'https://newsscope-backend.onrender.com';
 
-  final supabase = Supabase.instance.client;
-
-  /// Get authentication token from Supabase
+  /// Get authentication token from Firebase
   Future<String?> _getToken() async {
     try {
-      final session = supabase.auth.currentSession;
-      return session?.accessToken;
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) {
+        debugPrint('❌ No Firebase user logged in');
+        return null;
+      }
+      
+      final token = await user.getIdToken();
+      debugPrint('✅ Got Firebase token for user: ${user.uid}');
+      return token;
+      
     } catch (e) {
-      debugPrint('Error getting token: $e');
+      debugPrint('❌ Error getting Firebase token: $e');
       return null;
     }
   }
@@ -46,8 +52,12 @@ class ApiService {
     required int timeSpentSeconds,
   }) async {
     final token = await _getToken();
+    
+    debugPrint('🔐 Token: ${token?.substring(0, 20)}...');
+    debugPrint('📊 Tracking: $articleId for ${timeSpentSeconds}s');
+    
     if (token == null) {
-      debugPrint('No auth token available for tracking');
+      debugPrint('❌ No auth token available for tracking');
       return;
     }
 
@@ -64,20 +74,30 @@ class ApiService {
         }),
       );
 
+      debugPrint('📡 Response: ${response.statusCode}');
+      debugPrint('📡 Body: ${response.body}');
+      
       if (response.statusCode != 200) {
-        debugPrint('Failed to track reading: ${response.statusCode}');
+        debugPrint('❌ Failed to track reading: ${response.statusCode}');
+      } else {
+        debugPrint('✅ Reading tracked successfully!');
       }
     } catch (e) {
-      debugPrint('Error tracking reading: $e');
+      debugPrint('❌ Error tracking reading: $e');
     }
   }
 
   /// Get user's bias profile
   Future<Map<String, dynamic>?> getBiasProfile() async {
     final token = await _getToken();
-    if (token == null) return null;
+    if (token == null) {
+      debugPrint('❌ No token for bias profile');
+      return null;
+    }
 
     try {
+      debugPrint('📊 Fetching bias profile...');
+      
       final response = await http.get(
         Uri.parse('$baseUrl/api/bias-profile'),
         headers: {
@@ -85,13 +105,18 @@ class ApiService {
         },
       );
 
+      debugPrint('📡 Profile response: ${response.statusCode}');
+      
       if (response.statusCode == 200) {
-        return jsonDecode(response.body);
+        final profile = jsonDecode(response.body);
+        debugPrint('✅ Profile loaded: ${profile['total_articles_read']} articles');
+        return profile;
       } else {
-        debugPrint('Failed to load bias profile: ${response.statusCode}');
+        debugPrint('❌ Failed to load bias profile: ${response.statusCode}');
+        debugPrint('Response: ${response.body}');
       }
     } catch (e) {
-      debugPrint('Error fetching bias profile: $e');
+      debugPrint('❌ Error fetching bias profile: $e');
     }
     return null;
   }
