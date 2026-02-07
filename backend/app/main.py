@@ -49,12 +49,12 @@ def init_firebase():
             cred = credentials.Certificate("firebase-service-account.json")
 
         firebase_admin.initialize_app(cred)
-        print("✅ Firebase Admin initialized")
+        print("Firebase Admin initialized")
     except ValueError:
         # Already initialized
-        print("ℹ️  Firebase Admin already initialized")
+        print("ℹFirebase Admin already initialized")
     except Exception as e:
-        print(f"⚠️  Firebase Admin init failed: {e}")
+        print(f"Firebase Admin init failed: {e}")
 
 
 # Initialize Firebase before creating the app
@@ -102,13 +102,13 @@ async def lifespan(app: FastAPI):
 
     # Start keep-alive in production
     env = os.getenv("ENVIRONMENT", "production")
-    print(f"🌍 Environment: {env}")
+    print(f"Environment: {env}")
 
     if env == "production":
         start_keep_alive()
-        print("✅ Keep-alive enabled (pings every 14 minutes)")
+        print("Keep-alive enabled (pings every 14 minutes)")
     else:
-        print("ℹ️ Keep-alive disabled in development")
+        print("Keep-alive disabled in development")
 
     # Run startup jobs asynchronously
     asyncio.create_task(_run_startup_jobs())
@@ -116,7 +116,7 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown logic
-    print("🛑 Server shutting down...")
+    print("Server shutting down...")
 
 
 async def _run_startup_jobs():
@@ -124,18 +124,18 @@ async def _run_startup_jobs():
     Run critical jobs immediately when server starts.
     Ensures fresh data is available on deployment.
     """
-    print("🚀 Server startup: Running ingestion + analysis...")
+    print("Server startup: Running ingestion + analysis...")
 
     try:
         # Run ingestion to fetch latest news
         await asyncio.to_thread(run_ingestion_cycle)
-        print("✅ Startup ingestion complete")
+        print("Startup ingestion complete")
 
         # Run analysis on any unscored articles
         await asyncio.to_thread(analyze_unscored_articles)
-        print("✅ Startup analysis complete")
+        print("Startup analysis complete")
     except Exception as e:
-        print(f"⚠️ Startup jobs failed: {e}")
+        print(f"Startup jobs failed: {e}")
 
 
 app = FastAPI(
@@ -163,7 +163,7 @@ def get_current_user(authorization: Optional[str] = Header(None)):
         decoded_token = auth.verify_id_token(token)
         user_id = decoded_token['uid']
 
-        print(f"✅ Authenticated user: {user_id}")
+        print(f"Authenticated user: {user_id}")
         return user_id
 
     except auth.InvalidIdTokenError:
@@ -183,9 +183,7 @@ def get_current_user(authorization: Optional[str] = Header(None)):
         )
 
 
-# ============================================================
 # Core Endpoints
-# ============================================================
 
 @app.get("/")
 def root():
@@ -215,9 +213,7 @@ def health():
     return {"status": "ok"}
 
 
-# ============================================================
 # Debug Endpoints
-# ============================================================
 
 @app.post("/debug/ingest")
 async def debug_ingest(background_tasks: BackgroundTasks):
@@ -240,9 +236,7 @@ async def debug_archive(background_tasks: BackgroundTasks):
     return {"status": "archiving triggered in background"}
 
 
-# ============================================================
 # User Reading History & Bias Profile
-# ============================================================
 
 @app.post("/api/reading-history")
 async def track_reading(
@@ -254,7 +248,7 @@ async def track_reading(
     Called when user exits article view in mobile app.
     """
     try:
-        print(f"📊 Tracking reading: user={user_id}, article={data.article_id}, time={data.time_spent_seconds}s")
+        print(f"Tracking reading: user={user_id}, article={data.article_id}, time={data.time_spent_seconds}s")
 
         response = supabase.table("reading_history").upsert({
             "user_id": user_id,
@@ -267,7 +261,7 @@ async def track_reading(
         return {"success": True, "data": response.data}
 
     except Exception as e:
-        print(f"❌ Error tracking reading: {e}")
+        print(f"Error tracking reading: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -278,7 +272,7 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
     Weighted by time spent on each article.
     """
     try:
-        print(f"📊 Fetching bias profile for user: {user_id}")
+        print(f"Fetching bias profile for user: {user_id}")
 
         response = (
             supabase.table("reading_history")
@@ -288,7 +282,7 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
         )
 
         history = response.data
-        print(f"📚 Found {len(history)} articles in reading history")
+        print(f"Found {len(history)} articles in reading history")
 
         if not history:
             return BiasProfile(
@@ -371,13 +365,11 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
         )
 
     except Exception as e:
-        print(f"❌ Error fetching bias profile: {e}")
+        print(f"Error fetching bias profile: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ============================================================
 # Comparison View
-# ============================================================
 
 @app.post("/api/articles/compare", response_model=ComparisonResponse)
 async def compare_articles(request: ComparisonRequest):
@@ -429,9 +421,7 @@ async def compare_articles(request: ComparisonRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ============================================================
 # Fact-Checking
-# ============================================================
 
 @app.get(
     "/api/fact-checks/{article_id}",
@@ -455,9 +445,7 @@ async def get_article_fact_checks(article_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ============================================================
 # Include API Routers
-# ============================================================
 
 app.include_router(
     articles.router,
@@ -476,9 +464,7 @@ app.include_router(
 )
 
 
-# ============================================================
 # Static Files
-# ============================================================
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 

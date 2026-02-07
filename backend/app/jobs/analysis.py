@@ -184,17 +184,17 @@ def _detect_political_bias_ai(text: str):
                 bias_score, label = 1.0, 'RIGHT'
             else:
                 # Unknown format - default to center and log warning
-                print(f"   ⚠️  UNKNOWN LABEL FORMAT: '{top_label}' "
+                print(f"UNKNOWN LABEL FORMAT: '{top_label}' "
                       f"- defaulting to CENTER")
                 bias_score, label = 0.0, 'CENTER'
 
-        print(f"   ✅ Mapped to: {label} (score={bias_score:.2f}, "
+        print(f"Mapped to: {label} (score={bias_score:.2f}, "
               f"confidence={confidence:.2%})")
 
         return (bias_score, confidence)
 
     except Exception as e:
-        print(f"❌ Political bias detection error: {e}")
+        print(f"Political bias detection error: {e}")
         import traceback
         traceback.print_exc()
         return (None, None)
@@ -240,7 +240,7 @@ def _hybrid_bias_analysis(text: str, source_name: str):
     fallback_intensity = 0.5  # Moderate intensity for fallback
 
     print(
-        f"   ⚠️  AI failed → fallback to source: "
+        f"AI failed → fallback to source: "
         f"{source_name} = {source_bias:.2f}"
     )
     return (source_bias, fallback_intensity)

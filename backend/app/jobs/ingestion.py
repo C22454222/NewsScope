@@ -124,10 +124,10 @@ def insert_articles_batch(articles: list[dict]):
 
     if payloads:
         res = supabase.table("articles").insert(payloads).execute().data
-        print(f"✅ Inserted {len(res)} new articles")
+        print(f"Inserted {len(res)} new articles")
         return [r["id"] for r in res]
     else:
-        print("ℹ️ No new articles to insert")
+        print("No new articles to insert")
     return []
 
 
@@ -158,7 +158,7 @@ def fetch_newsapi():
         if n["url"]:
             normalized.append(n)
 
-    print(f"📰 Fetched {len(normalized)} articles from NewsAPI (CNN)")
+    print(f"Fetched {len(normalized)} articles from NewsAPI (CNN)")
     return normalized
 
 
@@ -191,7 +191,7 @@ def fetch_rss():
                 if n["url"]:
                     normalized.append(n)
         except Exception as exc:
-            print(f"⚠️ RSS fetch error for {feed}: {exc}")
+            print(f"RSS fetch error for {feed}: {exc}")
             continue
 
     print(f"📡 Fetched {len(normalized)} articles from RSS")
@@ -210,14 +210,14 @@ def run_ingestion_cycle():
     try:
         articles += fetch_newsapi()
     except Exception as exc:
-        print(f"❌ NewsAPI fetch failed: {exc}")
+        print(f"NewsAPI fetch failed: {exc}")
 
     try:
         articles += fetch_rss()
     except Exception as exc:
-        print(f"❌ RSS fetch failed: {exc}")
+        print(f"RSS fetch failed: {exc}")
 
     try:
         insert_articles_batch(articles)
     except Exception as exc:
-        print(f"❌ Batch insert failed: {exc}")
+        print(f"Batch insert failed: {exc}")

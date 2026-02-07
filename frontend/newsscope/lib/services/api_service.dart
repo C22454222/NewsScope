@@ -13,16 +13,16 @@ class ApiService {
     try {
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) {
-        debugPrint('❌ No Firebase user logged in');
+        debugPrint('No Firebase user logged in');
         return null;
       }
       
       final token = await user.getIdToken();
-      debugPrint('✅ Got Firebase token for user: ${user.uid}');
+      debugPrint('Got Firebase token for user: ${user.uid}');
       return token;
       
     } catch (e) {
-      debugPrint('❌ Error getting Firebase token: $e');
+      debugPrint('Error getting Firebase token: $e');
       return null;
     }
   }
@@ -53,11 +53,11 @@ class ApiService {
   }) async {
     final token = await _getToken();
     
-    debugPrint('🔐 Token: ${token?.substring(0, 20)}...');
-    debugPrint('📊 Tracking: $articleId for ${timeSpentSeconds}s');
+    debugPrint('Token: ${token?.substring(0, 20)}...');
+    debugPrint('Tracking: $articleId for ${timeSpentSeconds}s');
     
     if (token == null) {
-      debugPrint('❌ No auth token available for tracking');
+      debugPrint('No auth token available for tracking');
       return;
     }
 
@@ -74,16 +74,16 @@ class ApiService {
         }),
       );
 
-      debugPrint('📡 Response: ${response.statusCode}');
-      debugPrint('📡 Body: ${response.body}');
+      debugPrint('Response: ${response.statusCode}');
+      debugPrint('Body: ${response.body}');
       
       if (response.statusCode != 200) {
-        debugPrint('❌ Failed to track reading: ${response.statusCode}');
+        debugPrint('Failed to track reading: ${response.statusCode}');
       } else {
-        debugPrint('✅ Reading tracked successfully!');
+        debugPrint('Reading tracked successfully!');
       }
     } catch (e) {
-      debugPrint('❌ Error tracking reading: $e');
+      debugPrint('Error tracking reading: $e');
     }
   }
 
@@ -91,12 +91,12 @@ class ApiService {
   Future<Map<String, dynamic>?> getBiasProfile() async {
     final token = await _getToken();
     if (token == null) {
-      debugPrint('❌ No token for bias profile');
+      debugPrint('No token for bias profile');
       return null;
     }
 
     try {
-      debugPrint('📊 Fetching bias profile...');
+      debugPrint('Fetching bias profile...');
       
       final response = await http.get(
         Uri.parse('$baseUrl/api/bias-profile'),
@@ -109,14 +109,14 @@ class ApiService {
       
       if (response.statusCode == 200) {
         final profile = jsonDecode(response.body);
-        debugPrint('✅ Profile loaded: ${profile['total_articles_read']} articles');
+        debugPrint('Profile loaded: ${profile['total_articles_read']} articles');
         return profile;
       } else {
-        debugPrint('❌ Failed to load bias profile: ${response.statusCode}');
+        debugPrint('Failed to load bias profile: ${response.statusCode}');
         debugPrint('Response: ${response.body}');
       }
     } catch (e) {
-      debugPrint('❌ Error fetching bias profile: $e');
+      debugPrint('Error fetching bias profile: $e');
     }
     return null;
   }
