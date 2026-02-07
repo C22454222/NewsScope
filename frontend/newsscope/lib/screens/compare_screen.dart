@@ -68,9 +68,13 @@ class _CompareScreenState extends State<CompareScreen>
   Widget _buildArticleList(List<dynamic>? articles) {
     if (articles == null || articles.isEmpty) {
       return const Center(
-        child: Text(
-          'No articles in this band for this topic.',
-          textAlign: TextAlign.center,
+        child: Padding(
+          padding: EdgeInsets.all(24.0),
+          child: Text(
+            'No articles in this band for this topic.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.grey),
+          ),
         ),
       );
     }
@@ -98,7 +102,9 @@ class _CompareScreenState extends State<CompareScreen>
                 Row(
                   children: [
                     Chip(
-                      label: Text(_getBiasLabel(article['bias_score'])),
+                      label: Text(_getBiasLabel(
+                        (article['bias_score'] as num?)?.toDouble(),
+                      )),
                       backgroundColor: _getBiasColor(
                         (article['bias_score'] as num?)?.toDouble(),
                       ).withAlpha((255 * 0.2).round()),
@@ -109,7 +115,8 @@ class _CompareScreenState extends State<CompareScreen>
                         ),
                       ),
                     ),
-                    if (article['bias_intensity'] != null) const SizedBox(width: 8),
+                    if (article['bias_intensity'] != null)
+                      const SizedBox(width: 8),
                     if (article['bias_intensity'] != null)
                       Text(
                         '${(((article['bias_intensity'] ?? 0) as num) * 100).round()}% biased',
@@ -123,8 +130,9 @@ class _CompareScreenState extends State<CompareScreen>
               ],
             ),
             isThreeLine: true,
-            onTap: () {
-              Navigator.push(
+            onTap: () async {
+              // Wait for article screen to pop, then signal parent to reload profile
+              await Navigator.push(
                 context,
                 MaterialPageRoute(
                   builder: (_) => ArticleDetailScreen(
@@ -133,8 +141,7 @@ class _CompareScreenState extends State<CompareScreen>
                     sourceName: article['source'] ?? 'Unknown',
                     content: article['content'],
                     url: article['url'] ?? '',
-                    biasScore:
-                        (article['bias_score'] as num?)?.toDouble(),
+                    biasScore: (article['bias_score'] as num?)?.toDouble(),
                     biasIntensity:
                         (article['bias_intensity'] as num?)?.toDouble(),
                     sentimentScore:
@@ -142,6 +149,8 @@ class _CompareScreenState extends State<CompareScreen>
                   ),
                 ),
               );
+              // After user returns, we don't need to do anything here;
+              // HomeScreen will handle the profile reload when switching tabs
             },
           ),
         );
@@ -188,18 +197,15 @@ class _CompareScreenState extends State<CompareScreen>
             tabs: [
               Tab(
                 icon: Icon(Icons.arrow_back, color: Colors.blue[700]),
-                text:
-                    'Left (${leftArticles?.length ?? 0})',
+                text: 'Left (${leftArticles?.length ?? 0})',
               ),
               Tab(
                 icon: Icon(Icons.horizontal_rule, color: Colors.purple[400]),
-                text:
-                    'Centre (${centreArticles?.length ?? 0})',
+                text: 'Centre (${centreArticles?.length ?? 0})',
               ),
               Tab(
                 icon: Icon(Icons.arrow_forward, color: Colors.red[700]),
-                text:
-                    'Right (${rightArticles?.length ?? 0})',
+                text: 'Right (${rightArticles?.length ?? 0})',
               ),
             ],
           ),

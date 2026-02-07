@@ -1,5 +1,6 @@
 // lib/screens/article_detail_screen.dart
 import 'dart:async';
+import 'dart:developer' as developer;
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../services/api_service.dart';
@@ -34,6 +35,7 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
   final ApiService _api = ApiService();
   Timer? _trackingTimer;
   int _secondsSpent = 0;
+  bool _hasTracked = false;
 
   @override
   void initState() {
@@ -56,12 +58,26 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
   }
 
   Future<void> _trackReadingTime() async {
-    if (_secondsSpent < 3) return; // Ignore quick exits
+    if (_secondsSpent < 3 || _hasTracked) return;
 
-    await _api.trackReading(
-      articleId: widget.id,
-      timeSpentSeconds: _secondsSpent,
-    );
+    _hasTracked = true;
+
+    try {
+      await _api.trackReading(
+        articleId: widget.id,
+        timeSpentSeconds: _secondsSpent,
+      );
+      developer.log(
+        'Reading tracked: ${widget.id}, ${_secondsSpent}s',
+        name: 'ArticleDetailScreen',
+      );
+    } catch (e) {
+      developer.log(
+        'Failed to track reading: $e',
+        name: 'ArticleDetailScreen',
+        error: e,
+      );
+    }
   }
 
   Color _getBiasColor(double? score) {
@@ -103,128 +119,138 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Article'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.share),
-            onPressed: () {
-            },
-          ),
-        ],
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Source badge
-            Container(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 12,
-                vertical: 6,
-              ),
-              decoration: BoxDecoration(
-                color: Colors.blue.shade50,
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Text(
-                widget.sourceName,
-                style: TextStyle(
-                  color: Colors.blue.shade700,
-                  fontWeight: FontWeight.w600,
+    return PopScope(
+      canPop: true,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop && !_hasTracked) {
+          await _trackReadingTime();
+        }
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Article'),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.share),
+              onPressed: () {
+                // Share functionality to be implemented
+              },
+            ),
+          ],
+        ),
+        body: SingleChildScrollView(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Source badge
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade50,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Text(
+                  widget.sourceName,
+                  style: TextStyle(
+                    color: Colors.blue.shade700,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
-            ),
-            const SizedBox(height: 12),
+              const SizedBox(height: 12),
 
-            // Title
-            Text(
-              widget.title,
-              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
-            ),
-            const SizedBox(height: 16),
+              // Title
+              Text(
+                widget.title,
+                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+              ),
+              const SizedBox(height: 16),
 
-            // Analysis chips
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                // Bias chip
-                Chip(
-                  avatar: Icon(
-                    Icons.balance,
-                    size: 16,
-                    color: _getBiasColor(widget.biasScore),
-                  ),
-                  label: Text(_getBiasLabel(widget.biasScore)),
-                  backgroundColor: _getBiasColor(widget.biasScore)
-                      .withAlpha((255 * 0.2).round()),
-                ),
-
-                // Sentiment chip
-                if (widget.sentimentScore != null)
+              // Analysis chips
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  // Bias chip
                   Chip(
                     avatar: Icon(
-                      widget.sentimentScore! > 0
-                          ? Icons.sentiment_satisfied
-                          : widget.sentimentScore! < 0
-                              ? Icons.sentiment_dissatisfied
-                              : Icons.sentiment_neutral,
+                      Icons.balance,
                       size: 16,
-                      color: _getSentimentColor(widget.sentimentScore),
+                      color: _getBiasColor(widget.biasScore),
                     ),
-                    label: Text(_getSentimentLabel(widget.sentimentScore)),
-                    backgroundColor: _getSentimentColor(widget.sentimentScore)
+                    label: Text(_getBiasLabel(widget.biasScore)),
+                    backgroundColor: _getBiasColor(widget.biasScore)
                         .withAlpha((255 * 0.2).round()),
                   ),
 
-                // Intensity chip
-                if (widget.biasIntensity != null)
-                  Chip(
-                    label: Text(
-                      '${(widget.biasIntensity! * 100).round()}% Biased',
+                  // Sentiment chip
+                  if (widget.sentimentScore != null)
+                    Chip(
+                      avatar: Icon(
+                        widget.sentimentScore! > 0
+                            ? Icons.sentiment_satisfied
+                            : widget.sentimentScore! < 0
+                                ? Icons.sentiment_dissatisfied
+                                : Icons.sentiment_neutral,
+                        size: 16,
+                        color: _getSentimentColor(widget.sentimentScore),
+                      ),
+                      label: Text(_getSentimentLabel(widget.sentimentScore)),
+                      backgroundColor:
+                          _getSentimentColor(widget.sentimentScore)
+                              .withAlpha((255 * 0.2).round()),
                     ),
-                    backgroundColor: Colors.grey.shade200,
-                  ),
-              ],
-            ),
 
-            const Divider(height: 32),
-
-            // Content
-            if (widget.content != null && widget.content!.isNotEmpty)
-              Text(
-                widget.content!,
-                style: Theme.of(context)
-                    .textTheme
-                    .bodyLarge
-                    ?.copyWith(height: 1.6),
-              )
-            else
-              Center(
-                child: Column(
-                  children: [
-                    const Icon(
-                      Icons.article_outlined,
-                      size: 64,
-                      color: Colors.grey,
+                  // Intensity chip
+                  if (widget.biasIntensity != null)
+                    Chip(
+                      label: Text(
+                        '${(widget.biasIntensity! * 100).round()}% Biased',
+                      ),
+                      backgroundColor: Colors.grey.shade200,
                     ),
-                    const SizedBox(height: 16),
-                    const Text('Content not yet available.'),
-                    const SizedBox(height: 16),
-                    ElevatedButton.icon(
-                      onPressed: _launchURL,
-                      icon: const Icon(Icons.open_in_browser),
-                      label: const Text('Read on source website'),
-                    ),
-                  ],
-                ),
+                ],
               ),
-          ],
+
+              const Divider(height: 32),
+
+              // Content
+              if (widget.content != null && widget.content!.isNotEmpty)
+                Text(
+                  widget.content!,
+                  style: Theme.of(context)
+                      .textTheme
+                      .bodyLarge
+                      ?.copyWith(height: 1.6),
+                )
+              else
+                Center(
+                  child: Column(
+                    children: [
+                      const Icon(
+                        Icons.article_outlined,
+                        size: 64,
+                        color: Colors.grey,
+                      ),
+                      const SizedBox(height: 16),
+                      const Text('Content not yet available.'),
+                      const SizedBox(height: 16),
+                      ElevatedButton.icon(
+                        onPressed: _launchURL,
+                        icon: const Icon(Icons.open_in_browser),
+                        label: const Text('Read on source website'),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );
