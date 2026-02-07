@@ -10,9 +10,9 @@ class CompareScreen extends StatefulWidget {
   State<CompareScreen> createState() => _CompareScreenState();
 }
 
-class _CompareScreenState extends State<CompareScreen> {
-  final TextEditingController _searchController =
-      TextEditingController();
+class _CompareScreenState extends State<CompareScreen>
+    with SingleTickerProviderStateMixin {
+  final TextEditingController _searchController = TextEditingController();
   final ApiService _apiService = ApiService();
 
   Map<String, dynamic>? _results;
@@ -24,6 +24,7 @@ class _CompareScreenState extends State<CompareScreen> {
     if (topic.isEmpty) {
       setState(() {
         _errorMessage = 'Please enter a topic';
+        _results = null;
       });
       return;
     }
@@ -36,11 +37,13 @@ class _CompareScreenState extends State<CompareScreen> {
 
     try {
       final results = await _apiService.compareArticles(topic);
+      if (!mounted) return;
       setState(() {
         _results = results;
         _isLoading = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _errorMessage = 'Failed to load articles: $e';
         _isLoading = false;
@@ -62,109 +65,158 @@ class _CompareScreenState extends State<CompareScreen> {
     return 'Center';
   }
 
-  Widget _buildArticleSection(
-    String title,
-    List<dynamic>? articles,
-    Color color,
-  ) {
+  Widget _buildArticleList(List<dynamic>? articles) {
     if (articles == null || articles.isEmpty) {
-      return const SizedBox.shrink();
+      return const Center(
+        child: Text(
+          'No articles in this band for this topic.',
+          textAlign: TextAlign.center,
+        ),
+      );
     }
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Container(
-              width: 4,
-              height: 20,
-              color: color,
+    return ListView.builder(
+      padding: const EdgeInsets.only(top: 8, bottom: 24),
+      itemCount: articles.length,
+      itemBuilder: (context, index) {
+        final article = articles[index];
+
+        return Card(
+          margin: const EdgeInsets.only(bottom: 12),
+          child: ListTile(
+            title: Text(
+              article['title'] ?? 'Untitled',
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
             ),
-            const SizedBox(width: 8),
-            Text(
-              title,
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: color,
-              ),
-            ),
-            const SizedBox(width: 8),
-            Chip(
-              label: Text('${articles.length}'),
-              backgroundColor: color.withAlpha((255 * 0.2).round()),
-              labelStyle: TextStyle(color: color, fontSize: 12),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        ...articles.map((article) {
-          return Card(
-            margin: const EdgeInsets.only(bottom: 12),
-            child: ListTile(
-              title: Text(
-                article['title'] ?? 'Untitled',
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-              subtitle: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const SizedBox(height: 4),
-                  Text(article['source'] ?? 'Unknown'),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Chip(
-                        label: Text(
-                          _getBiasLabel(article['bias_score'])
-                        ),
-                        backgroundColor: _getBiasColor(
-                          article['bias_score']
-                        ).withAlpha((255 * 0.2).round()),
-                        labelStyle: TextStyle(
-                          fontSize: 10,
-                          color: _getBiasColor(article['bias_score']),
+            subtitle: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const SizedBox(height: 4),
+                Text(article['source'] ?? 'Unknown'),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Chip(
+                      label: Text(_getBiasLabel(article['bias_score'])),
+                      backgroundColor: _getBiasColor(
+                        (article['bias_score'] as num?)?.toDouble(),
+                      ).withAlpha((255 * 0.2).round()),
+                      labelStyle: TextStyle(
+                        fontSize: 10,
+                        color: _getBiasColor(
+                          (article['bias_score'] as num?)?.toDouble(),
                         ),
                       ),
-                      if (article['bias_intensity'] != null)
-                        const SizedBox(width: 8),
-                      if (article['bias_intensity'] != null)
-                        Text(
-                          '${((article['bias_intensity'] ?? 0) * 100).round()}% biased',
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: Colors.grey,
-                          ),
-                        ),
-                    ],
-                  ),
-                ],
-              ),
-              isThreeLine: true,
-              onTap: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => ArticleDetailScreen(
-                      id: article['id'],
-                      title: article['title'] ?? 'Untitled',
-                      sourceName: article['source'] ?? 'Unknown',
-                      content: article['content'],
-                      url: article['url'] ?? '',
-                      biasScore: article['bias_score'],
-                      biasIntensity: article['bias_intensity'],
-                      sentimentScore: article['sentiment_score'],
                     ),
-                  ),
-                );
-              },
+                    if (article['bias_intensity'] != null) const SizedBox(width: 8),
+                    if (article['bias_intensity'] != null)
+                      Text(
+                        '${(((article['bias_intensity'] ?? 0) as num) * 100).round()}% biased',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey,
+                        ),
+                      ),
+                  ],
+                ),
+              ],
             ),
-          );
-        }),
-        const SizedBox(height: 24),
-      ],
+            isThreeLine: true,
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => ArticleDetailScreen(
+                    id: article['id'],
+                    title: article['title'] ?? 'Untitled',
+                    sourceName: article['source'] ?? 'Unknown',
+                    content: article['content'],
+                    url: article['url'] ?? '',
+                    biasScore:
+                        (article['bias_score'] as num?)?.toDouble(),
+                    biasIntensity:
+                        (article['bias_intensity'] as num?)?.toDouble(),
+                    sentimentScore:
+                        (article['sentiment_score'] as num?)?.toDouble(),
+                  ),
+                ),
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildResultsWithTabs() {
+    if (_results == null) {
+      return const Center(
+        child: Text('Enter a topic above to start comparing.'),
+      );
+    }
+
+    final leftArticles = _results!['left_articles'] as List<dynamic>?;
+    final centreArticles = _results!['center_articles'] as List<dynamic>?;
+    final rightArticles = _results!['right_articles'] as List<dynamic>?;
+
+    return DefaultTabController(
+      length: 3,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Summary header
+          Text(
+            'Results for "${_results!['topic']}"',
+            style: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '${_results!['total_found']} articles found',
+            style: const TextStyle(color: Colors.grey),
+          ),
+          const SizedBox(height: 12),
+
+          // Tabs: Left / Centre / Right
+          TabBar(
+            labelColor: Theme.of(context).colorScheme.primary,
+            unselectedLabelColor: Colors.grey[600],
+            indicatorColor: Theme.of(context).colorScheme.primary,
+            tabs: [
+              Tab(
+                icon: Icon(Icons.arrow_back, color: Colors.blue[700]),
+                text:
+                    'Left (${leftArticles?.length ?? 0})',
+              ),
+              Tab(
+                icon: Icon(Icons.horizontal_rule, color: Colors.purple[400]),
+                text:
+                    'Centre (${centreArticles?.length ?? 0})',
+              ),
+              Tab(
+                icon: Icon(Icons.arrow_forward, color: Colors.red[700]),
+                text:
+                    'Right (${rightArticles?.length ?? 0})',
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+
+          // One tab view per band
+          Expanded(
+            child: TabBarView(
+              children: [
+                _buildArticleList(leftArticles),
+                _buildArticleList(centreArticles),
+                _buildArticleList(rightArticles),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -179,6 +231,7 @@ class _CompareScreenState extends State<CompareScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // Search bar
             TextField(
               controller: _searchController,
               decoration: InputDecoration(
@@ -200,6 +253,8 @@ class _CompareScreenState extends State<CompareScreen> {
               onSubmitted: (_) => _searchTopic(),
             ),
             const SizedBox(height: 12),
+
+            // Compare button
             ElevatedButton.icon(
               onPressed: _isLoading ? null : _searchTopic,
               icon: const Icon(Icons.compare_arrows),
@@ -209,85 +264,31 @@ class _CompareScreenState extends State<CompareScreen> {
               ),
             ),
             const SizedBox(height: 16),
-            if (_isLoading)
-              const Expanded(
-                child: Center(child: CircularProgressIndicator()),
-              )
-            else if (_errorMessage != null)
-              Expanded(
-                child: Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(
-                        Icons.error_outline,
-                        size: 64,
-                        color: Colors.red,
-                      ),
-                      const SizedBox(height: 16),
-                      Text(
-                        _errorMessage!,
-                        textAlign: TextAlign.center,
-                      ),
-                    ],
-                  ),
-                ),
-              )
-            else if (_results != null)
-              Expanded(
-                child: SingleChildScrollView(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Results for "${_results!['topic']}"',
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        '${_results!['total_found']} articles found',
-                        style: const TextStyle(color: Colors.grey),
-                      ),
-                      const SizedBox(height: 24),
-                      _buildArticleSection(
-                        'Left-leaning',
-                        _results!['left_articles'],
-                        Colors.blue[700]!,
-                      ),
-                      _buildArticleSection(
-                        'Center',
-                        _results!['center_articles'],
-                        Colors.purple[400]!,
-                      ),
-                      _buildArticleSection(
-                        'Right-leaning',
-                        _results!['right_articles'],
-                        Colors.red[700]!,
-                      ),
-                    ],
-                  ),
-                ),
-              )
-            else
-              const Expanded(
-                child: Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        Icons.compare_arrows,
-                        size: 64,
-                        color: Colors.grey,
-                      ),
-                      SizedBox(height: 16),
-                      Text('Enter a topic above to start comparing.'),
-                    ],
-                  ),
-                ),
-              ),
+
+            // Results area
+            Expanded(
+              child: _isLoading
+                  ? const Center(child: CircularProgressIndicator())
+                  : _errorMessage != null
+                      ? Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              const Icon(
+                                Icons.error_outline,
+                                size: 64,
+                                color: Colors.red,
+                              ),
+                              const SizedBox(height: 16),
+                              Text(
+                                _errorMessage!,
+                                textAlign: TextAlign.center,
+                              ),
+                            ],
+                          ),
+                        )
+                      : _buildResultsWithTabs(),
+            ),
           ],
         ),
       ),
