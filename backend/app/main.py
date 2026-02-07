@@ -220,24 +220,11 @@ async def track_reading(
             f"article={data.article_id}, time={data.time_spent_seconds}s"
         )
 
-        # Optional: fetch current article metadata for snapshotting
-        # article_meta = (
-        #     supabase.table("articles")
-        #     .select("bias_score, sentiment_score, source")
-        #     .eq("id", data.article_id)
-        #     .single()
-        #     .execute()
-        #     .data
-        # )
-
         payload = {
             "user_id": user_id,
             "article_id": data.article_id,
             "time_spent_seconds": data.time_spent_seconds,
             "opened_at": datetime.utcnow().isoformat(),
-            # "bias_score_snapshot": article_meta.get("bias_score"),
-            # "sentiment_score_snapshot": article_meta.get("sentiment_score"),
-            # "source_snapshot": article_meta.get("source"),
         }
 
         response = supabase.table("reading_history").upsert(
@@ -400,7 +387,7 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# --- Comparison View unchanged ---
+# --- Comparison View (NO LIMIT) ---
 
 
 @app.post("/api/articles/compare", response_model=ComparisonResponse)
@@ -408,8 +395,11 @@ async def compare_articles(request: ComparisonRequest):
     """
     Find articles from different outlets covering same topic.
     Used for Comparison View feature.
+
+    Returns ALL matching articles grouped by bias band.
     """
     try:
+        # Fetch all matching articles (no limit on total)
         response = (
             supabase.table("articles")
             .select("*")
@@ -419,26 +409,26 @@ async def compare_articles(request: ComparisonRequest):
             )
             .not_.is_("bias_score", "null")
             .order("published_at", desc=True)
-            .limit(request.limit * 3)
             .execute()
         )
 
         articles = response.data
 
+        # Group by bias rating (no per-band limit)
         left = [
             a for a in articles
             if a.get("bias_score", 0) < -0.3
-        ][:request.limit]
+        ]
 
         center = [
             a for a in articles
             if -0.3 <= a.get("bias_score", 0) <= 0.3
-        ][:request.limit]
+        ]
 
         right = [
             a for a in articles
             if a.get("bias_score", 0) > 0.3
-        ][:request.limit]
+        ]
 
         return ComparisonResponse(
             topic=request.topic,

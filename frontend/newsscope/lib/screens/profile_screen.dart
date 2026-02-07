@@ -149,7 +149,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
               const SizedBox(height: 24),
               ElevatedButton.icon(
                 onPressed: () {
-                  // TODO: navigate to home/articles tab
                 },
                 icon: const Icon(Icons.article),
                 label: const Text('Browse Articles'),
