@@ -1,6 +1,7 @@
 // lib/screens/home_screen.dart
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+
 import '../services/api_service.dart';
 import '../screens/article_detail_screen.dart';
 import '../screens/compare_screen.dart';
@@ -17,11 +18,23 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   int _currentIndex = 0;
 
-  final List<Widget> _screens = const [
-    HomeFeedTab(),
-    CompareScreen(),
-    ProfileScreen(),
+  // Keep this list mutable so we can recreate ProfileScreen when needed
+  final List<Widget> _screens = [
+    const HomeFeedTab(),
+    const CompareScreen(),
+    const ProfileScreen(),
   ];
+
+  void _onTabTapped(int index) {
+    setState(() {
+      _currentIndex = index;
+
+      // When switching to Profile tab, recreate it to force a fresh load
+      if (index == 2) {
+        _screens[2] = const ProfileScreen();
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -46,11 +59,7 @@ class _HomeScreenState extends State<HomeScreen> {
             label: 'Profile',
           ),
         ],
-        onTap: (index) {
-          setState(() {
-            _currentIndex = index;
-          });
-        },
+        onTap: _onTabTapped,
       ),
     );
   }
@@ -72,6 +81,7 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
   @override
   void initState() {
     super.initState();
+    // Small delay to avoid jank on startup
     Future.delayed(const Duration(milliseconds: 100), () {
       if (mounted) {
         setState(() {
@@ -142,6 +152,7 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Greeting header
           Padding(
             padding: const EdgeInsets.all(16.0),
             child: Column(
@@ -161,6 +172,7 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
               ],
             ),
           ),
+          // Articles list
           Expanded(
             child: FutureBuilder<List<Article>>(
               future: _articlesFuture ?? Future.value([]),
@@ -218,9 +230,7 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                       ? '${date.year}-${date.month}-${date.day}'
                       : 'Unknown Date';
 
-                  if (!groupedArticles.containsKey(key)) {
-                    groupedArticles[key] = [];
-                  }
+                  groupedArticles.putIfAbsent(key, () => []);
                   groupedArticles[key]!.add(article);
                 }
 
@@ -254,7 +264,8 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
 
                       String headerText = dateKey;
                       final now = DateTime.now();
-                      final todayKey = '${now.year}-${now.month}-${now.day}';
+                      final todayKey =
+                          '${now.year}-${now.month}-${now.day}';
                       final yesterday =
                           now.subtract(const Duration(days: 1));
                       final yesterdayKey =
@@ -295,6 +306,7 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                             final content = article.content;
                             String title = article.title;
 
+                            // Fallback: derive a better title from URL if needed
                             if ((title.startsWith('http') ||
                                     title.contains('.html')) &&
                                 url.isNotEmpty) {
@@ -375,14 +387,15 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                                                 vertical: 4,
                                               ),
                                               decoration: BoxDecoration(
-                                                color: _getBiasColor(biasScore)
-                                                    .withAlpha(
-                                                        (255 * 0.15).round()),
+                                                color: _getBiasColor(
+                                                  biasScore,
+                                                ).withAlpha(
+                                                    (255 * 0.15).round()),
                                                 borderRadius:
                                                     BorderRadius.circular(12),
                                                 border: Border.all(
-                                                  color:
-                                                      _getBiasColor(biasScore),
+                                                  color: _getBiasColor(
+                                                      biasScore),
                                                   width: 1,
                                                 ),
                                               ),
@@ -391,8 +404,8 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                                                 style: TextStyle(
                                                   fontSize: 11,
                                                   fontWeight: FontWeight.bold,
-                                                  color:
-                                                      _getBiasColor(biasScore),
+                                                  color: _getBiasColor(
+                                                      biasScore),
                                                 ),
                                               ),
                                             ),
@@ -406,9 +419,9 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                                               ),
                                               decoration: BoxDecoration(
                                                 color: _getSentimentColor(
-                                                        sentimentScore)
-                                                    .withAlpha(
-                                                        (255 * 0.15).round()),
+                                                  sentimentScore,
+                                                ).withAlpha(
+                                                    (255 * 0.15).round()),
                                                 borderRadius:
                                                     BorderRadius.circular(12),
                                                 border: Border.all(
@@ -438,9 +451,8 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                                                       fontSize: 11,
                                                       fontWeight:
                                                           FontWeight.bold,
-                                                      color:
-                                                          _getSentimentColor(
-                                                              sentimentScore),
+                                                      color: _getSentimentColor(
+                                                          sentimentScore),
                                                     ),
                                                   ),
                                                 ],

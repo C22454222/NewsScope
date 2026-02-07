@@ -55,8 +55,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   String _getBiasLabel(double bias) {
-    // Keeps your more granular description while still
-    // aligning with backend bands for Left/Center/Right.
     if (bias < -0.5) return 'Left';
     if (bias < -0.2) return 'Center-Left';
     if (bias < 0.2) return 'Center';
@@ -64,16 +62,23 @@ class _ProfileScreenState extends State<ProfileScreen> {
     return 'Right';
   }
 
-  Color _getSentimentColor(double sentiment) {
-    if (sentiment > 0.3) return Colors.green[600]!;
-    if (sentiment < -0.3) return Colors.orange[600]!;
-    return Colors.grey[600]!;
+  String _getSentimentLabelFromCounts() {
+    final pos = (_profile?['positive_count'] ?? 0) as int;
+    final neu = (_profile?['neutral_count'] ?? 0) as int;
+    final neg = (_profile?['negative_count'] ?? 0) as int;
+
+    if (pos == 0 && neu == 0 && neg == 0) return 'Neutral';
+
+    if (pos >= neu && pos >= neg) return 'Positive';
+    if (neg >= pos && neg >= neu) return 'Negative';
+    return 'Neutral';
   }
 
-  String _getSentimentLabel(double sentiment) {
-    if (sentiment > 0.3) return 'Positive';
-    if (sentiment < -0.3) return 'Negative';
-    return 'Neutral';
+  Color _getSentimentColorFromCounts() {
+    final label = _getSentimentLabelFromCounts();
+    if (label == 'Positive') return Colors.green[600]!;
+    if (label == 'Negative') return Colors.orange[600]!;
+    return Colors.grey[600]!;
   }
 
   @override
@@ -245,9 +250,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Widget _buildStatCards() {
     final bias = ((_profile!['avg_bias'] ?? 0.0) as num).toDouble();
-    final sentiment = ((_profile!['avg_sentiment'] ?? 0.0) as num).toDouble();
     final total = (_profile!['total_articles_read'] ?? 0) as int;
     final minutes = (_profile!['reading_time_total_minutes'] ?? 0) as int;
+
+    final sentimentLabel = _getSentimentLabelFromCounts();
+    final sentimentColor = _getSentimentColorFromCounts();
 
     return Column(
       children: [
@@ -265,8 +272,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
             Expanded(
               child: _buildStatCard(
                 'Avg Sentiment',
-                _getSentimentLabel(sentiment),
-                _getSentimentColor(sentiment),
+                sentimentLabel,
+                sentimentColor,
                 Icons.sentiment_satisfied,
               ),
             ),

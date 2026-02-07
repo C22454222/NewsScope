@@ -136,6 +136,11 @@ class BiasProfile(BaseModel):
     bias_distribution: Dict[str, float]
     reading_time_total_minutes: int
 
+    # Sentiment band counts (derived from sentiment_score)
+    positive_count: int = 0
+    neutral_count: int = 0
+    negative_count: int = 0
+
 
 # Fact-Checking schemas
 class FactCheckBase(BaseModel):
@@ -156,13 +161,18 @@ class FactCheckCreate(FactCheckBase):
     article_id: Optional[UUID] = None
 
 
-class FactCheck(FactCheckBase):
+class FactCheck(BaseModel):
     """
     Full fact-check record as stored in database.
     """
     id: UUID
     article_id: Optional[UUID] = None
     checked_at: Optional[datetime] = None
+    claim: str
+    rating: Optional[str] = None
+    source: Optional[str] = None
+    link: Optional[str] = None
+    politifact_url: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
