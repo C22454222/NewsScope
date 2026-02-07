@@ -11,11 +11,11 @@ def keep_alive():
     try:
         response = requests.get(f"{BACKEND_URL}/health", timeout=10)
         if response.status_code == 200:
-            print("✅ Keep-alive ping successful")
+            print("Keep-alive ping successful")
         else:
-            print(f"❌ Keep-alive failed: {response.status_code}")
+            print(f"Keep-alive failed: {response.status_code}")
     except Exception as e:
-        print(f"❌ Keep-alive error: {e}")
+        print(f"Keep-alive error: {e}")
 
 
 def start_keep_alive():
@@ -24,4 +24,4 @@ def start_keep_alive():
     # Run every 14 minutes (840 seconds)
     scheduler.add_job(keep_alive, 'interval', minutes=14)
     scheduler.start()
-    print("🚀 Keep-alive scheduler started (pinging every 14 minutes)")
+    print("Keep-alive scheduler started (pinging every 14 minutes)")

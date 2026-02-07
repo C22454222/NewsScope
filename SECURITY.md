@@ -1,27 +1,29 @@
 # Security Policy
 
 ## Supported Versions
+
 The following table shows which versions of this project are actively supported with security updates:
 
 | Version | Supported |
 |---------|-----------|
-| 5.1.x   | ✅ |
-| 5.0.x   | ❌ |
-| 4.0.x   | ✅ |
-| < 4.0   | ❌ |
+| 5.1.x   | ✅        |
+| 5.0.x   | ❌        |
+| 4.0.x   | ✅        |
+| < 4.0   | ❌        |
 
 Only supported versions will receive patches for security vulnerabilities. Unsupported versions should be upgraded to a supported release.
 
 ---
 
 ## Reporting a Vulnerability
+
 We take security issues seriously. If you discover a vulnerability, please follow the process below:
 
 1. **Do not open a public issue.**  
    Instead, report the vulnerability privately to the maintainers.
 
 2. **How to report:**  
-   - Send an email to **christophernoblett47@gmail.com** (replace with your project’s security contact).  
+   - Send an email to **[christophernoblett47@gmail.com]** (replace with your project’s security contact).  
    - Include a detailed description of the issue, steps to reproduce, and any potential impact.
 
 3. **Response expectations:**  
@@ -37,5 +39,6 @@ We take security issues seriously. If you discover a vulnerability, please follo
 ---
 
 ## Additional Notes
+
 - Please ensure you are running a **supported version** before reporting issues.  
 - For general bugs or feature requests, use the standard issue tracker instead of the security contact.

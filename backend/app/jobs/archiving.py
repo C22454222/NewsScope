@@ -36,14 +36,14 @@ def archive_old_articles():
         )
         total = count_response.count
     except Exception as e:
-        print(f"❌ Failed to count articles: {e}")
+        print(f"Failed to count articles: {e}")
         return
 
     if total == 0:
-        print("ℹ️ No old articles to archive.")
+        print("ℹNo old articles to archive.")
         return
 
-    print(f"📦 Found {total} articles to archive...")
+    print(f"Found {total} articles to archive...")
 
     archived_count = 0
     archived_ids = []
@@ -56,7 +56,7 @@ def archive_old_articles():
         expected = min(batch_size, total - offset)
 
         print(
-            f"📥 Processing batch {batch_num} "
+            f"Processing batch {batch_num} "
             f"(offset {offset}, expecting ~{expected} articles)..."
         )
 
@@ -72,15 +72,15 @@ def archive_old_articles():
                 .data
             )
         except Exception as e:
-            print(f"❌ Failed to fetch batch {batch_num}: {e}")
+            print(f"Failed to fetch batch {batch_num}: {e}")
             break
 
         # Stop if no more rows
         if not rows:
-            print(f"✅ No more articles at offset {offset}")
+            print(f"No more articles at offset {offset}")
             break
 
-        print(f"📄 Retrieved {len(rows)} articles in batch {batch_num}")
+        print(f"Retrieved {len(rows)} articles in batch {batch_num}")
 
         # Step 3: Archive each article to storage
         for row in rows:
@@ -101,21 +101,21 @@ def archive_old_articles():
                 archived_count += 1
                 archived_ids.append(str(article_id))
             except Exception as e:
-                print(f"❌ Failed to archive article {article_id}: {e}")
+                print(f"Failed to archive article {article_id}: {e}")
 
         offset += len(rows)
 
         # Stop if we've processed all expected articles
         if archived_count >= total:
-            print(f"✅ Reached expected total of {total} articles")
+            print(f"Reached expected total of {total} articles")
             break
 
-    print(f"✅ Archived {archived_count}/{total} articles to storage")
+    print(f"Archived {archived_count}/{total} articles to storage")
 
     # Step 4: Delete archived articles from database
     if archived_ids:
         print(
-            f"🗑️ Deleting {len(archived_ids)} successfully archived "
+            f"Deleting {len(archived_ids)} successfully archived "
             f"articles from database..."
         )
 
@@ -135,16 +135,16 @@ def archive_old_articles():
 
                 deleted_total += len(batch)
                 print(
-                    f"✅ Deleted batch {batch_num}: {len(batch)} "
+                    f"Deleted batch {batch_num}: {len(batch)} "
                     f"articles (total: {deleted_total}/"
                     f"{len(archived_ids)})"
                 )
             except Exception as e:
-                print(f"❌ Failed to delete batch {batch_num}: {e}")
+                print(f"Failed to delete batch {batch_num}: {e}")
 
         print(
-            f"✅ Cleanup complete! "
+            f"Cleanup complete! "
             f"Archived: {archived_count}, Deleted: {deleted_total}"
         )
     else:
-        print("ℹ️ No articles successfully archived, skipping deletion")
+        print("ℹNo articles successfully archived, skipping deletion")
