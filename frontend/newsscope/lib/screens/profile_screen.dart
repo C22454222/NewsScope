@@ -34,11 +34,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
     try {
       final profile = await _apiService.getBiasProfile();
+      if (!mounted) return;
       setState(() {
         _profile = profile;
         _loading = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _errorMessage = 'Failed to load profile: $e';
         _loading = false;
@@ -53,6 +55,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   String _getBiasLabel(double bias) {
+    // Keeps your more granular description while still
+    // aligning with backend bands for Left/Center/Right.
     if (bias < -0.5) return 'Left';
     if (bias < -0.2) return 'Center-Left';
     if (bias < 0.2) return 'Center';
@@ -101,7 +105,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       );
     }
 
-    if (_profile == null || _profile!['total_articles_read'] == 0) {
+    if (_profile == null || (_profile!['total_articles_read'] ?? 0) == 0) {
       return Scaffold(
         appBar: AppBar(
           title: const Text('My Profile'),
@@ -135,11 +139,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   fontSize: 16,
                   color: Colors.grey.shade600,
                 ),
+                textAlign: TextAlign.center,
               ),
               const SizedBox(height: 24),
               ElevatedButton.icon(
                 onPressed: () {
-                  // Navigate to home/articles tab
+                  // TODO: navigate to home/articles tab
                 },
                 icon: const Icon(Icons.article),
                 label: const Text('Browse Articles'),
@@ -239,8 +244,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Widget _buildStatCards() {
-    final bias = (_profile!['avg_bias'] ?? 0.0) as double;
-    final sentiment = (_profile!['avg_sentiment'] ?? 0.0) as double;
+    final bias = ((_profile!['avg_bias'] ?? 0.0) as num).toDouble();
+    final sentiment = ((_profile!['avg_sentiment'] ?? 0.0) as num).toDouble();
     final total = (_profile!['total_articles_read'] ?? 0) as int;
     final minutes = (_profile!['reading_time_total_minutes'] ?? 0) as int;
 
@@ -338,7 +343,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Widget _buildPieChart() {
-    final dist = _profile!['bias_distribution'] as Map<String, dynamic>;
+    final dist =
+        (_profile!['bias_distribution'] ?? <String, dynamic>{}) as Map<String, dynamic>;
     final left = ((dist['left'] ?? 0) as num).toDouble();
     final center = ((dist['center'] ?? 0) as num).toDouble();
     final right = ((dist['right'] ?? 0) as num).toDouble();
