@@ -8,16 +8,31 @@ from newspaper import Article
 
 
 NEWSAPI_KEY = os.getenv("NEWSAPI_KEY")
+
 RSS_FEEDS = [
     s.strip()
     for s in os.getenv("RSS_FEEDS", "").split(",")
     if s.strip()
 ]
 
+# NewsAPI sources to fetch individually (4 requests per cycle)
+NEWSAPI_SOURCES = [
+    "cnn",              # Left, US
+    "fox-news",         # Right, US
+    "reuters",          # Centre, International
+    "associated-press",  # Centre, US
+]
+
+# Map RSS feed URLs to clean source names
 FEED_NAME_MAP = {
     "http://feeds.bbci.co.uk/news/rss.xml": "BBC News",
     "https://www.rte.ie/news/rss/news-headlines.xml": "RTÉ News",
-    "https://www.gbnews.com/feeds/news.rss": "GB News",
+    "https://www.gbnews.com/feeds/politics.rss": "GB News",
+    "https://www.theguardian.com/uk/rss": "The Guardian",
+    "https://www.telegraph.co.uk/news/rss.xml": "The Telegraph",
+    "https://www.independent.co.uk/news/uk/rss": "The Independent",
+    "https://www.npr.org/rss/rss.php?id=1001": "NPR",
+    "https://feeds.skynews.com/feeds/rss/uk.xml": "Sky News",
 }
 
 
@@ -124,47 +139,86 @@ def insert_articles_batch(articles: list[dict]):
 
     if payloads:
         res = supabase.table("articles").insert(payloads).execute().data
-        print(f"Inserted {len(res)} new articles")
+        print(f"✅ Inserted {len(res)} new articles")
         return [r["id"] for r in res]
-    else:
-        print("No new articles to insert")
+
+    print("ℹ️  No new articles to insert")
     return []
 
 
 def fetch_newsapi():
-    """Fetch top headlines from NewsAPI (CNN source)."""
+    """
+    Fetch articles from NewsAPI - one request per source.
+
+    Strategy:
+    - 4 sources × 1 request each = 4 requests/cycle
+    - 24 cycles/day × 4 requests = 96 requests/day (96% of 100 limit)
+    - 50 articles per source × 4 sources × 24 cycles = 4,800 articles/day
+    """
     if not NEWSAPI_KEY:
+        print("⚠️  NEWSAPI_KEY not set, skipping NewsAPI")
         return []
 
     url = "https://newsapi.org/v2/top-headlines"
-    params = {
-        "language": "en",
-        "pageSize": 20,
-        "sources": "cnn",
-    }
     headers = {"X-Api-Key": NEWSAPI_KEY}
-    r = requests.get(url, params=params, headers=headers, timeout=15)
-    r.raise_for_status()
-    data = r.json()
 
     normalized = []
-    for a in data.get("articles", []):
-        n = normalize_article(
-            source_name=(a.get("source") or {}).get("name"),
-            url=a.get("url"),
-            title=a.get("title"),
-            published_at=a.get("publishedAt"),
-        )
-        if n["url"]:
-            normalized.append(n)
 
-    print(f"Fetched {len(normalized)} articles from NewsAPI (CNN)")
+    for source_id in NEWSAPI_SOURCES:
+        try:
+            params = {
+                "sources": source_id,
+                "pageSize": 50,
+                "language": "en",
+            }
+
+            r = requests.get(url, params=params, headers=headers, timeout=15)
+            r.raise_for_status()
+            data = r.json()
+
+            for a in data.get("articles", []):
+                source_name = (a.get("source") or {}).get("name")
+
+                source_map = {
+                    "Fox News": "Fox News",
+                    "CNN": "CNN",
+                    "Reuters": "Reuters",
+                    "Associated Press": "Associated Press",
+                }
+                source_name = source_map.get(source_name, source_name)
+
+                n = normalize_article(
+                    source_name=source_name,
+                    url=a.get("url"),
+                    title=a.get("title"),
+                    published_at=a.get("publishedAt"),
+                )
+                if n["url"]:
+                    normalized.append(n)
+
+            print(f"  ✓ {source_id}: {len(data.get('articles', []))} articles")
+
+        except Exception as exc:
+            print(f"  ✗ {source_id} failed: {exc}")
+            continue
+
+    print(
+        f"📰 NewsAPI total: {len(normalized)} articles "
+        f"from {len(NEWSAPI_SOURCES)} sources"
+    )
     return normalized
 
 
 def fetch_rss():
-    """Fetch articles from configured RSS feeds."""
+    """
+    Fetch articles from configured RSS feeds.
+
+    Strategy:
+    - 8 feeds × 12 articles each = 96 articles/cycle
+    - 24 cycles/day = 2,304 articles/day
+    """
     normalized = []
+
     for feed in RSS_FEEDS:
         try:
             parsed = feedparser.parse(feed)
@@ -172,10 +226,12 @@ def fetch_rss():
             source_name = FEED_NAME_MAP.get(feed)
             if not source_name:
                 source_name = parsed.feed.get("title", "Unknown Source")
+
             if source_name == "News Headlines":
                 source_name = "RTÉ News"
 
-            for e in parsed.entries[:10]:
+            articles_from_feed = 0
+            for e in parsed.entries[:12]:
                 url = getattr(e, "link", None)
                 title = getattr(e, "title", None)
                 published = (
@@ -190,34 +246,60 @@ def fetch_rss():
                 )
                 if n["url"]:
                     normalized.append(n)
+                    articles_from_feed += 1
+
+            print(f"  ✓ {source_name}: {articles_from_feed} articles")
+
         except Exception as exc:
-            print(f"RSS fetch error for {feed}: {exc}")
+            print(f"  ✗ {feed}: {exc}")
             continue
 
-    print(f"📡 Fetched {len(normalized)} articles from RSS")
+    print(
+        f"📡 RSS total: {len(normalized)} articles "
+        f"from {len(RSS_FEEDS)} feeds"
+    )
     return normalized
 
 
 def run_ingestion_cycle():
     """
-    Fetch from NewsAPI (20) + RSS feeds (4 sources × 10 = 40).
-    Total: ~60 articles per run, filtered down to ~20 new ones.
-    Runs every hour at :00.
+    Main ingestion job - runs every hour at :00.
+
+    Daily volume:
+    - NewsAPI: 4,800 articles (4 sources × 50 articles × 24 cycles)
+    - RSS: 2,304 articles (8 feeds × 12 articles × 24 cycles)
+    - Total fetched: 7,104/day
+    - New after dedup (~60%): 4,262/day
+    - 30-day DB: ~128,000 articles (~375 MB, 75% of 500MB limit)
+
+    API usage:
+    - NewsAPI: 96/100 requests per day (96%)
+    - RSS: unlimited
     """
-    print("🔄 Starting ingestion cycle...")
+    print("\n" + "=" * 70)
+    print("🔄 INGESTION CYCLE STARTED")
+    print("=" * 70)
+
     articles = []
 
+    print("\n📰 Fetching from NewsAPI...")
     try:
         articles += fetch_newsapi()
     except Exception as exc:
-        print(f"NewsAPI fetch failed: {exc}")
+        print(f"❌ NewsAPI critical error: {exc}")
 
+    print("\n📡 Fetching from RSS feeds...")
     try:
         articles += fetch_rss()
     except Exception as exc:
-        print(f"RSS fetch failed: {exc}")
+        print(f"❌ RSS critical error: {exc}")
 
+    print("\n💾 Inserting articles...")
     try:
+        print(f"📊 Total fetched: {len(articles)} articles")
         insert_articles_batch(articles)
     except Exception as exc:
-        print(f"Batch insert failed: {exc}")
+        print(f"❌ Batch insert failed: {exc}")
+
+    print("\n✅ Ingestion cycle complete")
+    print("=" * 70 + "\n")
