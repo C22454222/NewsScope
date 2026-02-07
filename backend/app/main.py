@@ -69,7 +69,7 @@ async def lifespan(app: FastAPI):
         trigger=CronTrigger(minute=0),
         id="ingestion",
         max_instances=1,
-        coalesce=True
+        coalesce=True,
     )
 
     scheduler.add_job(
@@ -77,7 +77,7 @@ async def lifespan(app: FastAPI):
         trigger=CronTrigger(minute=15),
         id="analysis",
         max_instances=1,
-        coalesce=True
+        coalesce=True,
     )
 
     scheduler.add_job(
@@ -85,7 +85,7 @@ async def lifespan(app: FastAPI):
         trigger=CronTrigger(hour=3, minute=0),
         id="archiving",
         max_instances=1,
-        coalesce=True
+        coalesce=True,
     )
 
     env = os.getenv("ENVIRONMENT", "production")
@@ -120,7 +120,7 @@ async def _run_startup_jobs():
 app = FastAPI(
     title="NewsScope API",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
 
@@ -132,7 +132,7 @@ def get_current_user(authorization: Optional[str] = Header(None)):
     if not authorization:
         raise HTTPException(
             status_code=401,
-            detail="Not authenticated"
+            detail="Not authenticated",
         )
 
     token = authorization.replace("Bearer ", "")
@@ -147,17 +147,17 @@ def get_current_user(authorization: Optional[str] = Header(None)):
     except auth.InvalidIdTokenError:
         raise HTTPException(
             status_code=401,
-            detail="Invalid authentication token"
+            detail="Invalid authentication token",
         )
     except auth.ExpiredIdTokenError:
         raise HTTPException(
             status_code=401,
-            detail="Authentication token expired"
+            detail="Authentication token expired",
         )
     except Exception as e:
         raise HTTPException(
             status_code=401,
-            detail=f"Authentication failed: {e}"
+            detail=f"Authentication failed: {e}",
         )
 
 
@@ -204,7 +204,7 @@ async def debug_archive(background_tasks: BackgroundTasks):
 @app.post("/api/reading-history")
 async def track_reading(
     data: ReadingHistoryCreate,
-    user_id: str = Depends(get_current_user)
+    user_id: str = Depends(get_current_user),
 ):
     """
     Track article reading time for bias profile calculation.
@@ -242,7 +242,7 @@ async def track_reading(
 
         response = supabase.table("reading_history").upsert(
             payload,
-            on_conflict="user_id,article_id"
+            on_conflict="user_id,article_id",
         ).execute()
 
         print("Reading tracked successfully")
@@ -287,6 +287,9 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
                     "right": 0.0,
                 },
                 reading_time_total_minutes=0,
+                positive_count=0,
+                neutral_count=0,
+                negative_count=0,
             )
 
         # Total reading time across all entries
@@ -339,6 +342,21 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
             else:
                 center += 1
 
+        # Sentiment band counts
+        pos_count = 0
+        neu_count = 0
+        neg_count = 0
+        for h in history:
+            s = h["articles"].get("sentiment_score")
+            if s is None:
+                continue
+            if s > 0.3:
+                pos_count += 1
+            elif s < -0.3:
+                neg_count += 1
+            else:
+                neu_count += 1
+
         # Most read source
         sources = [
             h["articles"]["source"]
@@ -348,15 +366,18 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
         most_common = Counter(sources).most_common(1)
         most_read = most_common[0][0] if most_common else "N/A"
 
-        # Bias distribution in percentages
+        # Bias distribution in percentages (based on reading events)
         total_reads = len(history)
         distribution = {
             "left": round(left / total_reads * 100, 1)
-            if total_reads > 0 else 0.0,
+            if total_reads > 0
+            else 0.0,
             "center": round(center / total_reads * 100, 1)
-            if total_reads > 0 else 0.0,
+            if total_reads > 0
+            else 0.0,
             "right": round(right / total_reads * 100, 1)
-            if total_reads > 0 else 0.0,
+            if total_reads > 0
+            else 0.0,
         }
 
         return BiasProfile(
@@ -369,6 +390,9 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
             most_read_source=most_read,
             bias_distribution=distribution,
             reading_time_total_minutes=round(total_time / 60),
+            positive_count=pos_count,
+            neutral_count=neu_count,
+            negative_count=neg_count,
         )
 
     except Exception as e:
@@ -376,7 +400,7 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# --- Comparison View unchanged (for reference) ---
+# --- Comparison View unchanged ---
 
 
 @app.post("/api/articles/compare", response_model=ComparisonResponse)
@@ -430,7 +454,7 @@ async def compare_articles(request: ComparisonRequest):
 
 @app.get(
     "/api/fact-checks/{article_id}",
-    response_model=List[FactCheck]
+    response_model=List[FactCheck],
 )
 async def get_article_fact_checks(article_id: str):
     try:
