@@ -17,22 +17,31 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   int _currentIndex = 0;
+  int _profileKey = 0; // Key to force ProfileScreen rebuild
 
-  // Keep this list mutable so we can recreate ProfileScreen when needed
-  final List<Widget> _screens = [
-    const HomeFeedTab(),
-    const CompareScreen(),
-    const ProfileScreen(),
-  ];
+  late List<Widget> _screens;
+
+  @override
+  void initState() {
+    super.initState();
+    _screens = [
+      HomeFeedTab(onArticleRead: _handleArticleRead),
+      CompareScreen(onArticleRead: _handleArticleRead),
+      ProfileScreen(key: ValueKey(_profileKey)),
+    ];
+  }
+
+  // Called when an article is read from any screen
+  void _handleArticleRead() {
+    setState(() {
+      _profileKey++; // Increment key to force ProfileScreen rebuild
+      _screens[2] = ProfileScreen(key: ValueKey(_profileKey));
+    });
+  }
 
   void _onTabTapped(int index) {
     setState(() {
       _currentIndex = index;
-
-      // When switching to Profile tab, recreate it to force a fresh load
-      if (index == 2) {
-        _screens[2] = const ProfileScreen();
-      }
     });
   }
 
@@ -66,7 +75,12 @@ class _HomeScreenState extends State<HomeScreen> {
 }
 
 class HomeFeedTab extends StatefulWidget {
-  const HomeFeedTab({super.key});
+  final VoidCallback onArticleRead;
+
+  const HomeFeedTab({
+    super.key,
+    required this.onArticleRead,
+  });
 
   @override
   State<HomeFeedTab> createState() => _HomeFeedTabState();
@@ -81,7 +95,6 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
   @override
   void initState() {
     super.initState();
-    // Small delay to avoid jank on startup
     Future.delayed(const Duration(milliseconds: 100), () {
       if (mounted) {
         setState(() {
@@ -152,7 +165,6 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Greeting header
           Padding(
             padding: const EdgeInsets.all(16.0),
             child: Column(
@@ -172,7 +184,6 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
               ],
             ),
           ),
-          // Articles list
           Expanded(
             child: FutureBuilder<List<Article>>(
               future: _articlesFuture ?? Future.value([]),
@@ -264,10 +275,8 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
 
                       String headerText = dateKey;
                       final now = DateTime.now();
-                      final todayKey =
-                          '${now.year}-${now.month}-${now.day}';
-                      final yesterday =
-                          now.subtract(const Duration(days: 1));
+                      final todayKey = '${now.year}-${now.month}-${now.day}';
+                      final yesterday = now.subtract(const Duration(days: 1));
                       final yesterdayKey =
                           '${yesterday.year}-${yesterday.month}-${yesterday.day}';
 
@@ -306,13 +315,11 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                             final content = article.content;
                             String title = article.title;
 
-                            // Fallback: derive a better title from URL if needed
                             if ((title.startsWith('http') ||
                                     title.contains('.html')) &&
                                 url.isNotEmpty) {
                               final uri = Uri.tryParse(url);
-                              if (uri != null &&
-                                  uri.pathSegments.isNotEmpty) {
+                              if (uri != null && uri.pathSegments.isNotEmpty) {
                                 String pathSegment = uri.pathSegments.last;
                                 title = pathSegment
                                     .replaceAll('.html', '')
@@ -326,8 +333,9 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                               elevation: 2,
                               margin: const EdgeInsets.only(bottom: 12),
                               child: InkWell(
-                                onTap: () {
-                                  Navigator.push(
+                                onTap: () async {
+                                  // Wait for article screen to close
+                                  await Navigator.push(
                                     context,
                                     MaterialPageRoute(
                                       builder: (_) => ArticleDetailScreen(
@@ -342,6 +350,8 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                                       ),
                                     ),
                                   );
+                                  // Trigger profile reload
+                                  widget.onArticleRead();
                                 },
                                 child: Padding(
                                   padding: const EdgeInsets.all(16),

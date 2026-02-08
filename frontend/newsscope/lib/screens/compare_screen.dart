@@ -4,7 +4,12 @@ import '../services/api_service.dart';
 import 'article_detail_screen.dart';
 
 class CompareScreen extends StatefulWidget {
-  const CompareScreen({super.key});
+  final VoidCallback onArticleRead;
+
+  const CompareScreen({
+    super.key,
+    required this.onArticleRead,
+  });
 
   @override
   State<CompareScreen> createState() => _CompareScreenState();
@@ -131,7 +136,7 @@ class _CompareScreenState extends State<CompareScreen>
             ),
             isThreeLine: true,
             onTap: () async {
-              // Wait for article screen to pop, then signal parent to reload profile
+              // Wait for article screen to close
               await Navigator.push(
                 context,
                 MaterialPageRoute(
@@ -149,8 +154,8 @@ class _CompareScreenState extends State<CompareScreen>
                   ),
                 ),
               );
-              // After user returns, we don't need to do anything here;
-              // HomeScreen will handle the profile reload when switching tabs
+              // Trigger profile reload
+              widget.onArticleRead();
             },
           ),
         );
@@ -174,7 +179,6 @@ class _CompareScreenState extends State<CompareScreen>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Summary header
           Text(
             'Results for "${_results!['topic']}"',
             style: const TextStyle(
@@ -188,8 +192,6 @@ class _CompareScreenState extends State<CompareScreen>
             style: const TextStyle(color: Colors.grey),
           ),
           const SizedBox(height: 12),
-
-          // Tabs: Left / Centre / Right
           TabBar(
             labelColor: Theme.of(context).colorScheme.primary,
             unselectedLabelColor: Colors.grey[600],
@@ -210,8 +212,6 @@ class _CompareScreenState extends State<CompareScreen>
             ],
           ),
           const SizedBox(height: 8),
-
-          // One tab view per band
           Expanded(
             child: TabBarView(
               children: [
@@ -237,7 +237,6 @@ class _CompareScreenState extends State<CompareScreen>
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Search bar
             TextField(
               controller: _searchController,
               decoration: InputDecoration(
@@ -259,8 +258,6 @@ class _CompareScreenState extends State<CompareScreen>
               onSubmitted: (_) => _searchTopic(),
             ),
             const SizedBox(height: 12),
-
-            // Compare button
             ElevatedButton.icon(
               onPressed: _isLoading ? null : _searchTopic,
               icon: const Icon(Icons.compare_arrows),
@@ -270,8 +267,6 @@ class _CompareScreenState extends State<CompareScreen>
               ),
             ),
             const SizedBox(height: 16),
-
-            // Results area
             Expanded(
               child: _isLoading
                   ? const Center(child: CircularProgressIndicator())
