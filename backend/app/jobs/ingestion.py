@@ -15,21 +15,21 @@ RSS_FEEDS = [
     if s.strip()
 ]
 
-# NewsAPI sources to fetch individually (4 requests per cycle)
+# NewsAPI sources (4 requests per cycle = 96/day)
 NEWSAPI_SOURCES = [
     "cnn",              # Left, US
     "fox-news",         # Right, US
-    "reuters",          # Centre, International
-    "associated-press",  # Centre, US
+    "reuters",          # Centre, International/Europe
+    "politico",         # Centre-Right, Europe
 ]
 
 # Map RSS feed URLs to clean source names
 FEED_NAME_MAP = {
     "http://feeds.bbci.co.uk/news/rss.xml": "BBC News",
-    "https://www.rte.ie/news/rss/news-headlines.xml": "RTÉ News",
-    "https://www.gbnews.com/feeds/politics.rss": "GB News",
     "https://www.theguardian.com/uk/rss": "The Guardian",
-    "https://www.telegraph.co.uk/news/rss.xml": "The Telegraph",
+    "https://www.gbnews.com/feeds/politics.rss": "GB News",
+    "https://www.rte.ie/news/rss/news-headlines.xml": "RTÉ News",
+    "https://www.irishtimes.com/cmlink/news-1.1319192": "The Irish Times",
     "https://www.independent.co.uk/news/uk/rss": "The Independent",
     "https://www.npr.org/rss/rss.php?id=1001": "NPR",
     "https://feeds.skynews.com/feeds/rss/uk.xml": "Sky News",
@@ -183,7 +183,7 @@ def fetch_newsapi():
                     "Fox News": "Fox News",
                     "CNN": "CNN",
                     "Reuters": "Reuters",
-                    "Associated Press": "Associated Press",
+                    "Politico": "Politico Europe",
                 }
                 source_name = source_map.get(source_name, source_name)
 
@@ -271,6 +271,19 @@ def run_ingestion_cycle():
     - Total fetched: 7,104/day
     - New after dedup (~60%): 4,262/day
     - 30-day DB: ~128,000 articles (~375 MB, 75% of 500MB limit)
+
+    Source distribution (12 total):
+    - US (3): CNN (Left), Fox News (Right), NPR (Centre-Left)
+    - UK (3): BBC News (Centre), The Guardian (Left), GB News (Right)
+    - Ireland (3): RTÉ News (Centre), Irish Times (Centre), Independent (Centre-Left)
+    - Europe (3): Reuters (Centre), Politico Europe (Centre-Right), Sky News (Centre-Right)
+
+    Bias distribution:
+    - Left (2): CNN, The Guardian
+    - Centre-Left (2): NPR, The Independent
+    - Centre (4): BBC, RTÉ, Reuters, Irish Times
+    - Centre-Right (2): Politico Europe, Sky News
+    - Right (2): Fox News, GB News
 
     API usage:
     - NewsAPI: 96/100 requests per day (96%)
