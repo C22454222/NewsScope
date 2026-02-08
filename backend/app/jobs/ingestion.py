@@ -19,13 +19,12 @@ RSS_FEEDS = [
 NEWSAPI_SOURCES = [
     "cnn",              # Left, US
     "fox-news",         # Right, US
-    "reuters",          # Centre, International/Europe
-    "politico",         # Centre-Right, Europe
+    "bbc-news",         # Center, UK (moved from reuters - more reliable)
+    "politico",         # Center-Right, Europe
 ]
 
 # Map RSS feed URLs to clean source names
 FEED_NAME_MAP = {
-    "http://feeds.bbci.co.uk/news/rss.xml": "BBC News",
     "https://www.theguardian.com/uk/rss": "The Guardian",
     "https://www.gbnews.com/feeds/politics.rss": "GB News",
     "https://www.rte.ie/news/rss/news-headlines.xml": "RTÉ News",
@@ -33,6 +32,7 @@ FEED_NAME_MAP = {
     "https://www.independent.co.uk/news/uk/rss": "The Independent",
     "https://www.npr.org/rss/rss.php?id=1001": "NPR",
     "https://feeds.skynews.com/feeds/rss/uk.xml": "Sky News",
+    "https://www.reutersagency.com/feed/": "Reuters",
 }
 
 
@@ -86,12 +86,19 @@ def upsert_source(name: str):
 
 
 def fetch_content(url: str) -> str | None:
-    """Scrape full article content using newspaper3k."""
+    """
+    Scrape full article content using newspaper3k.
+
+    Only returns content if substantial (>200 chars).
+    """
     try:
         art = Article(url)
         art.download()
         art.parse()
-        return art.text
+
+        if art.text and len(art.text) > 200:
+            return art.text
+        return None
     except Exception:
         return None
 
@@ -112,6 +119,9 @@ def insert_articles_batch(articles: list[dict]):
     existing_urls = {e["url"] for e in existing}
 
     payloads = []
+    scrape_success = 0
+    scrape_fail = 0
+
     for article in articles:
         if not article.get("url") or article["url"] in existing_urls:
             continue
@@ -123,6 +133,11 @@ def insert_articles_batch(articles: list[dict]):
             else None
         )
         content = fetch_content(article["url"])
+
+        if content:
+            scrape_success += 1
+        else:
+            scrape_fail += 1
 
         payloads.append(
             {
@@ -140,6 +155,10 @@ def insert_articles_batch(articles: list[dict]):
     if payloads:
         res = supabase.table("articles").insert(payloads).execute().data
         print(f"✅ Inserted {len(res)} new articles")
+        print(
+            f"   📄 Scraped content: {scrape_success} success, "
+            f"{scrape_fail} failed"
+        )
         return [r["id"] for r in res]
 
     print("ℹ️  No new articles to insert")
@@ -182,7 +201,7 @@ def fetch_newsapi():
                 source_map = {
                     "Fox News": "Fox News",
                     "CNN": "CNN",
-                    "Reuters": "Reuters",
+                    "BBC News": "BBC News",
                     "Politico": "Politico Europe",
                 }
                 source_name = source_map.get(source_name, source_name)
@@ -273,21 +292,26 @@ def run_ingestion_cycle():
     - 30-day DB: ~128,000 articles (~375 MB, 75% of 500MB limit)
 
     Source distribution (12 total):
-    - US (3): CNN (Left), Fox News (Right), NPR (Centre-Left)
-    - UK (3): BBC News (Centre), The Guardian (Left), GB News (Right)
-    - Ireland (3): RTÉ News (Centre), Irish Times (Centre), Independent (Centre-Left)
-    - Europe (3): Reuters (Centre), Politico Europe (Centre-Right), Sky News (Centre-Right)
+    - US (3): CNN (Left), Fox News (Right), NPR (Center-Left)
+    - UK (3): BBC News (Center), The Guardian (Left), GB News (Right)
+    - Ireland (3): RTÉ News (Center), Irish Times (Center), Independent (Center-Left)
+    - Europe (3): Reuters (Center), Politico Europe (Center-Right), Sky News (Center-Right)
 
     Bias distribution:
     - Left (2): CNN, The Guardian
-    - Centre-Left (2): NPR, The Independent
-    - Centre (4): BBC, RTÉ, Reuters, Irish Times
-    - Centre-Right (2): Politico Europe, Sky News
+    - Center-Left (2): NPR, The Independent
+    - Center (4): BBC, RTÉ, Reuters, Irish Times
+    - Center-Right (2): Politico Europe, Sky News
     - Right (2): Fox News, GB News
 
     API usage:
     - NewsAPI: 96/100 requests per day (96%)
     - RSS: unlimited
+
+    Web scraping:
+    - Automatically scrapes full content for all articles
+    - Uses newspaper3k library
+    - Only saves content if >200 characters
     """
     print("\n" + "=" * 70)
     print("🔄 INGESTION CYCLE STARTED")
@@ -307,7 +331,7 @@ def run_ingestion_cycle():
     except Exception as exc:
         print(f"❌ RSS critical error: {exc}")
 
-    print("\n💾 Inserting articles...")
+    print("\n💾 Inserting articles (with web scraping)...")
     try:
         print(f"📊 Total fetched: {len(articles)} articles")
         insert_articles_batch(articles)
