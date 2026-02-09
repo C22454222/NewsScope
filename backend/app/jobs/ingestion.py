@@ -1,10 +1,12 @@
 # app/jobs/ingestion.py
 import os
+import re
 import requests
 import feedparser
 from dateutil import parser as dtparser
 from app.db.supabase import supabase
 from newspaper import Article
+from bs4 import BeautifulSoup
 
 
 NEWSAPI_KEY = os.getenv("NEWSAPI_KEY")
@@ -19,7 +21,7 @@ RSS_FEEDS = [
 NEWSAPI_SOURCES = [
     "cnn",              # Left, US
     "fox-news",         # Right, US
-    "bbc-news",         # Center, UK (moved from reuters - more reliable)
+    "bbc-news",         # Center, UK
     "politico",         # Center-Right, Europe
 ]
 
@@ -32,7 +34,7 @@ FEED_NAME_MAP = {
     "https://www.independent.co.uk/news/uk/rss": "The Independent",
     "https://www.npr.org/rss/rss.php?id=1001": "NPR",
     "https://feeds.skynews.com/feeds/rss/uk.xml": "Sky News",
-    "https://www.reutersagency.com/feed/": "Reuters",
+    "https://www.euronews.com/rss": "Euronews",
 }
 
 
@@ -85,22 +87,137 @@ def upsert_source(name: str):
     return inserted[0]["id"]
 
 
-def fetch_content(url: str) -> str | None:
+def clean_text(text: str) -> str:
     """
-    Scrape full article content using newspaper3k.
+    Clean scraped text by removing extra whitespace,
+    common navigation elements, and formatting artifacts.
+    """
+    if not text:
+        return ""
 
-    Only returns content if substantial (>200 chars).
+    # Remove multiple newlines
+    text = re.sub(r'\n\s*\n', '\n\n', text)
+
+    # Remove excessive whitespace
+    text = re.sub(r'[ \t]+', ' ', text)
+
+    # Remove common navigation/UI text patterns
+    patterns_to_remove = [
+        r'Sign up for.*?newsletter',
+        r'Subscribe to.*?',
+        r'Share on (Facebook|Twitter|LinkedIn)',
+        r'Read more:.*?\n',
+        r'Advertisement\n',
+        r'ADVERTISEMENT\n',
+        r'Click here to.*?\n',
+        r'Loading\.\.\.\n',
+    ]
+
+    for pattern in patterns_to_remove:
+        text = re.sub(pattern, '', text, flags=re.IGNORECASE)
+
+    # Trim
+    text = text.strip()
+
+    return text
+
+
+def fetch_content_newspaper(url: str) -> str | None:
+    """
+    Primary scraper using newspaper3k.
+    Best for most news sites.
     """
     try:
-        art = Article(url)
-        art.download()
-        art.parse()
+        article = Article(url)
+        article.download()
+        article.parse()
 
-        if art.text and len(art.text) > 200:
-            return art.text
-        return None
+        if article.text and len(article.text) > 300:
+            cleaned = clean_text(article.text)
+            if len(cleaned) > 300:
+                return cleaned
+
     except Exception:
-        return None
+        pass
+
+    return None
+
+
+def fetch_content_beautifulsoup(url: str) -> str | None:
+    """
+    Fallback scraper using BeautifulSoup.
+    Works for sites where newspaper3k fails.
+    """
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                          'AppleWebKit/537.36 (KHTML, like Gecko) '
+                          'Chrome/91.0.4472.124 Safari/537.36'
+        }
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+
+        soup = BeautifulSoup(response.content, 'html.parser')
+
+        # Remove script, style, nav, footer, ads
+        for element in soup(['script', 'style', 'nav', 'footer',
+                            'aside', 'header', 'iframe', 'noscript']):
+            element.decompose()
+
+        # Try common article containers
+        article_selectors = [
+            'article',
+            '[class*="article-body"]',
+            '[class*="article-content"]',
+            '[class*="story-body"]',
+            '[class*="post-content"]',
+            'main',
+        ]
+
+        content = None
+        for selector in article_selectors:
+            elements = soup.select(selector)
+            if elements:
+                content = elements[0].get_text(separator='\n', strip=True)
+                break
+
+        if not content:
+            # Last resort: get all paragraphs
+            paragraphs = soup.find_all('p')
+            content = '\n\n'.join(
+                p.get_text(strip=True) for p in paragraphs
+            )
+
+        if content and len(content) > 300:
+            cleaned = clean_text(content)
+            if len(cleaned) > 300:
+                return cleaned
+
+    except Exception:
+        pass
+
+    return None
+
+
+def fetch_content(url: str) -> str | None:
+    """
+    Scrape full article content with fallback strategy.
+
+    1. Try newspaper3k (fast, works for most sites)
+    2. Try BeautifulSoup (fallback for blocked/complex sites)
+    3. Return None if both fail
+    """
+    # Try newspaper3k first
+    content = fetch_content_newspaper(url)
+    if content:
+        return content
+
+    # Fallback to BeautifulSoup
+    content = fetch_content_beautifulsoup(url)
+    if content:
+        return content
+
+    return None
 
 
 def insert_articles_batch(articles: list[dict]):
@@ -295,12 +412,12 @@ def run_ingestion_cycle():
     - US (3): CNN (Left), Fox News (Right), NPR (Center-Left)
     - UK (3): BBC News (Center), The Guardian (Left), GB News (Right)
     - Ireland (3): RTÉ News (Center), Irish Times (Center), Independent (Center-Left)
-    - Europe (3): Reuters (Center), Politico Europe (Center-Right), Sky News (Center-Right)
+    - Europe (3): Euronews (Center), Politico Europe (Center-Right), Sky News (Center-Right)
 
     Bias distribution:
     - Left (2): CNN, The Guardian
     - Center-Left (2): NPR, The Independent
-    - Center (4): BBC, RTÉ, Reuters, Irish Times
+    - Center (4): BBC, RTÉ, Euronews, Irish Times
     - Center-Right (2): Politico Europe, Sky News
     - Right (2): Fox News, GB News
 
@@ -309,9 +426,9 @@ def run_ingestion_cycle():
     - RSS: unlimited
 
     Web scraping:
-    - Automatically scrapes full content for all articles
-    - Uses newspaper3k library
-    - Only saves content if >200 characters
+    - 2-tier strategy: newspaper3k → BeautifulSoup fallback
+    - Removes ads, navigation, formatting artifacts
+    - Only saves content >300 chars after cleaning
     """
     print("\n" + "=" * 70)
     print("🔄 INGESTION CYCLE STARTED")
@@ -331,7 +448,7 @@ def run_ingestion_cycle():
     except Exception as exc:
         print(f"❌ RSS critical error: {exc}")
 
-    print("\n💾 Inserting articles (with web scraping)...")
+    print("\n💾 Inserting articles (with enhanced web scraping)...")
     try:
         print(f"📊 Total fetched: {len(articles)} articles")
         insert_articles_batch(articles)
