@@ -24,7 +24,7 @@ python-dateutil==2.9.0.post0
 # Scraping
 newspaper3k
 beautifulsoup4==4.12.3
-lxml
+lxml==5.3.0
 lxml_html_clean
 
 # Testing
