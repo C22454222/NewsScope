@@ -88,6 +88,31 @@ def upsert_source(name: str):
     return inserted[0]["id"]
 
 
+def sanitize_for_postgres(text: str) -> str:
+    """
+    Remove characters that PostgreSQL cannot handle.
+
+    Specifically removes null bytes and other problematic Unicode.
+    """
+    if not text:
+        return ""
+
+    # Remove null bytes
+    text = text.replace('\x00', '')
+    text = text.replace('\u0000', '')
+
+    # Remove other problematic control characters
+    text = re.sub(r'[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f]', '', text)
+
+    # Ensure valid UTF-8
+    text = text.encode('utf-8', errors='ignore').decode(
+        'utf-8',
+        errors='ignore'
+    )
+
+    return text
+
+
 def clean_text(text: str) -> str:
     """
     Clean scraped text by removing extra whitespace,
@@ -95,6 +120,9 @@ def clean_text(text: str) -> str:
     """
     if not text:
         return ""
+
+    # First: sanitize for PostgreSQL
+    text = sanitize_for_postgres(text)
 
     # Remove multiple newlines
     text = re.sub(r'\n\s*\n+', '\n\n', text)
@@ -503,10 +531,15 @@ def insert_articles_batch(articles: list[dict]):
         else:
             scrape_success += 1
 
+        # Sanitize all text fields for PostgreSQL
+        title = sanitize_for_postgres(article.get("title", ""))
+        url = sanitize_for_postgres(article["url"])
+        content = sanitize_for_postgres(content)
+
         payloads.append(
             {
-                "title": article.get("title"),
-                "url": article["url"],
+                "title": title,
+                "url": url,
                 "published_at": article["published_at"],
                 "bias_score": article.get("bias_score"),
                 "sentiment_score": article.get("sentiment_score"),
@@ -681,6 +714,7 @@ def run_ingestion_cycle():
       3. Aggressive text extraction
       4. Retry with exponential backoff
       5. Title-based fallback (NEVER fails)
+    - PostgreSQL sanitization (removes null bytes)
     - 100% success rate guarantee
     """
     print("\n" + "=" * 70)
