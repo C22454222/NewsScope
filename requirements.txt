@@ -11,7 +11,7 @@ requests==2.32.4
 # Environment management
 python-dotenv==1.0.1
 
-# Database
+# Databases
 SQLAlchemy==2.0.43
 psycopg2-binary==2.9.10
 supabase==2.23.2
