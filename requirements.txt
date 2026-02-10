@@ -35,3 +35,10 @@ huggingface_hub
 
 # Authentication
 firebase-admin==6.5.0
+
+# Evaluation dependencies
+datasets==3.2.0
+scikit-learn==1.6.1
+torch==2.6.0
+transformers==4.49.0
+pandas
