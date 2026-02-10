@@ -142,7 +142,7 @@ def evaluate_on_mbib_political_bias(sample_size=None):
 
     mediabiasgroup/mbib-base exposes each task as its own split.
     political_bias is binary (biased/unbiased).
-    
+
     Args:
         sample_size: If provided, only evaluate on first N samples (for testing).
                      Use None to evaluate on full dataset.
