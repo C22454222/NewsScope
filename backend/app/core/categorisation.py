@@ -14,6 +14,7 @@ CATEGORIES = {
     "general",
 }
 
+
 def _match_from_path(path: str) -> str | None:
     path = path.lower()
     if any(seg in path for seg in ["politics", "election", "government"]):
