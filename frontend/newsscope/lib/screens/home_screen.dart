@@ -92,6 +92,20 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
 
   Future<List<Article>>? _articlesFuture;
 
+  // NEW: category filter state
+  String? _selectedCategory; // null = all
+  final List<String> _categories = const [
+    'All',
+    'Politics',
+    'World',
+    'Business',
+    'Tech',
+    'Sport',
+    'Entertainment',
+    'Health',
+    'Science',
+  ];
+
   @override
   void initState() {
     super.initState();
@@ -104,9 +118,18 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
     });
   }
 
+  void _loadArticles() {
+    // Backend expects lowercase category keys (politics, world, etc.)
+    final backendCategory = _selectedCategory == null || _selectedCategory == 'All'
+        ? null
+        : _selectedCategory!.toLowerCase();
+
+    _articlesFuture = _apiService.getArticles(category: backendCategory);
+  }
+
   Future<void> _refreshArticles() async {
     setState(() {
-      _articlesFuture = _apiService.getArticles();
+      _loadArticles();
     });
   }
 
@@ -144,6 +167,19 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
     return 'Neutral';
   }
 
+  String _formatDate(DateTime? dt) {
+    if (dt == null) return 'Unknown date';
+    return '${dt.day.toString().padLeft(2, '0')}/'
+        '${dt.month.toString().padLeft(2, '0')}/'
+        '${dt.year}';
+  }
+
+  String _formatCategory(String? category) {
+    if (category == null || category.isEmpty) return 'General';
+    final c = category.toLowerCase();
+    return c[0].toUpperCase() + c.substring(1);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -165,6 +201,7 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Greeting
           Padding(
             padding: const EdgeInsets.all(16.0),
             child: Column(
@@ -184,6 +221,34 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
               ],
             ),
           ),
+
+          // NEW: Horizontal category selector
+          SizedBox(
+            height: 40,
+            child: ListView.separated(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              scrollDirection: Axis.horizontal,
+              itemCount: _categories.length,
+              separatorBuilder: (_, _) => const SizedBox(width: 8),
+              itemBuilder: (context, index) {
+                final label = _categories[index];
+                final isSelected = (_selectedCategory ?? 'All') == label;
+                return ChoiceChip(
+                  label: Text(label),
+                  selected: isSelected,
+                  onSelected: (_) {
+                    setState(() {
+                      _selectedCategory = label == 'All' ? null : label;
+                      _loadArticles();
+                    });
+                  },
+                );
+              },
+            ),
+          ),
+
+          const SizedBox(height: 8),
+
           Expanded(
             child: FutureBuilder<List<Article>>(
               future: _articlesFuture ?? Future.value([]),
@@ -235,6 +300,7 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                 final articles = snapshot.data!;
                 final groupedArticles = <String, List<Article>>{};
 
+                // Group by date (YYYY-M-D) so every article has a date section
                 for (var article in articles) {
                   final date = article.publishedAt;
                   final key = date != null
@@ -275,8 +341,10 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
 
                       String headerText = dateKey;
                       final now = DateTime.now();
-                      final todayKey = '${now.year}-${now.month}-${now.day}';
-                      final yesterday = now.subtract(const Duration(days: 1));
+                      final todayKey =
+                          '${now.year}-${now.month}-${now.day}';
+                      final yesterday =
+                          now.subtract(const Duration(days: 1));
                       final yesterdayKey =
                           '${yesterday.year}-${yesterday.month}-${yesterday.day}';
 
@@ -313,13 +381,16 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                             final sourceName = article.source;
                             final url = article.url;
                             final content = article.content;
+                            final publishedAt = article.publishedAt;
+                            final category = article.category; // NEW
                             String title = article.title;
 
                             if ((title.startsWith('http') ||
                                     title.contains('.html')) &&
                                 url.isNotEmpty) {
                               final uri = Uri.tryParse(url);
-                              if (uri != null && uri.pathSegments.isNotEmpty) {
+                              if (uri != null &&
+                                  uri.pathSegments.isNotEmpty) {
                                 String pathSegment = uri.pathSegments.last;
                                 title = pathSegment
                                     .replaceAll('.html', '')
@@ -359,6 +430,7 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                                     crossAxisAlignment:
                                         CrossAxisAlignment.start,
                                     children: [
+                                      // Title
                                       Text(
                                         title,
                                         style: const TextStyle(
@@ -368,7 +440,9 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                                         maxLines: 2,
                                         overflow: TextOverflow.ellipsis,
                                       ),
-                                      const SizedBox(height: 8),
+                                      const SizedBox(height: 6),
+
+                                      // Source + date + category
                                       Row(
                                         children: [
                                           Icon(
@@ -377,16 +451,44 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                                             color: Colors.grey[600],
                                           ),
                                           const SizedBox(width: 4),
+                                          Expanded(
+                                            child: Text(
+                                              sourceName,
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                color: Colors.grey[700],
+                                              ),
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 8),
                                           Text(
-                                            sourceName,
+                                            _formatDate(publishedAt),
                                             style: TextStyle(
-                                              fontSize: 12,
-                                              color: Colors.grey[700],
+                                              fontSize: 11,
+                                              color: Colors.grey[600],
                                             ),
                                           ),
                                         ],
                                       ),
+
+                                      const SizedBox(height: 4),
+
+                                      // Category label
+                                      if (category != null &&
+                                          category.isNotEmpty)
+                                        Text(
+                                          _formatCategory(category),
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w500,
+                                            color: Colors.blueGrey[700],
+                                          ),
+                                        ),
+
                                       const SizedBox(height: 12),
+
+                                      // Bias / Sentiment chips
                                       Row(
                                         children: [
                                           if (biasScore != null)
@@ -461,8 +563,9 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                                                       fontSize: 11,
                                                       fontWeight:
                                                           FontWeight.bold,
-                                                      color: _getSentimentColor(
-                                                          sentimentScore),
+                                                      color:
+                                                          _getSentimentColor(
+                                                              sentimentScore),
                                                     ),
                                                   ),
                                                 ],

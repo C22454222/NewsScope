@@ -8,15 +8,18 @@ from dateutil import parser as dtparser
 from app.db.supabase import supabase
 from newspaper import Article
 from bs4 import BeautifulSoup
+from urllib.parse import urlparse  # NEW
 
 
 NEWSAPI_KEY = os.getenv("NEWSAPI_KEY")
+
 
 RSS_FEEDS = [
     s.strip()
     for s in os.getenv("RSS_FEEDS", "").split(",")
     if s.strip()
 ]
+
 
 # NewsAPI sources (4 requests per cycle = 96/day)
 NEWSAPI_SOURCES = [
@@ -25,6 +28,7 @@ NEWSAPI_SOURCES = [
     "bbc-news",         # Center, UK
     "politico",         # Center-Right, Europe
 ]
+
 
 # Map RSS feed URLs to clean source names
 FEED_NAME_MAP = {
@@ -38,6 +42,67 @@ FEED_NAME_MAP = {
     "https://www.euronews.com/rss": "Euronews",
 }
 
+
+# ---------- Category inference helpers ----------
+
+def _match_category_from_path(path: str) -> str | None:
+    path = path.lower()
+    if any(seg in path for seg in ["politics", "election", "government", "parliament"]):
+        return "politics"
+    if any(seg in path for seg in ["world", "international", "europe", "africa", "asia", "middle-east"]):
+        return "world"
+    if any(seg in path for seg in ["business", "markets", "economy", "finance", "money"]):
+        return "business"
+    if any(seg in path for seg in ["tech", "technology", "digital", "gadgets"]):
+        return "tech"
+    if any(seg in path for seg in ["sport", "sports", "football", "rugby", "tennis", "golf"]):
+        return "sport"
+    if any(seg in path for seg in ["entertainment", "culture", "arts", "tv", "film", "showbiz"]):
+        return "entertainment"
+    if any(seg in path for seg in ["health", "wellbeing", "covid", "medicine", "nhs"]):
+        return "health"
+    if "science" in path or "environment" in path or "climate" in path:
+        return "science"
+    return None
+
+
+def _match_category_from_title(title: str) -> str | None:
+    t = title.lower()
+    if any(w in t for w in ["election", "minister", "government", "parliament", "brexit"]):
+        return "politics"
+    if any(w in t for w in ["stocks", "market", "economy", "inflation", "company", "bank"]):
+        return "business"
+    if any(w in t for w in ["ai", "app", "software", "startup", "technology", "cyber"]):
+        return "tech"
+    if any(w in t for w in ["wins", "defeat", "draw", "tournament", "league", "cup"]):
+        return "sport"
+    if any(w in t for w in ["film", "movie", "series", "album", "festival", "celebrity"]):
+        return "entertainment"
+    if any(w in t for w in ["covid", "hospital", "vaccine", "health", "mental health"]):
+        return "health"
+    if any(w in t for w in ["climate", "planet", "environment", "research", "study", "scientists"]):
+        return "science"
+    return None
+
+
+def infer_category(url: str | None, title: str | None) -> str:
+    category: str | None = None
+
+    if url:
+        try:
+            parsed = urlparse(url)
+            path = parsed.path or ""
+            category = _match_category_from_path(path)
+        except Exception:
+            category = None
+
+    if not category and title:
+        category = _match_category_from_title(title)
+
+    return category or "general"
+
+
+# ---------- Existing normalisation / helpers ----------
 
 def normalize_article(
     *,
@@ -56,6 +121,8 @@ def normalize_article(
         except Exception:
             ts = None
 
+    category = infer_category(url, title)
+
     return {
         "title": title,
         "url": url,
@@ -63,6 +130,7 @@ def normalize_article(
         "bias_score": bias_score,
         "sentiment_score": sentiment_score,
         "source": source_name,
+        "category": category,  # NEW
     }
 
 
@@ -546,6 +614,7 @@ def insert_articles_batch(articles: list[dict]):
                 "source_id": source_id,
                 "content": content,
                 "source": source_name_val,
+                "category": article.get("category"),  # NEW
             }
         )
 
@@ -721,7 +790,7 @@ def run_ingestion_cycle():
     print("🔄 INGESTION CYCLE STARTED")
     print("=" * 70)
 
-    articles = []
+    articles: list[dict] = []
 
     print("\n📰 Fetching from NewsAPI...")
     try:
