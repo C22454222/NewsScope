@@ -16,11 +16,10 @@ class ApiService {
         debugPrint('No Firebase user logged in');
         return null;
       }
-      
+
       final token = await user.getIdToken();
       debugPrint('Got Firebase token for user: ${user.uid}');
       return token;
-      
     } catch (e) {
       debugPrint('Error getting Firebase token: $e');
       return null;
@@ -28,10 +27,16 @@ class ApiService {
   }
 
   /// Fetches the list of processed articles from the backend
-  Future<List<Article>> getArticles() async {
+  Future<List<Article>> getArticles({String? category}) async {
     try {
+      final uri = Uri.parse(
+        category == null || category.isEmpty
+            ? '$baseUrl/articles'
+            : '$baseUrl/articles?category=$category',
+      );
+
       final response = await http.get(
-        Uri.parse('$baseUrl/articles'),
+        uri,
         headers: {'Content-Type': 'application/json'},
       );
 
@@ -52,10 +57,10 @@ class ApiService {
     required int timeSpentSeconds,
   }) async {
     final token = await _getToken();
-    
+
     debugPrint('Token: ${token?.substring(0, 20)}...');
     debugPrint('Tracking: $articleId for ${timeSpentSeconds}s');
-    
+
     if (token == null) {
       debugPrint('No auth token available for tracking');
       return;
@@ -76,7 +81,7 @@ class ApiService {
 
       debugPrint('Response: ${response.statusCode}');
       debugPrint('Body: ${response.body}');
-      
+
       if (response.statusCode != 200) {
         debugPrint('Failed to track reading: ${response.statusCode}');
       } else {
@@ -97,7 +102,7 @@ class ApiService {
 
     try {
       debugPrint('Fetching bias profile...');
-      
+
       final response = await http.get(
         Uri.parse('$baseUrl/api/bias-profile'),
         headers: {
@@ -106,7 +111,7 @@ class ApiService {
       );
 
       debugPrint('📡 Profile response: ${response.statusCode}');
-      
+
       if (response.statusCode == 200) {
         final profile = jsonDecode(response.body);
         debugPrint('Profile loaded: ${profile['total_articles_read']} articles');

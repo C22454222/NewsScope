@@ -10,6 +10,7 @@ class Article {
   final double? sentimentScore;
   final double? biasScore;
   final double? biasIntensity;
+  final String? category; // NEW
 
   Article({
     required this.id,
@@ -21,6 +22,7 @@ class Article {
     this.sentimentScore,
     this.biasScore,
     this.biasIntensity,
+    this.category, // NEW
   });
 
   factory Article.fromJson(Map<String, dynamic> json) {
@@ -51,6 +53,9 @@ class Article {
       biasIntensity: json['bias_intensity'] != null
           ? (json['bias_intensity'] as num).toDouble()
           : null,
+
+      // NEW: category from backend JSON
+      category: json['category']?.toString(),
     );
   }
 
@@ -65,6 +70,7 @@ class Article {
       'sentiment_score': sentimentScore,
       'bias_score': biasScore,
       'bias_intensity': biasIntensity,
+      'category': category, // NEW
     };
   }
 }
