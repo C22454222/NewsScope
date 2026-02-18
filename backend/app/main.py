@@ -35,7 +35,7 @@ from app.db.supabase import supabase
 
 
 def init_firebase():
-    """Initialize Firebase Admin SDK."""
+    """Initialize Firebase Admin SDK. Action"""
     try:
         service_account = os.getenv("FIREBASE_SERVICE_ACCOUNT")
         if service_account:
