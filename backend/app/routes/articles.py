@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from app.db.supabase import supabase
-from app.schemas import ArticleCreate  # Fixed import path
+from app.schemas import ArticleCreate
 
 router = APIRouter()
 
@@ -39,7 +39,7 @@ def get_articles(category: Optional[str] = Query(default=None)):
 @router.get("/compare")
 def get_comparison_articles(
     topic: Optional[str] = Query(default=None),
-    category: Optional[str] = Query(default=None)
+    category: Optional[str] = Query(default=None),
 ):
     """
     Get articles for comparison view, optionally filtered by topic AND category.
@@ -77,7 +77,9 @@ def add_article(article: ArticleCreate):
             "sentiment_score": article.sentiment_score,
             "published_at": article.published_at,
             "content": article.content,
-            "category": getattr(article, 'category', None),  # ← ENABLED
+            "category": getattr(article, "category", None),
+            "general_bias": getattr(article, "general_bias", None),         # ← NEW
+            "general_bias_score": getattr(article, "general_bias_score", None),  # ← NEW
         })
         .execute()
     )

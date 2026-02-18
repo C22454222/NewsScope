@@ -1,4 +1,3 @@
-# app/main.py
 import os
 import json
 import asyncio
@@ -12,11 +11,10 @@ from fastapi import (
     BackgroundTasks,
     HTTPException,
     Header,
-    Depends
+    Depends,
 )
 from fastapi.responses import FileResponse
 
-# Firebase Admin imports
 import firebase_admin
 from firebase_admin import credentials, auth
 
@@ -31,7 +29,7 @@ from app.schemas import (
     BiasProfile,
     FactCheck,
     ComparisonRequest,
-    ComparisonResponse
+    ComparisonResponse,
 )
 from app.db.supabase import supabase
 
@@ -49,7 +47,7 @@ def init_firebase():
         firebase_admin.initialize_app(cred)
         print("Firebase Admin initialized")
     except ValueError:
-        print("ℹFirebase Admin already initialized")
+        print("ℹ Firebase Admin already initialized")
     except Exception as e:
         print(f"Firebase Admin init failed: {e}")
 
@@ -140,7 +138,6 @@ def get_current_user(authorization: Optional[str] = Header(None)):
     try:
         decoded_token = auth.verify_id_token(token)
         user_id = decoded_token["uid"]
-
         print(f"Authenticated user: {user_id}")
         return user_id
 
@@ -198,9 +195,6 @@ async def debug_archive(background_tasks: BackgroundTasks):
     return {"status": "archiving triggered in background"}
 
 
-# --- Reading history & bias profile ---
-
-
 @app.post("/api/reading-history")
 async def track_reading(
     data: ReadingHistoryCreate,
@@ -209,10 +203,6 @@ async def track_reading(
     """
     Track article reading time for bias profile calculation.
     Called when user exits article view in mobile app.
-
-    NOTE: For archiving-safe stats you can snapshot bias/sentiment/source
-    into reading_history here. This keeps the profile stable even after
-    articles are archived.
     """
     try:
         print(
@@ -279,10 +269,8 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
                 negative_count=0,
             )
 
-        # Total reading time across all entries
         total_time = sum(h["time_spent_seconds"] for h in history)
 
-        # Weighted average bias (only when bias_score is not None)
         bias_terms = [
             (h["time_spent_seconds"], h["articles"].get("bias_score"))
             for h in history
@@ -298,7 +286,6 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
         else:
             weighted_bias = 0.0
 
-        # Weighted average sentiment (only when sentiment_score is not None)
         sent_terms = [
             (h["time_spent_seconds"], h["articles"].get("sentiment_score"))
             for h in history
@@ -314,7 +301,6 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
         else:
             weighted_sentiment = 0.0
 
-        # Count by political leaning (handle 0.0 correctly)
         left = 0
         center = 0
         right = 0
@@ -329,7 +315,6 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
             else:
                 center += 1
 
-        # Sentiment band counts
         pos_count = 0
         neu_count = 0
         neg_count = 0
@@ -344,16 +329,14 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
             else:
                 neu_count += 1
 
-        # Most read source
-        sources = [
+        sources_list = [
             h["articles"]["source"]
             for h in history
             if h["articles"].get("source")
         ]
-        most_common = Counter(sources).most_common(1)
+        most_common = Counter(sources_list).most_common(1)
         most_read = most_common[0][0] if most_common else "N/A"
 
-        # Bias distribution in percentages (based on reading events)
         total_reads = len(history)
         distribution = {
             "left": round(left / total_reads * 100, 1)
@@ -387,19 +370,15 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# --- Comparison View (NO LIMIT) ---
-
-
+# NOTE: POST /api/articles/compare kept for backwards compatibility
+# Flutter app now calls GET /articles/compare (via articles router)
 @app.post("/api/articles/compare", response_model=ComparisonResponse)
 async def compare_articles(request: ComparisonRequest):
     """
     Find articles from different outlets covering same topic.
-    Used for Comparison View feature.
-
-    Returns ALL matching articles grouped by bias band.
+    Groups by political bias band (Left / Center / Right).
     """
     try:
-        # Fetch all matching articles (no limit on total)
         response = (
             supabase.table("articles")
             .select("*")
@@ -412,30 +391,21 @@ async def compare_articles(request: ComparisonRequest):
             .execute()
         )
 
-        articles = response.data
+        articles_data = response.data
 
-        # Group by bias rating (no per-band limit)
-        left = [
-            a for a in articles
-            if a.get("bias_score", 0) < -0.3
-        ]
-
+        left = [a for a in articles_data if a.get("bias_score", 0) < -0.3]
         center = [
-            a for a in articles
+            a for a in articles_data
             if -0.3 <= a.get("bias_score", 0) <= 0.3
         ]
-
-        right = [
-            a for a in articles
-            if a.get("bias_score", 0) > 0.3
-        ]
+        right = [a for a in articles_data if a.get("bias_score", 0) > 0.3]
 
         return ComparisonResponse(
             topic=request.topic,
             left_articles=left,
             center_articles=center,
             right_articles=right,
-            total_found=len(articles),
+            total_found=len(articles_data),
         )
 
     except Exception as e:

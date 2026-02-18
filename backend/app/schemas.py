@@ -19,7 +19,9 @@ class ArticleBase(BaseModel):
     bias_intensity: Optional[float] = None
     sentiment_score: Optional[float] = None
     published_at: Optional[datetime] = None
-    category: Optional[str] = None  # ← ADDED
+    category: Optional[str] = None
+    general_bias: Optional[str] = None         # 'BIASED' or 'UNBIASED' ← NEW
+    general_bias_score: Optional[float] = None  # confidence 0.0–1.0    ← NEW
 
 
 class ArticleCreate(ArticleBase):

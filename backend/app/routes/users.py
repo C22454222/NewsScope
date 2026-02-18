@@ -1,9 +1,7 @@
-# app/routes/users.py
 from fastapi import APIRouter
 from app.db.supabase import supabase
-from backend.app.schemas import UserCreate
+from app.schemas import UserCreate  # ← FIXED (was backend.app.schemas)
 
-# Router for user profile and preference management
 router = APIRouter()
 
 
@@ -37,8 +35,6 @@ def get_user(uid: str):
 def update_preferences(uid: str, prefs: dict):
     """
     Update the user's saved preferences (e.g. region, topics).
-
-    prefs is expected to be a JSON-serializable dictionary.
     """
     response = (
         supabase.table("users")
@@ -53,9 +49,6 @@ def update_preferences(uid: str, prefs: dict):
 def update_bias_profile(uid: str, profile: dict):
     """
     Update the user's computed bias profile.
-
-    The profile object stores aggregated reading patterns that
-    will be visualised in the mobile app.
     """
     response = (
         supabase.table("users")
