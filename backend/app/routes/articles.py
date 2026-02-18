@@ -7,6 +7,7 @@ from app.schemas import ArticleCreate  # Fixed import path
 
 router = APIRouter()
 
+
 @router.get("")
 def get_articles(category: Optional[str] = Query(default=None)):
     """
@@ -34,6 +35,7 @@ def get_articles(category: Optional[str] = Query(default=None)):
     )
     return response.data
 
+
 @router.get("/compare")
 def get_comparison_articles(
     topic: Optional[str] = Query(default=None),
@@ -43,18 +45,18 @@ def get_comparison_articles(
     Get articles for comparison view, optionally filtered by topic AND category.
     """
     cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
-    
+
     query = (
         supabase.table("articles")
         .select("*")
         .gte("published_at", cutoff)
     )
-    
+
     if topic:
         query = query.ilike("content", f"%{topic}%")
     if category:
         query = query.eq("category", category)
-    
+
     response = (
         query
         .order("published_at", desc=True)
@@ -62,6 +64,7 @@ def get_comparison_articles(
         .execute()
     )
     return response.data
+
 
 @router.post("")
 def add_article(article: ArticleCreate):
