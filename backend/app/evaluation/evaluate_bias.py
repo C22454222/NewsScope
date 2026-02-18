@@ -1,4 +1,3 @@
-import pandas as pd
 import torch
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from sklearn.metrics import (
