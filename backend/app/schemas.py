@@ -1,11 +1,9 @@
-# app/schemas.py
 from pydantic import BaseModel, ConfigDict, Field
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 from uuid import UUID
 
 
-# Article schemas used by the API and data layer
 class ArticleBase(BaseModel):
     """
     Shared fields for article records.
@@ -21,6 +19,7 @@ class ArticleBase(BaseModel):
     bias_intensity: Optional[float] = None
     sentiment_score: Optional[float] = None
     published_at: Optional[datetime] = None
+    category: Optional[str] = None  # ← ADDED
 
 
 class ArticleCreate(ArticleBase):
@@ -41,7 +40,6 @@ class Article(ArticleBase):
     model_config = ConfigDict(from_attributes=True)
 
 
-# User schemas for profile and preference management
 class UserBase(BaseModel):
     """
     Base user fields shared by create and read operations.
@@ -71,7 +69,6 @@ class User(UserBase):
     model_config = ConfigDict(from_attributes=True)
 
 
-# Source schemas representing news outlets (BBC, CNN, etc.)
 class SourceBase(BaseModel):
     """
     Base fields for a news source record.
@@ -90,7 +87,6 @@ class Source(SourceBase):
     model_config = ConfigDict(from_attributes=True)
 
 
-# Reading History schemas for bias profile tracking
 class ReadingHistoryBase(BaseModel):
     """
     Base fields for reading history tracking.
@@ -120,7 +116,6 @@ class ReadingHistory(ReadingHistoryBase):
     model_config = ConfigDict(from_attributes=True)
 
 
-# Bias Profile schemas for user reading patterns
 class BiasProfile(BaseModel):
     """
     Calculated bias profile based on user's reading history.
@@ -136,13 +131,11 @@ class BiasProfile(BaseModel):
     bias_distribution: Dict[str, float]
     reading_time_total_minutes: int
 
-    # Sentiment band counts (derived from sentiment_score)
     positive_count: int = 0
     neutral_count: int = 0
     negative_count: int = 0
 
 
-# Fact-Checking schemas
 class FactCheckBase(BaseModel):
     """
     Base fields for fact-check records.
@@ -177,7 +170,6 @@ class FactCheck(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-# Comparison View schemas
 class ComparisonRequest(BaseModel):
     """
     Request payload for comparing coverage across outlets.
@@ -197,7 +189,6 @@ class ComparisonResponse(BaseModel):
     total_found: int
 
 
-# User Fact-Check View tracking
 class UserFactCheckView(BaseModel):
     """
     Track when users view fact-checks.
