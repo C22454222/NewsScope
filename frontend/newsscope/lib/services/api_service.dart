@@ -1,4 +1,3 @@
-// lib/services/api_service.dart
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
@@ -8,7 +7,6 @@ import '../models/article.dart';
 class ApiService {
   static const String baseUrl = 'https://newsscope-backend.onrender.com';
 
-  /// Get authentication token from Firebase
   Future<String?> _getToken() async {
     try {
       final user = FirebaseAuth.instance.currentUser;
@@ -16,7 +14,6 @@ class ApiService {
         debugPrint('No Firebase user logged in');
         return null;
       }
-
       final token = await user.getIdToken();
       debugPrint('Got Firebase token for user: ${user.uid}');
       return token;
@@ -26,7 +23,6 @@ class ApiService {
     }
   }
 
-  /// Fetches the list of processed articles from the backend
   Future<List<Article>> getArticles({String? category}) async {
     try {
       final uri = Uri.parse(
@@ -51,7 +47,6 @@ class ApiService {
     }
   }
 
-  /// Track reading time for bias profile
   Future<void> trackReading({
     required String articleId,
     required int timeSpentSeconds,
@@ -92,7 +87,6 @@ class ApiService {
     }
   }
 
-  /// Get user's bias profile
   Future<Map<String, dynamic>?> getBiasProfile() async {
     final token = await _getToken();
     if (token == null) {
@@ -126,19 +120,23 @@ class ApiService {
     return null;
   }
 
-  /// Compare articles by topic
   Future<Map<String, dynamic>?> compareArticles(
     String topic, {
     int limit = 5,
+    String? category,
   }) async {
     try {
-      final response = await http.post(
-        Uri.parse('$baseUrl/api/articles/compare'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
+      final uri = Uri.parse('$baseUrl/articles/compare').replace(
+        queryParameters: {
           'topic': topic,
-          'limit': limit,
-        }),
+          'limit': limit.toString(),
+          if (category != null && category != 'All') 'category': category,
+        },
+      );
+
+      final response = await http.get(
+        uri,
+        headers: {'Content-Type': 'application/json'},
       );
 
       if (response.statusCode == 200) {
@@ -152,7 +150,6 @@ class ApiService {
     return null;
   }
 
-  /// Get fact-checks for an article
   Future<List<dynamic>?> getFactChecks(String articleId) async {
     try {
       final response = await http.get(

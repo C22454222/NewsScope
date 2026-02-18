@@ -1,4 +1,3 @@
-// lib/screens/compare_screen.dart
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
 import 'article_detail_screen.dart';
@@ -24,6 +23,19 @@ class _CompareScreenState extends State<CompareScreen>
   bool _isLoading = false;
   String? _errorMessage;
 
+  String? _selectedCategory;
+  final List<String> _categories = const [
+    'All',
+    'Politics',
+    'World',
+    'Business',
+    'Tech',
+    'Sport',
+    'Entertainment',
+    'Health',
+    'Science',
+  ];
+
   Future<void> _searchTopic() async {
     final topic = _searchController.text.trim();
     if (topic.isEmpty) {
@@ -41,7 +53,10 @@ class _CompareScreenState extends State<CompareScreen>
     });
 
     try {
-      final results = await _apiService.compareArticles(topic);
+      final results = await _apiService.compareArticles(
+        topic,
+        category: _selectedCategory == 'All' ? null : _selectedCategory,
+      );
       if (!mounted) return;
       setState(() {
         _results = results;
@@ -53,6 +68,15 @@ class _CompareScreenState extends State<CompareScreen>
         _errorMessage = 'Failed to load articles: $e';
         _isLoading = false;
       });
+    }
+  }
+
+  void _onCategorySelected(String label) {
+    setState(() {
+      _selectedCategory = label == 'All' ? null : label;
+    });
+    if (_searchController.text.isNotEmpty) {
+      _searchTopic();
     }
   }
 
@@ -68,6 +92,12 @@ class _CompareScreenState extends State<CompareScreen>
     if (score < -0.3) return 'Left';
     if (score > 0.3) return 'Right';
     return 'Center';
+  }
+
+  String _formatCategory(String? category) {
+    if (category == null || category.isEmpty) return 'General';
+    final c = category.toLowerCase();
+    return c[0].toUpperCase() + c.substring(1);
   }
 
   Widget _buildArticleList(List<dynamic>? articles) {
@@ -103,13 +133,26 @@ class _CompareScreenState extends State<CompareScreen>
               children: [
                 const SizedBox(height: 4),
                 Text(article['source'] ?? 'Unknown'),
+                if (article['category'] != null) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    _formatCategory(article['category']),
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                      color: Colors.blueGrey[700],
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 8),
                 Row(
                   children: [
                     Chip(
-                      label: Text(_getBiasLabel(
-                        (article['bias_score'] as num?)?.toDouble(),
-                      )),
+                      label: Text(
+                        _getBiasLabel(
+                          (article['bias_score'] as num?)?.toDouble(),
+                        ),
+                      ),
                       backgroundColor: _getBiasColor(
                         (article['bias_score'] as num?)?.toDouble(),
                       ).withAlpha((255 * 0.2).round()),
@@ -136,7 +179,6 @@ class _CompareScreenState extends State<CompareScreen>
             ),
             isThreeLine: true,
             onTap: () async {
-              // Wait for article screen to close
               await Navigator.push(
                 context,
                 MaterialPageRoute(
@@ -154,7 +196,6 @@ class _CompareScreenState extends State<CompareScreen>
                   ),
                 ),
               );
-              // Trigger profile reload
               widget.onArticleRead();
             },
           ),
@@ -174,55 +215,83 @@ class _CompareScreenState extends State<CompareScreen>
     final centreArticles = _results!['center_articles'] as List<dynamic>?;
     final rightArticles = _results!['right_articles'] as List<dynamic>?;
 
-    return DefaultTabController(
-      length: 3,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Results for "${_results!['topic']}"',
-            style: const TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
-            ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Results for "${_results!['topic']}"',
+          style: const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
           ),
-          const SizedBox(height: 4),
-          Text(
-            '${_results!['total_found']} articles found',
-            style: const TextStyle(color: Colors.grey),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          '${_results!['total_found']} articles found',
+          style: const TextStyle(color: Colors.grey),
+        ),
+        const SizedBox(height: 12),
+        SizedBox(
+          height: 40,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            padding: EdgeInsets.zero,
+            itemCount: _categories.length,
+            separatorBuilder: (_, _) => const SizedBox(width: 8),
+            itemBuilder: (context, index) {
+              final label = _categories[index];
+              final isSelected = (_selectedCategory ?? 'All') == label;
+              return ChoiceChip(
+                label: Text(label),
+                selected: isSelected,
+                onSelected: (_) => _onCategorySelected(label),
+              );
+            },
           ),
-          const SizedBox(height: 12),
-          TabBar(
-            labelColor: Theme.of(context).colorScheme.primary,
-            unselectedLabelColor: Colors.grey[600],
-            indicatorColor: Theme.of(context).colorScheme.primary,
-            tabs: [
-              Tab(
-                icon: Icon(Icons.arrow_back, color: Colors.blue[700]),
-                text: 'Left (${leftArticles?.length ?? 0})',
-              ),
-              Tab(
-                icon: Icon(Icons.horizontal_rule, color: Colors.purple[400]),
-                text: 'Centre (${centreArticles?.length ?? 0})',
-              ),
-              Tab(
-                icon: Icon(Icons.arrow_forward, color: Colors.red[700]),
-                text: 'Right (${rightArticles?.length ?? 0})',
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Expanded(
-            child: TabBarView(
+        ),
+        const SizedBox(height: 16),
+        Expanded(
+          child: DefaultTabController(
+            length: 3,
+            child: Column(
               children: [
-                _buildArticleList(leftArticles),
-                _buildArticleList(centreArticles),
-                _buildArticleList(rightArticles),
+                TabBar(
+                  labelColor: Theme.of(context).colorScheme.primary,
+                  unselectedLabelColor: Colors.grey[600],
+                  indicatorColor: Theme.of(context).colorScheme.primary,
+                  tabs: [
+                    Tab(
+                      icon: Icon(Icons.arrow_back, color: Colors.blue[700]),
+                      text: 'Left (${leftArticles?.length ?? 0})',
+                    ),
+                    Tab(
+                      icon: Icon(
+                        Icons.horizontal_rule,
+                        color: Colors.purple[400],
+                      ),
+                      text: 'Centre (${centreArticles?.length ?? 0})',
+                    ),
+                    Tab(
+                      icon: Icon(Icons.arrow_forward, color: Colors.red[700]),
+                      text: 'Right (${rightArticles?.length ?? 0})',
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Expanded(
+                  child: TabBarView(
+                    children: [
+                      _buildArticleList(leftArticles),
+                      _buildArticleList(centreArticles),
+                      _buildArticleList(rightArticles),
+                    ],
+                  ),
+                ),
               ],
             ),
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
