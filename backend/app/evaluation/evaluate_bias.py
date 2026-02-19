@@ -32,7 +32,7 @@ class BiasEvaluator:
         self.model.eval()
 
     def predict(self, text: str) -> dict:
-        """Get bias prediction for a single text."""
+        """Get prediction for a single text."""
         if not text or text.strip() == "":
             return {
                 "label": 0,
@@ -50,8 +50,7 @@ class BiasEvaluator:
 
         with torch.no_grad():
             outputs = self.model(**inputs)
-            logits = outputs.logits
-            probs = torch.softmax(logits, dim=-1)
+            probs = torch.softmax(outputs.logits, dim=-1)
 
         pred_label = torch.argmax(probs, dim=-1).item()
         confidence = probs[0][pred_label].item()
@@ -63,16 +62,17 @@ class BiasEvaluator:
         }
 
     def predict_batch(self, texts: list[str]) -> list[int]:
-        """Predict bias for texts using true batching (much faster)."""
-        predictions = []
-
-        valid_texts = [t for t in texts if t and t.strip()]
-        if len(valid_texts) < len(texts):
-            print(f"Skipped {len(texts) - len(valid_texts)} empty texts")
+        """Predict labels using true batching."""
+        valid_texts = [t for t in texts if t and str(t).strip()]
+        skipped = len(texts) - len(valid_texts)
+        if skipped:
+            print(f"Skipped {skipped} empty texts")
 
         print(f"Predicting on {len(valid_texts)} valid samples...")
 
+        predictions = []
         batch_size = 32
+
         for i in range(0, len(valid_texts), batch_size):
             batch = valid_texts[i:i + batch_size]
 
@@ -86,8 +86,7 @@ class BiasEvaluator:
 
             with torch.no_grad():
                 outputs = self.model(**inputs)
-                logits = outputs.logits
-                probs = torch.softmax(logits, dim=-1)
+                probs = torch.softmax(outputs.logits, dim=-1)
 
             batch_preds = torch.argmax(probs, dim=-1).cpu().tolist()
             predictions.extend(batch_preds)
@@ -104,12 +103,26 @@ class BiasEvaluator:
         self,
         texts: list[str],
         true_labels: list[int],
+        remap_fn=None,
     ) -> dict:
         """
         Evaluate model on a dataset.
+
+        Args:
+            texts: Input texts.
+            true_labels: Ground truth integer labels.
+            remap_fn: Optional function to remap raw predictions
+                      (e.g. 3-class → binary, or invert labels).
+
         Returns metrics: accuracy, precision, recall, F1.
         """
-        predictions = self.predict_batch(texts)
+        raw_predictions = self.predict_batch(texts)
+
+        predictions = (
+            [remap_fn(p) for p in raw_predictions]
+            if remap_fn
+            else raw_predictions
+        )
 
         accuracy = accuracy_score(true_labels, predictions)
         precision, recall, f1, _ = precision_recall_fscore_support(
@@ -138,111 +151,19 @@ class BiasEvaluator:
         }
 
 
-# ─────────────────────────────────────────────
-# 1. POLITICAL BIAS — Article-Bias-Prediction
-#    (Baly et al.) — matches AllSides BERT L/C/R
-# ─────────────────────────────────────────────
-def evaluate_political_bias_allsides(sample_size=None):
+def _load_mbib_split(
+    split_name: str,
+    sample_size: int | None,
+    seed: int = 42,
+):
     """
-    Evaluate political bias model on Article-Bias-Prediction dataset.
+    Load, shuffle, and filter an MBIB split.
 
-    This is the correct benchmark for premsa/political-bias-prediction-allsides-BERT
-    as both use AllSides Left/Center/Right labels (Baly et al., 2020).
-
-    Label mapping:
-      0 = Left, 1 = Center, 2 = Right
+    IMPORTANT: shuffle before selecting to avoid class imbalance —
+    MBIB splits are ordered by class so the first N samples are
+    all one label without shuffling.
     """
-    print(
-        "Loading Article-Bias-Prediction dataset "
-        "(Baly et al., 2020)..."
-    )
-
-    dataset = load_dataset(
-        "newsmediabias/political-bias-allsides-labelled",
-        split="test"
-    )
-
-    if sample_size is not None:
-        print(f"⚠️  TESTING MODE: Using only first {sample_size} samples")
-        dataset = dataset.select(range(min(sample_size, len(dataset))))
-
-    # Map label strings to integers if needed
-    label_map = {"left": 0, "center": 1, "right": 2}
-
-    texts = []
-    true_labels = []
-
-    for row in dataset:
-        text = row.get("content") or row.get("text") or row.get("title") or ""
-        raw_label = row.get("label") or row.get("bias_label") or ""
-
-        if not text.strip():
-            continue
-
-        # Handle both string and integer labels
-        if isinstance(raw_label, str):
-            mapped = label_map.get(raw_label.lower())
-            if mapped is None:
-                continue
-            true_labels.append(mapped)
-        elif isinstance(raw_label, int):
-            true_labels.append(raw_label)
-        else:
-            continue
-
-        texts.append(text)
-
-    print(f"Loaded {len(texts)} valid samples")
-
-    evaluator = BiasEvaluator(BIAS_MODEL)
-
-    print(
-        f"\n📊 Evaluating political bias model on "
-        f"Article-Bias-Prediction ({len(texts)} samples)..."
-    )
-    results = evaluator.evaluate_on_dataset(texts, true_labels)
-
-    print("\n" + "=" * 60)
-    print("POLITICAL BIAS EVALUATION (Article-Bias-Prediction / AllSides)")
-    print("Model: premsa/political-bias-prediction-allsides-BERT")
-    print("=" * 60)
-    print(f"Accuracy:  {results['accuracy']:.4f}")
-    print(f"Precision: {results['precision']:.4f}")
-    print(f"Recall:    {results['recall']:.4f}")
-    print(f"F1 Score:  {results['f1_score']:.4f}")
-    print(f"Samples:   {results['num_samples']}")
-    print("\nConfusion Matrix (rows=true, cols=pred):")
-    print("         Left  Center  Right")
-    for i, row in enumerate(results["confusion_matrix"]):
-        label = ["Left  ", "Center", "Right "][i]
-        print(f"  {label}  {row}")
-
-    return results
-
-
-# ─────────────────────────────────────────────
-# 2. GENERAL/LEXICAL BIAS — MBIB
-#    valurank/distilroberta-bias → binary
-#    BIASED(1) / UNBIASED(0)
-# ─────────────────────────────────────────────
-def evaluate_general_bias_mbib(sample_size=None):
-    """
-    Evaluate general bias model on MBIB political_bias split.
-
-    Uses valurank/distilroberta-bias which is trained on
-    binary bias detection (biased vs unbiased) — matching
-    MBIB's binary label scheme (Wessel et al., 2023).
-
-    Label mapping:
-      0 = Unbiased, 1 = Biased
-    """
-    print(
-        "Loading MBIB (mediabiasgroup/mbib-base) "
-        "political_bias split..."
-    )
-
     dataset = load_dataset("mediabiasgroup/mbib-base")
-    split_name = "political_bias"
 
     if split_name not in dataset:
         raise ValueError(
@@ -252,26 +173,81 @@ def evaluate_general_bias_mbib(sample_size=None):
 
     ds = dataset[split_name]
 
+    # ← CRITICAL: shuffle first so sample is class-balanced
+    ds = ds.shuffle(seed=seed)
+
     if sample_size is not None:
-        print(f"⚠️  TESTING MODE: Using only first {sample_size} samples")
+        print(f"⚠️  TESTING MODE: Using first {sample_size} shuffled samples")
         ds = ds.select(range(min(sample_size, len(ds))))
 
-    texts = ds["text"]
-    true_labels = ds["label"]
+    pairs = [
+        (t, l)
+        for t, l in zip(ds["text"], ds["label"])
+        if t and str(t).strip()
+    ]
 
-    print(f"Loaded {len(texts)} samples from MBIB '{split_name}'")
+    if not pairs:
+        raise ValueError(f"No valid samples found in split '{split_name}'")
 
-    evaluator = BiasEvaluator(GENERAL_BIAS_MODEL)
+    texts, labels = zip(*pairs)
+
+    # Log class distribution so we can verify balance
+    from collections import Counter
+    dist = Counter(labels)
+    print(f"Class distribution: {dict(dist)}")
+
+    return list(texts), list(labels)
+
+
+# ─────────────────────────────────────────────
+# 1. POLITICAL BIAS
+#    premsa AllSides BERT (3-class L/C/R)
+#    → MBIB political_bias (binary)
+#
+#    Remap per Wessel et al. (2023):
+#      Left(0)   → Biased(1)
+#      Center(1) → Unbiased(0)
+#      Right(2)  → Biased(1)
+# ─────────────────────────────────────────────
+def evaluate_political_bias(sample_size=None):
+    """
+    Evaluate AllSides BERT on MBIB political_bias split.
+
+    The model outputs Left/Center/Right (3-class).
+    MBIB uses binary biased/unbiased labels.
+    Per Wessel et al. (2023): Left and Right collapse to
+    Biased(1), Center collapses to Unbiased(0).
+    """
+    print(
+        "\nLoading MBIB political_bias split "
+        "(Wessel et al., 2023)..."
+    )
+
+    texts, true_labels = _load_mbib_split("political_bias", sample_size)
+    print(f"Loaded {len(texts)} valid samples")
+
+    # Left(0) → 1, Center(1) → 0, Right(2) → 1
+    def political_to_binary(pred: int) -> int:
+        return 0 if pred == 1 else 1
+
+    evaluator = BiasEvaluator(BIAS_MODEL)
 
     print(
-        f"\n📊 Evaluating general bias model on "
-        f"MBIB ({split_name}, {len(texts)} samples)..."
+        f"\n📊 Evaluating political bias model on MBIB "
+        f"political_bias ({len(texts)} samples)..."
     )
-    results = evaluator.evaluate_on_dataset(texts, true_labels)
+
+    results = evaluator.evaluate_on_dataset(
+        texts,
+        true_labels,
+        remap_fn=political_to_binary,
+    )
 
     print("\n" + "=" * 60)
-    print("GENERAL BIAS EVALUATION (MBIB - political_bias split)")
-    print("Model: valurank/distilroberta-bias")
+    print("POLITICAL BIAS EVALUATION (MBIB - political_bias split)")
+    print("Model: premsa/political-bias-prediction-allsides-BERT")
+    print("Remap: Left+Right → Biased(1), Center → Unbiased(0)")
+    print("Per Wessel et al. (2023) binary collapse")
     print("=" * 60)
     print(f"Accuracy:  {results['accuracy']:.4f}")
     print(f"Precision: {results['precision']:.4f}")
@@ -281,67 +257,85 @@ def evaluate_general_bias_mbib(sample_size=None):
     print("\nConfusion Matrix (rows=true, cols=pred):")
     print("             Unbiased  Biased")
     for i, row in enumerate(results["confusion_matrix"]):
-        label = ["Unbiased", "Biased  "][i]
+        label = ["Unbiased", "Biased  "][i] if i < 2 else str(i)
         print(f"  {label}    {row}")
 
     return results
 
 
 # ─────────────────────────────────────────────
-# 3. KEPT: MBIB with political BERT (for
-#    dissertation comparison — shows mismatch)
+# 2. GENERAL / LEXICAL BIAS
+#    valurank/distilroberta-bias (binary)
+#    → MBIB linguistic_bias split
+#
+#    ⚠️ Model label scheme is INVERTED vs MBIB:
+#      Model 0 = BIASED   → MBIB 1
+#      Model 1 = NEUTRAL  → MBIB 0
+#    Remap: 1 - pred
 # ─────────────────────────────────────────────
-def evaluate_on_mbib_political_bias(sample_size=None):
+def evaluate_general_bias(sample_size=None):
     """
-    Evaluate political BERT on MBIB binary split.
+    Evaluate distilroberta-bias on MBIB linguistic_bias split.
 
-    NOTE: This is intentionally a cross-benchmark test.
-    The AllSides BERT is a 3-class model (L/C/R) tested
-    on a binary benchmark — expected lower performance.
-    Kept for dissertation comparison analysis.
+    linguistic_bias tests loaded language, word choice, and
+    framing — the exact phenomena distilroberta-bias was trained
+    to detect (Spinde et al., 2023; Wessel et al., 2023).
+
+    NOTE: Model outputs 0=BIASED, 1=NEUTRAL (inverted vs MBIB).
+    Remap applied: MBIB_label = 1 - model_pred.
     """
     print(
-        "Loading MBIB political_bias split "
-        "(cross-benchmark test for dissertation)..."
+        "\nLoading MBIB linguistic_bias split "
+        "(Wessel et al., 2023)..."
     )
 
-    dataset = load_dataset("mediabiasgroup/mbib-base")
-    split_name = "political_bias"
-    ds = dataset[split_name]
+    texts, true_labels = _load_mbib_split("linguistic_bias", sample_size)
+    print(f"Loaded {len(texts)} valid samples")
 
-    if sample_size is not None:
-        print(f"⚠️  TESTING MODE: Using only first {sample_size} samples")
-        ds = ds.select(range(min(sample_size, len(ds))))
+    # ← INVERT: model uses 0=BIASED, 1=NEUTRAL
+    #   MBIB uses 0=Unbiased, 1=Biased
+    def invert_label(pred: int) -> int:
+        return 1 - pred
 
-    texts = ds["text"]
-    true_labels = ds["label"]
-
-    evaluator = BiasEvaluator(BIAS_MODEL)
+    evaluator = BiasEvaluator(GENERAL_BIAS_MODEL)
 
     print(
-        f"\n📊 Cross-benchmark: political BERT on "
-        f"MBIB ({len(texts)} samples)..."
+        f"\n📊 Evaluating general bias model on MBIB "
+        f"linguistic_bias ({len(texts)} samples)..."
     )
-    results = evaluator.evaluate_on_dataset(texts, true_labels)
+
+    results = evaluator.evaluate_on_dataset(
+        texts,
+        true_labels,
+        remap_fn=invert_label,
+    )
 
     print("\n" + "=" * 60)
-    print("CROSS-BENCHMARK: AllSides BERT on MBIB (label mismatch)")
-    print("Model: premsa/political-bias-prediction-allsides-BERT")
-    print("NOTE: 3-class model vs 2-class benchmark — lower F1 expected")
+    print("GENERAL BIAS EVALUATION (MBIB - linguistic_bias split)")
+    print("Model: valurank/distilroberta-bias")
+    print("Remap: model 0=BIASED→1, model 1=NEUTRAL→0")
     print("=" * 60)
     print(f"Accuracy:  {results['accuracy']:.4f}")
+    print(f"Precision: {results['precision']:.4f}")
+    print(f"Recall:    {results['recall']:.4f}")
     print(f"F1 Score:  {results['f1_score']:.4f}")
     print(f"Samples:   {results['num_samples']}")
+    print("\nConfusion Matrix (rows=true, cols=pred):")
+    print("             Unbiased  Biased")
+    for i, row in enumerate(results["confusion_matrix"]):
+        label = ["Unbiased", "Biased  "][i] if i < 2 else str(i)
+        print(f"  {label}    {row}")
 
     return results
 
 
 # ─────────────────────────────────────────────
-# 4. SENTIMENT — SST-2
+# 3. SENTIMENT — SST-2 GLUE
 # ─────────────────────────────────────────────
 def evaluate_sentiment():
     """Evaluate sentiment model on SST-2 benchmark."""
-    print("Loading SST-2 sentiment dataset (GLUE)...")
+    print("\nLoading SST-2 sentiment dataset (GLUE)...")
+
     dataset = load_dataset("glue", "sst2", split="validation")
 
     tokenizer = AutoTokenizer.from_pretrained(SENTIMENT_MODEL)
@@ -372,8 +366,9 @@ def evaluate_sentiment():
         ).to(device)
 
         with torch.no_grad():
-            outputs = model(**inputs)
-            pred = torch.argmax(outputs.logits, dim=-1).item()
+            pred = torch.argmax(
+                model(**inputs).logits, dim=-1
+            ).item()
             predictions.append(pred)
 
     accuracy = accuracy_score(true_labels, predictions)
@@ -384,7 +379,8 @@ def evaluate_sentiment():
     )
 
     print("\n" + "=" * 60)
-    print("SENTIMENT ANALYSIS EVALUATION RESULTS (SST-2)")
+    print("SENTIMENT EVALUATION (SST-2 GLUE benchmark)")
+    print("Model: distilbert-base-uncased-finetuned-sst-2-english")
     print("=" * 60)
     print(f"Accuracy:  {accuracy:.4f}")
     print(f"Precision: {precision:.4f}")
@@ -401,10 +397,10 @@ def evaluate_sentiment():
 
 
 # ─────────────────────────────────────────────
-# 5. QUICK SANITY CHECK
+# SANITY CHECKS
 # ─────────────────────────────────────────────
-def quick_test():
-    """Quick sanity check — political bias model 3/3."""
+def quick_test_political():
+    """Sanity check — political bias model."""
     print("\n🧪 QUICK SANITY CHECK (Political Bias)\n")
 
     evaluator = BiasEvaluator(BIAS_MODEL)
@@ -414,19 +410,35 @@ def quick_test():
         "The economy shows steady growth across sectors.",
         "Trump's conservative policies protect our values.",
     ]
-    test_labels = [0, 1, 2]
 
-    results = evaluator.evaluate_on_dataset(test_texts, test_labels)
+    print("Inspecting raw predictions (0=Left, 1=Center, 2=Right):")
+    for text in test_texts:
+        pred = evaluator.predict(text)
+        label = (
+            ["Left", "Center", "Right"][pred["label"]]
+            if pred["label"] < 3 else str(pred["label"])
+        )
+        print(
+            f"  {label} ({pred['confidence']:.2f}) | {text[:55]}..."
+        )
+
+    # Raw 3-class: 0=Left, 1=Center, 2=Right
+    results = evaluator.evaluate_on_dataset(test_texts, [0, 1, 2])
 
     print("\n" + "=" * 60)
-    print("QUICK TEST RESULTS")
+    print("QUICK TEST (Political Bias — 3-class)")
     print("=" * 60)
-    print(f"✅ Accuracy:  {results['accuracy']:.2f} (3/3)")
-    print("Political bias model is loading correctly!")
+    print(f"Accuracy: {results['accuracy']:.2f}")
+    print("(Note: model predicts RIGHT for Left text — known model quirk)")
 
 
-def quick_test_general_bias():
-    """Quick sanity check — general bias model."""
+def quick_test_general():
+    """
+    Sanity check — general bias model.
+
+    Model label scheme: 0=BIASED, 1=NEUTRAL (inverted vs MBIB).
+    After remap (1-pred): biased text → 1, neutral text → 0.
+    """
     print("\n🧪 QUICK SANITY CHECK (General Bias)\n")
 
     evaluator = BiasEvaluator(GENERAL_BIAS_MODEL)
@@ -436,50 +448,60 @@ def quick_test_general_bias():
         "The government released its annual budget report today.",
         "Corrupt politicians are stealing from hardworking taxpayers.",
     ]
-    # 1=biased, 0=unbiased, 1=biased
+
+    print("Raw model outputs (0=BIASED, 1=NEUTRAL in this model):")
+    for text in test_texts:
+        pred = evaluator.predict(text)
+        raw = "BIASED" if pred["label"] == 0 else "NEUTRAL"
+        remapped = "Biased(1)" if pred["label"] == 0 else "Unbiased(0)"
+        print(
+            f"  Raw:{raw} → Remapped:{remapped} | "
+            f"Conf:{pred['confidence']:.2f} | {text[:50]}..."
+        )
+
+    # MBIB convention after remap: biased=1, unbiased=0
+    # Texts 1 and 3 are biased → 1, text 2 is neutral → 0
     test_labels = [1, 0, 1]
 
-    results = evaluator.evaluate_on_dataset(test_texts, test_labels)
+    results = evaluator.evaluate_on_dataset(
+        test_texts,
+        test_labels,
+        remap_fn=lambda p: 1 - p,  # invert model labels
+    )
 
     print("\n" + "=" * 60)
-    print("QUICK TEST RESULTS (General Bias)")
+    print("QUICK TEST (General Bias — after remap)")
     print("=" * 60)
-    print(f"✅ Accuracy:  {results['accuracy']:.2f}")
-    print("General bias model is loading correctly!")
+    print(f"Accuracy: {results['accuracy']:.2f}")
 
 
 # ─────────────────────────────────────────────
-# MAIN — run full evaluation suite
+# MAIN
 # ─────────────────────────────────────────────
 if __name__ == "__main__":
     print("\n" + "=" * 70)
     print("🧪 NEWSCOPE MODEL EVALUATION SUITE")
     print("=" * 70)
 
-    # ── Sanity checks ──────────────────────────
-    quick_test()
-    quick_test_general_bias()
+    # ── Sanity checks ──────────────────────────────────────────────
+    quick_test_political()
+    quick_test_general()
 
-    # ── 1. Sentiment (SST-2) ───────────────────
-    print("\n\n1️⃣  SENTIMENT ANALYSIS (SST-2)")
+    # ── 1. Sentiment (SST-2) ───────────────────────────────────────
+    print("\n\n1️⃣  SENTIMENT ANALYSIS (SST-2 GLUE)")
     print("-" * 70)
     evaluate_sentiment()
 
-    # ── 2. Political bias (AllSides dataset) ───
-    # Change sample_size to None for full run in final report
-    print("\n\n2️⃣  POLITICAL BIAS (Article-Bias-Prediction / AllSides)")
+    # ── 2. Political bias (MBIB political_bias — shuffled + remap) ─
+    # Set sample_size=None for full dissertation run
+    print("\n\n2️⃣  POLITICAL BIAS (MBIB political_bias — shuffled)")
     print("-" * 70)
-    evaluate_political_bias_allsides(sample_size=1000)
+    evaluate_political_bias(sample_size=1000)
 
-    # ── 3. General bias (MBIB) ─────────────────
-    print("\n\n3️⃣  GENERAL BIAS (MBIB - political_bias split)")
+    # ── 3. General bias (MBIB linguistic_bias — shuffled + invert) ─
+    print("\n\n3️⃣  GENERAL BIAS (MBIB linguistic_bias — shuffled)")
     print("-" * 70)
-    evaluate_general_bias_mbib(sample_size=1000)
-
-    # ── 4. Cross-benchmark (dissertation note) ─
-    print("\n\n4️⃣  CROSS-BENCHMARK (AllSides BERT on MBIB — for comparison)")
-    print("-" * 70)
-    evaluate_on_mbib_political_bias(sample_size=500)
+    evaluate_general_bias(sample_size=1000)
 
     print("\n" + "=" * 70)
     print("✅ EVALUATION COMPLETE")
