@@ -1,4 +1,3 @@
-# app/jobs/ingestion.py
 import os
 import re
 import time
@@ -8,11 +7,12 @@ from dateutil import parser as dtparser
 from app.db.supabase import supabase
 from newspaper import Article
 from bs4 import BeautifulSoup
-from urllib.parse import urlparse  # NEW
+
+# Single source of truth — no duplicate logic here
+from app.core.categorisation import infer_category
 
 
 NEWSAPI_KEY = os.getenv("NEWSAPI_KEY")
-
 
 RSS_FEEDS = [
     s.strip()
@@ -20,15 +20,13 @@ RSS_FEEDS = [
     if s.strip()
 ]
 
-
 # NewsAPI sources (4 requests per cycle = 96/day)
 NEWSAPI_SOURCES = [
-    "cnn",              # Left, US
-    "fox-news",         # Right, US
-    "bbc-news",         # Center, UK
-    "politico",         # Center-Right, Europe
+    "cnn",         # Left, US
+    "fox-news",    # Right, US
+    "bbc-news",    # Center, UK
+    "politico",    # Center-Right, Europe
 ]
-
 
 # Map RSS feed URLs to clean source names
 FEED_NAME_MAP = {
@@ -43,67 +41,6 @@ FEED_NAME_MAP = {
 }
 
 
-# ---------- Category inference helpers ----------
-
-def _match_category_from_path(path: str) -> str | None:
-    path = path.lower()
-    if any(seg in path for seg in ["politics", "election", "government", "parliament"]):
-        return "politics"
-    if any(seg in path for seg in ["world", "international", "europe", "africa", "asia", "middle-east"]):
-        return "world"
-    if any(seg in path for seg in ["business", "markets", "economy", "finance", "money"]):
-        return "business"
-    if any(seg in path for seg in ["tech", "technology", "digital", "gadgets"]):
-        return "tech"
-    if any(seg in path for seg in ["sport", "sports", "football", "rugby", "tennis", "golf"]):
-        return "sport"
-    if any(seg in path for seg in ["entertainment", "culture", "arts", "tv", "film", "showbiz"]):
-        return "entertainment"
-    if any(seg in path for seg in ["health", "wellbeing", "covid", "medicine", "nhs"]):
-        return "health"
-    if "science" in path or "environment" in path or "climate" in path:
-        return "science"
-    return None
-
-
-def _match_category_from_title(title: str) -> str | None:
-    t = title.lower()
-    if any(w in t for w in ["election", "minister", "government", "parliament", "brexit"]):
-        return "politics"
-    if any(w in t for w in ["stocks", "market", "economy", "inflation", "company", "bank"]):
-        return "business"
-    if any(w in t for w in ["ai", "app", "software", "startup", "technology", "cyber"]):
-        return "tech"
-    if any(w in t for w in ["wins", "defeat", "draw", "tournament", "league", "cup"]):
-        return "sport"
-    if any(w in t for w in ["film", "movie", "series", "album", "festival", "celebrity"]):
-        return "entertainment"
-    if any(w in t for w in ["covid", "hospital", "vaccine", "health", "mental health"]):
-        return "health"
-    if any(w in t for w in ["climate", "planet", "environment", "research", "study", "scientists"]):
-        return "science"
-    return None
-
-
-def infer_category(url: str | None, title: str | None) -> str:
-    category: str | None = None
-
-    if url:
-        try:
-            parsed = urlparse(url)
-            path = parsed.path or ""
-            category = _match_category_from_path(path)
-        except Exception:
-            category = None
-
-    if not category and title:
-        category = _match_category_from_title(title)
-
-    return category or "general"
-
-
-# ---------- Existing normalisation / helpers ----------
-
 def normalize_article(
     *,
     source_name: str,
@@ -113,7 +50,13 @@ def normalize_article(
     bias_score=None,
     sentiment_score=None,
 ):
-    """Normalize article data from various sources into common format."""
+    """
+    Normalize article data from various sources into common format.
+
+    Category inference runs tiers 1+2 only here (fast, no model).
+    Tier 3 zero-shot fires later in insert_articles_batch once
+    content has been scraped and is available.
+    """
     ts = None
     if published_at:
         try:
@@ -121,7 +64,7 @@ def normalize_article(
         except Exception:
             ts = None
 
-    category = infer_category(url, title)
+    category = infer_category(url, title)  # tiers 1+2 only at this stage
 
     return {
         "title": title,
@@ -130,7 +73,7 @@ def normalize_article(
         "bias_score": bias_score,
         "sentiment_score": sentiment_score,
         "source": source_name,
-        "category": category,  # NEW
+        "category": category,
     }
 
 
@@ -157,48 +100,24 @@ def upsert_source(name: str):
 
 
 def sanitize_for_postgres(text: str) -> str:
-    """
-    Remove characters that PostgreSQL cannot handle.
-
-    Specifically removes null bytes and other problematic Unicode.
-    """
+    """Remove characters that PostgreSQL cannot handle."""
     if not text:
         return ""
-
-    # Remove null bytes
     text = text.replace('\x00', '')
     text = text.replace('\u0000', '')
-
-    # Remove other problematic control characters
     text = re.sub(r'[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f]', '', text)
-
-    # Ensure valid UTF-8
-    text = text.encode('utf-8', errors='ignore').decode(
-        'utf-8',
-        errors='ignore'
-    )
-
+    text = text.encode('utf-8', errors='ignore').decode('utf-8', errors='ignore')
     return text
 
 
 def clean_text(text: str) -> str:
-    """
-    Clean scraped text by removing extra whitespace,
-    common navigation elements, and formatting artifacts.
-    """
+    """Clean scraped text by removing extra whitespace and navigation elements."""
     if not text:
         return ""
-
-    # First: sanitize for PostgreSQL
     text = sanitize_for_postgres(text)
-
-    # Remove multiple newlines
     text = re.sub(r'\n\s*\n+', '\n\n', text)
-
-    # Remove excessive whitespace
     text = re.sub(r'[ \t]+', ' ', text)
 
-    # Remove common navigation/UI text patterns
     patterns_to_remove = [
         r'Sign up for.*?newsletter',
         r'Subscribe to.*?',
@@ -215,44 +134,29 @@ def clean_text(text: str) -> str:
         r'Related (Articles|Stories):.*?\n',
         r'Most (Popular|Read):.*?\n',
     ]
-
     for pattern in patterns_to_remove:
         text = re.sub(pattern, '', text, flags=re.IGNORECASE)
 
-    # Trim
-    text = text.strip()
-
-    return text
+    return text.strip()
 
 
 def fetch_content_newspaper(url: str) -> str | None:
-    """
-    Tier 1: newspaper3k scraper.
-
-    Fast and reliable for 80% of news sites.
-    """
+    """Tier 1: newspaper3k scraper. Fast and reliable for 80% of news sites."""
     try:
         article = Article(url)
         article.download()
         article.parse()
-
         if article.text and len(article.text) > 150:
             cleaned = clean_text(article.text)
             if len(cleaned) > 150:
                 return cleaned
-
     except Exception:
         pass
-
     return None
 
 
 def fetch_content_beautifulsoup(url: str) -> str | None:
-    """
-    Tier 2: BeautifulSoup with smart extraction.
-
-    Handles 95% of sites.
-    """
+    """Tier 2: BeautifulSoup with smart extraction. Handles 95% of sites."""
     try:
         headers = {
             'User-Agent': (
@@ -270,66 +174,36 @@ def fetch_content_beautifulsoup(url: str) -> str | None:
             'Upgrade-Insecure-Requests': '1',
             'Referer': 'https://www.google.com/'
         }
-
-        response = requests.get(
-            url,
-            headers=headers,
-            timeout=20,
-            allow_redirects=True
-        )
+        response = requests.get(url, headers=headers, timeout=20, allow_redirects=True)
         response.raise_for_status()
 
         soup = BeautifulSoup(response.content, 'html.parser')
-
-        # Remove unwanted elements
-        for element in soup([
-            'script', 'style', 'nav', 'footer', 'aside', 'header',
-            'iframe', 'noscript', 'form', 'button', 'input', 'select',
-            'textarea', 'label'
-        ]):
+        for element in soup(['script', 'style', 'nav', 'footer', 'aside', 'header',
+                            'iframe', 'noscript', 'form', 'button', 'input', 'select',
+                             'textarea', 'label']):
             element.decompose()
 
-        # Remove by class/id patterns
         unwanted_patterns = [
             'ad', 'advertisement', 'promo', 'widget', 'sidebar',
             'newsletter', 'subscribe', 'social', 'share', 'comments',
             'related', 'recommended', 'trending', 'cookie', 'consent'
         ]
-
         for pattern in unwanted_patterns:
-            for element in soup.find_all(
-                class_=lambda x: x and pattern in x.lower()
-            ):
+            for element in soup.find_all(class_=lambda x: x and pattern in x.lower()):
                 element.decompose()
-            for element in soup.find_all(
-                id=lambda x: x and pattern in x.lower()
-            ):
+            for element in soup.find_all(id=lambda x: x and pattern in x.lower()):
                 element.decompose()
 
-        # Try multiple content extraction strategies
         content = None
-
-        # Strategy 1: Article tags
         article_selectors = [
-            'article',
-            '[role="article"]',
-            '[class*="article-body"]',
-            '[class*="article-content"]',
-            '[class*="article__body"]',
-            '[class*="story-body"]',
-            '[class*="story-content"]',
-            '[class*="post-content"]',
-            '[class*="entry-content"]',
-            '[class*="content-body"]',
-            '[id*="article-body"]',
-            '[id*="story-body"]',
-            '[id*="content-body"]',
-            'main article',
-            'main',
-            '.article',
-            '#article',
+            'article', '[role="article"]', '[class*="article-body"]',
+            '[class*="article-content"]', '[class*="article__body"]',
+            '[class*="story-body"]', '[class*="story-content"]',
+            '[class*="post-content"]', '[class*="entry-content"]',
+            '[class*="content-body"]', '[id*="article-body"]',
+            '[id*="story-body"]', '[id*="content-body"]',
+            'main article', 'main', '.article', '#article',
         ]
-
         for selector in article_selectors:
             try:
                 elements = soup.select(selector)
@@ -341,22 +215,16 @@ def fetch_content_beautifulsoup(url: str) -> str | None:
             except Exception:
                 continue
 
-        # Strategy 2: Largest text block
         if not content or len(content) < 150:
             all_containers = soup.find_all(['div', 'section', 'main'])
             max_text = ""
             for container in all_containers:
-                container_text = container.get_text(
-                    separator='\n',
-                    strip=True
-                )
+                container_text = container.get_text(separator='\n', strip=True)
                 if len(container_text) > len(max_text):
                     max_text = container_text
-
             if len(max_text) > 150:
                 content = max_text
 
-        # Strategy 3: All paragraphs
         if not content or len(content) < 150:
             paragraphs = soup.find_all('p')
             long_paragraphs = [
@@ -373,42 +241,23 @@ def fetch_content_beautifulsoup(url: str) -> str | None:
 
     except Exception:
         pass
-
     return None
 
 
 def fetch_content_aggressive(url: str) -> str | None:
-    """
-    Tier 3: Ultra-aggressive text extraction.
-
-    Grabs everything, removes HTML, filters noise.
-    """
+    """Tier 3: Ultra-aggressive text extraction."""
     try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1)'
-        }
-
-        response = requests.get(
-            url,
-            headers=headers,
-            timeout=15,
-            allow_redirects=True
-        )
+        headers = {'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1)'}
+        response = requests.get(url, headers=headers, timeout=15, allow_redirects=True)
         response.raise_for_status()
 
         soup = BeautifulSoup(response.content, 'html.parser')
-
-        # Remove everything except main content
-        for element in soup([
-            'script', 'style', 'nav', 'footer', 'aside', 'header',
-            'iframe', 'noscript', 'form', 'button', 'input', 'meta',
-            'link', 'select', 'textarea', 'svg', 'canvas', 'video'
-        ]):
+        for element in soup(['script', 'style', 'nav', 'footer', 'aside', 'header',
+                            'iframe', 'noscript', 'form', 'button', 'input', 'meta',
+                             'link', 'select', 'textarea', 'svg', 'canvas', 'video']):
             element.decompose()
 
-        # Get all remaining text
         text = soup.get_text(separator='\n', strip=True)
-
         if len(text) > 300:
             cleaned = clean_text(text)
             if len(cleaned) > 150:
@@ -416,16 +265,11 @@ def fetch_content_aggressive(url: str) -> str | None:
 
     except Exception:
         pass
-
     return None
 
 
 def fetch_content_with_retry(url: str, max_retries: int = 3) -> str | None:
-    """
-    Tier 4: Retry with exponential backoff.
-
-    Handles rate limits and temporary failures.
-    """
+    """Tier 4: Retry with exponential backoff."""
     for attempt in range(max_retries):
         try:
             headers = {
@@ -439,34 +283,20 @@ def fetch_content_with_retry(url: str, max_retries: int = 3) -> str | None:
                 'Cache-Control': 'no-cache',
                 'Pragma': 'no-cache'
             }
+            response = requests.get(url, headers=headers, timeout=25,
+                                    allow_redirects=True, verify=True)
 
-            response = requests.get(
-                url,
-                headers=headers,
-                timeout=25,
-                allow_redirects=True,
-                verify=True
-            )
-
-            # Handle rate limiting
             if response.status_code == 429:
-                wait_time = (2 ** attempt) * 2
-                time.sleep(wait_time)
+                time.sleep((2 ** attempt) * 2)
                 continue
 
             response.raise_for_status()
-
             soup = BeautifulSoup(response.content, 'lxml')
 
-            # Nuclear option: get ALL text
-            for unwanted in soup([
-                'script', 'style', 'head', 'title', 'meta', 'link'
-            ]):
+            for unwanted in soup(['script', 'style', 'head', 'title', 'meta', 'link']):
                 unwanted.decompose()
 
             text = soup.get_text(separator=' ', strip=True)
-
-            # Split by sentences and filter
             sentences = re.split(r'[.!?]+', text)
             meaningful_sentences = [
                 s.strip() for s in sentences
@@ -488,11 +318,7 @@ def fetch_content_with_retry(url: str, max_retries: int = 3) -> str | None:
 
 
 def fetch_content_title_fallback(title: str, source: str) -> str:
-    """
-    Tier 5: Last resort fallback.
-
-    Creates minimal content from title if scraping completely fails.
-    """
+    """Tier 5: Last resort fallback. Creates minimal content from title."""
     fallback_text = (
         f"Article from {source}: {title}. "
         f"Full content could not be retrieved. "
@@ -500,59 +326,43 @@ def fetch_content_title_fallback(title: str, source: str) -> str:
         f"The article discusses topics related to: {title.lower()}. "
         f"For the complete article, please visit the source website."
     )
-
-    # Pad to minimum length
     while len(fallback_text) < 200:
-        fallback_text += (
-            f" Additional context from {source} regarding {title}."
-        )
-
+        fallback_text += f" Additional context from {source} regarding {title}."
     return clean_text(fallback_text)
 
 
-def fetch_content(
-    url: str,
-    title: str = "",
-    source: str = ""
-) -> str:
+def fetch_content(url: str, title: str = "", source: str = "") -> str:
     """
-    5-tier guaranteed scraping strategy.
+    5-tier guaranteed scraping strategy. Never returns None.
 
-    Returns content string - NEVER returns None.
-
-    1. newspaper3k (80% success)
-    2. BeautifulSoup smart extraction (95% success)
-    3. Aggressive text extraction (98% success)
-    4. Retry with backoff (99.5% success)
-    5. Title-based fallback (100% guarantee)
+    1. newspaper3k           (~80% success)
+    2. BeautifulSoup smart   (~95% success)
+    3. Aggressive extraction (~98% success)
+    4. Retry with backoff    (~99.5% success)
+    5. Title-based fallback  (100% guarantee)
     """
-    # Tier 1: newspaper3k
     content = fetch_content_newspaper(url)
     if content:
         return content
 
     time.sleep(0.3)
 
-    # Tier 2: BeautifulSoup
     content = fetch_content_beautifulsoup(url)
     if content:
         return content
 
     time.sleep(0.5)
 
-    # Tier 3: Aggressive
     content = fetch_content_aggressive(url)
     if content:
         return content
 
     time.sleep(0.5)
 
-    # Tier 4: Retry with backoff
     content = fetch_content_with_retry(url, max_retries=3)
     if content:
         return content
 
-    # Tier 5: Title fallback (ALWAYS succeeds)
     return fetch_content_title_fallback(title, source)
 
 
@@ -580,53 +390,51 @@ def insert_articles_batch(articles: list[dict]):
             continue
 
         source_name_val = article.get("source")
-        source_id = (
-            upsert_source(source_name_val)
-            if source_name_val
-            else None
-        )
+        source_id = upsert_source(source_name_val) if source_name_val else None
 
-        # GUARANTEED to return content
         content = fetch_content(
             article["url"],
             title=article.get("title", ""),
-            source=source_name_val
+            source=source_name_val,
         )
 
-        # Check if it's a fallback (contains placeholder text)
         if "could not be retrieved" in content:
             scrape_fallback += 1
         else:
             scrape_success += 1
 
-        # Sanitize all text fields for PostgreSQL
+        # Tier 3 zero-shot: re-infer with content if keyword tiers returned "general"
+        category = article.get("category")
+        if category == "general":
+            category = infer_category(
+                article.get("url"),
+                article.get("title"),
+                content,  # now available — zero-shot fires here if needed
+            )
+
         title = sanitize_for_postgres(article.get("title", ""))
         url = sanitize_for_postgres(article["url"])
         content = sanitize_for_postgres(content)
 
-        payloads.append(
-            {
-                "title": title,
-                "url": url,
-                "published_at": article["published_at"],
-                "bias_score": article.get("bias_score"),
-                "sentiment_score": article.get("sentiment_score"),
-                "source_id": source_id,
-                "content": content,
-                "source": source_name_val,
-                "category": article.get("category"),  # NEW
-            }
-        )
+        payloads.append({
+            "title": title,
+            "url": url,
+            "published_at": article["published_at"],
+            "bias_score": article.get("bias_score"),
+            "sentiment_score": article.get("sentiment_score"),
+            "source_id": source_id,
+            "content": content,
+            "source": source_name_val,
+            "category": category,
+        })
 
     if payloads:
         res = supabase.table("articles").insert(payloads).execute().data
-
         print(f"✅ Inserted {len(res)} new articles")
         print(
             f"   📄 Scraped content: {scrape_success} full scrape, "
             f"{scrape_fallback} title fallback (100.0% success rate)"
         )
-
         return [r["id"] for r in res]
 
     print("ℹ️  No new articles to insert")
@@ -648,24 +456,17 @@ def fetch_newsapi():
 
     url = "https://newsapi.org/v2/top-headlines"
     headers = {"X-Api-Key": NEWSAPI_KEY}
-
     normalized = []
 
     for source_id in NEWSAPI_SOURCES:
         try:
-            params = {
-                "sources": source_id,
-                "pageSize": 50,
-                "language": "en",
-            }
-
+            params = {"sources": source_id, "pageSize": 50, "language": "en"}
             r = requests.get(url, params=params, headers=headers, timeout=15)
             r.raise_for_status()
             data = r.json()
 
             for a in data.get("articles", []):
                 source_name = (a.get("source") or {}).get("name")
-
                 source_map = {
                     "Fox News": "Fox News",
                     "CNN": "CNN",
@@ -689,10 +490,7 @@ def fetch_newsapi():
             print(f"  ✗ {source_id} failed: {exc}")
             continue
 
-    print(
-        f"📰 NewsAPI total: {len(normalized)} articles "
-        f"from {len(NEWSAPI_SOURCES)} sources"
-    )
+    print(f"📰 NewsAPI total: {len(normalized)} articles from {len(NEWSAPI_SOURCES)} sources")
     return normalized
 
 
@@ -709,11 +507,9 @@ def fetch_rss():
     for feed in RSS_FEEDS:
         try:
             parsed = feedparser.parse(feed)
-
             source_name = FEED_NAME_MAP.get(feed)
             if not source_name:
                 source_name = parsed.feed.get("title", "Unknown Source")
-
             if source_name == "News Headlines":
                 source_name = "RTÉ News"
 
@@ -721,9 +517,7 @@ def fetch_rss():
             for e in parsed.entries[:12]:
                 url = getattr(e, "link", None)
                 title = getattr(e, "title", None)
-                published = (
-                    getattr(e, "published", None) or getattr(e, "updated", None)
-                )
+                published = getattr(e, "published", None) or getattr(e, "updated", None)
 
                 n = normalize_article(
                     source_name=source_name,
@@ -741,10 +535,7 @@ def fetch_rss():
             print(f"  ✗ {feed}: {exc}")
             continue
 
-    print(
-        f"📡 RSS total: {len(normalized)} articles "
-        f"from {len(RSS_FEEDS)} feeds"
-    )
+    print(f"📡 RSS total: {len(normalized)} articles from {len(RSS_FEEDS)} feeds")
     return normalized
 
 
@@ -756,8 +547,7 @@ def run_ingestion_cycle():
     - NewsAPI: 4,800 articles (4 sources × 50 articles × 24 cycles)
     - RSS: 2,304 articles (8 feeds × 12 articles × 24 cycles)
     - Total fetched: 7,104/day
-    - New after dedup (~60%): 4,262/day
-    - 30-day DB: ~128,000 articles (~375 MB, 75% of 500MB limit)
+    - New after dedup (~60%): ~4,262/day
 
     Source distribution (12 total):
     - US (3): CNN (Left), Fox News (Right), NPR (Center-Left)
@@ -765,26 +555,10 @@ def run_ingestion_cycle():
     - Ireland (3): RTÉ News (Center), Irish Times (Center), Independent (Center-Left)
     - Europe (3): Euronews (Center), Politico Europe (Center-Right), Sky News (Center-Right)
 
-    Bias distribution:
-    - Left (2): CNN, The Guardian
-    - Center-Left (2): NPR, The Independent
-    - Center (4): BBC, RTÉ, Euronews, Irish Times
-    - Center-Right (2): Politico Europe, Sky News
-    - Right (2): Fox News, GB News
-
-    API usage:
-    - NewsAPI: 96/100 requests per day (96%)
-    - RSS: unlimited
-
-    Web scraping:
-    - 5-tier GUARANTEED strategy:
-      1. newspaper3k
-      2. BeautifulSoup smart extraction
-      3. Aggressive text extraction
-      4. Retry with exponential backoff
-      5. Title-based fallback (NEVER fails)
-    - PostgreSQL sanitization (removes null bytes)
-    - 100% success rate guarantee
+    Category inference:
+    - Tier 1: URL path matching  (no model, fast)
+    - Tier 2: Title keywords     (no model, fast)
+    - Tier 3: Zero-shot NLP      (fires only for "general" articles, post-scrape)
     """
     print("\n" + "=" * 70)
     print("🔄 INGESTION CYCLE STARTED")
