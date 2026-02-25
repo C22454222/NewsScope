@@ -11,10 +11,12 @@ SENTIMENT_MODEL = os.getenv(
     "cardiffnlp/twitter-roberta-base-sentiment-latest",
 ).strip()
 
-# Updated: bucketresearch/politicalBiasBERT replaces deprecated premsa model
+# matous-volf/political-leaning-politics:
+#   Trained on 12 combined datasets | Accuracy: ~84.7% AllSides
+#   Outputs: LABEL_0=Left, LABEL_1=Center, LABEL_2=Right
 BIAS_MODEL = os.getenv(
     "HF_BIAS_MODEL",
-    "bucketresearch/politicalBiasBERT",
+    "matous-volf/political-leaning-politics",
 ).strip()
 
 GENERAL_BIAS_MODEL = os.getenv(
@@ -122,9 +124,9 @@ def _get_source_political_leaning(source_name: str):
 
 def _detect_political_bias_ai(text: str):
     """
-    Political bias detection using bucketresearch/politicalBiasBERT.
+    Political bias detection using political-leaning-politics model.
 
-    Model outputs: Left, Center, Right (AllSides methodology).
+    Model outputs: LABEL_0=Left, LABEL_1=Center, LABEL_2=Right.
 
     Returns tuple: (bias_score: float, confidence: float)
     - bias_score: -1.0 (Left) to +1.0 (Right)
@@ -140,47 +142,33 @@ def _detect_political_bias_ai(text: str):
         predictions = [(item.label, item.score) for item in results]
         top_label, confidence = max(predictions, key=lambda x: x[1])
 
-        # Primary map — politicalBiasBERT outputs Left / Center / Right
+        # E241 fix: no alignment spaces after ':'
+        # LABEL_0=Left, LABEL_1=Center, LABEL_2=Right
         label_map = {
-            "Left": -1.0,
-            "Center": 0.0,
-            "Right": 1.0,
-            # Numeric fallbacks in case labels vary
             "LABEL_0": -1.0,
             "LABEL_1": 0.0,
             "LABEL_2": 1.0,
+            "LEFT": -1.0,
+            "CENTER": 0.0,
+            "RIGHT": 1.0,
             "0": -1.0,
             "1": 0.0,
             "2": 1.0,
         }
 
-        # Normalise capitalisation before lookup
-        top_normalised = top_label.strip().capitalize()
-
-        if top_normalised in label_map:
-            bias_score = label_map[top_normalised]
-        elif top_label in label_map:
-            bias_score = label_map[top_label]
-        else:
-            top_lower = top_label.lower()
-            if "left" in top_lower and "center" not in top_lower:
-                bias_score = -1.0
-            elif "right" in top_lower and "center" not in top_lower:
-                bias_score = 1.0
-            elif "center" in top_lower or "neutral" in top_lower:
-                bias_score = 0.0
-            else:
-                print(
-                    f"UNKNOWN LABEL FORMAT: '{top_label}' "
-                    f"- defaulting to CENTER"
-                )
-                bias_score = 0.0
-
-        label_str = (
-            "LEFT" if bias_score < -0.3 else
-            "RIGHT" if bias_score > 0.3 else
-            "CENTER"
+        top_norm = top_label.strip()
+        bias_score = label_map.get(
+            top_norm,
+            label_map.get(top_norm.upper(), 0.0),
         )
+
+        # W503 fix: if/elif/else instead of multiline ternary
+        if bias_score < -0.3:
+            label_str = "LEFT"
+        elif bias_score > 0.3:
+            label_str = "RIGHT"
+        else:
+            label_str = "CENTER"
 
         print(
             f"Political bias: {label_str} "
@@ -233,8 +221,8 @@ def _detect_general_bias(text: str):
             label = "UNBIASED"
         else:
             print(
-                f"UNKNOWN GENERAL BIAS LABEL: '{top_label}' "
-                f"- defaulting to UNBIASED"
+                f"Unknown general bias label: '{top_label}' "
+                "— defaulting to UNBIASED"
             )
             label = "UNBIASED"
 
@@ -252,25 +240,26 @@ def _hybrid_bias_analysis(text: str, source_name: str):
     Hybrid bias detection methodology.
 
     Combines:
-    1. Article-level AI political bias (bucketresearch/politicalBiasBERT)
+    1. Article-level AI political bias
+       (matous-volf/political-leaning-politics)
     2. Source-level political leaning (AllSides methodology fallback)
 
     Returns tuple: (bias_score, bias_intensity)
     - bias_score:     -1.0 (Left) to +1.0 (Right)
-    - bias_intensity:  0.0 to 1.0 (model confidence, not abs of score)
+    - bias_intensity:  0.0 to 1.0 (model confidence)
     """
     ai_bias, ai_confidence = _detect_political_bias_ai(text)
 
     if ai_bias is not None and ai_confidence is not None:
-        # Use model confidence as intensity — reflects certainty of
-        # prediction rather than magnitude of political lean.
         bias_intensity = round(ai_confidence, 4)
 
-        label = (
-            "LEFT" if ai_bias < -0.3 else
-            "RIGHT" if ai_bias > 0.3 else
-            "CENTER"
-        )
+        # W503 fix: if/elif/else instead of multiline ternary
+        if ai_bias < -0.3:
+            label = "LEFT"
+        elif ai_bias > 0.3:
+            label = "RIGHT"
+        else:
+            label = "CENTER"
 
         print(
             f"Article AI result: {label} (score={ai_bias:.2f}, "
@@ -297,12 +286,12 @@ def analyze_unscored_articles():
       - Output: sentiment_score (-1 to +1)
 
     Political Bias Detection:
-      - Model: bucketresearch/politicalBiasBERT
+      - Model: matous-volf/political-leaning-politics
       - Output: bias_score (-1 to +1), bias_intensity (0 to 1)
 
     General/Lexical Bias Detection:
       - Model: valurank/distilroberta-bias
-      - Output: general_bias (BIASED/UNBIASED), general_bias_score (0 to 1)
+      - Output: general_bias (BIASED/UNBIASED), general_bias_score (0-1)
 
     Runs every hour at :15 (15 minutes after ingestion).
     """
@@ -323,7 +312,7 @@ def analyze_unscored_articles():
 
     print(
         f"Analyzing {len(articles)} articles "
-        f"(hybrid methodology + general bias)..."
+        "(hybrid methodology + general bias)..."
     )
 
     for article in articles:
