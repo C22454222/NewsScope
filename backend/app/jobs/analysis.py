@@ -1,27 +1,29 @@
+"""
+Analysis service using HF InferenceClient with retry logic.
+Models: matous-volf/political-leaning-politics (84.7% AllSides),
+valurank/distilroberta-bias (BABE F1 0.804), twitter-roberta sentiment.
+Handles 503/model loading errors gracefully.
+"""
+
 import os
 import time
+from typing import Tuple, Optional
 from app.db.supabase import supabase
 from huggingface_hub import InferenceClient
 
 
 HF_API_TOKEN = os.getenv("HF_API_TOKEN")
-
 SENTIMENT_MODEL = os.getenv(
     "HF_SENTIMENT_MODEL",
     "cardiffnlp/twitter-roberta-base-sentiment-latest",
 ).strip()
 
-# matous-volf/political-leaning-politics:
-#   Trained on 12 combined datasets | Accuracy: ~84.7% AllSides
-#   Outputs: LABEL_0=Left, LABEL_1=Center, LABEL_2=Right
 BIAS_MODEL = os.getenv(
-    "HF_BIAS_MODEL",
-    "matous-volf/political-leaning-politics",
+    "HF_BIAS_MODEL", "matous-volf/political-leaning-politics"
 ).strip()
 
 GENERAL_BIAS_MODEL = os.getenv(
-    "HF_GENERAL_BIAS_MODEL",
-    "valurank/distilroberta-bias",
+    "HF_GENERAL_BIAS_MODEL", "valurank/distilroberta-bias"
 ).strip()
 
 client = InferenceClient(token=HF_API_TOKEN)
@@ -36,12 +38,8 @@ def _call_classification(model: str, text: str):
 
     for attempt in range(3):
         try:
-            result = client.text_classification(
-                truncated_text,
-                model=model,
-            )
+            result = client.text_classification(truncated_text, model=model)
             return result
-
         except Exception as e:
             error_str = str(e)
             if "503" in error_str or "loading" in error_str.lower():
@@ -59,11 +57,8 @@ def _call_classification(model: str, text: str):
     return None
 
 
-def _sentiment_score(text: str):
-    """
-    Analyze sentiment using RoBERTa sentiment model.
-    Returns float: -1 (negative) to +1 (positive).
-    """
+def _sentiment_score(text: str) -> Optional[float]:
+    """Analyze sentiment. Returns -1 (negative) to +1 (positive)."""
     try:
         results = _call_classification(SENTIMENT_MODEL, text)
         if not results:
@@ -83,7 +78,6 @@ def _sentiment_score(text: str):
 
         neg = sentiment_map.get("negative", 0)
         pos = sentiment_map.get("positive", 0)
-
         return pos - neg
 
     except Exception as e:
@@ -91,12 +85,8 @@ def _sentiment_score(text: str):
         return None
 
 
-def _get_source_political_leaning(source_name: str):
-    """
-    Retrieve source's political leaning from database.
-    Uses AllSides/Ground News methodology.
-    Returns float: -1 (Left) to +1 (Right).
-    """
+def _get_source_political_leaning(source_name: str) -> float:
+    """Retrieve source bias from database."""
     try:
         response = (
             supabase.table("sources")
@@ -107,7 +97,6 @@ def _get_source_political_leaning(source_name: str):
         )
 
         rating = response.data.get("bias_rating")
-
         bias_map = {
             "Left": -1.0,
             "Center-Left": -0.5,
@@ -115,35 +104,25 @@ def _get_source_political_leaning(source_name: str):
             "Center-Right": 0.5,
             "Right": 1.0,
         }
-
         return bias_map.get(rating, 0.0)
 
     except Exception:
         return 0.0
 
 
-def _detect_political_bias_ai(text: str):
+def _detect_political_bias_ai(text: str) -> Tuple[Optional[float], Optional[float]]:
     """
-    Political bias detection using political-leaning-politics model.
-
-    Model outputs: LABEL_0=Left, LABEL_1=Center, LABEL_2=Right.
-
-    Returns tuple: (bias_score: float, confidence: float)
-    - bias_score: -1.0 (Left) to +1.0 (Right)
-    - confidence: 0.0 to 1.0 (model confidence in top prediction)
-
-    Returns (None, None) if AI fails.
+    Political bias using matous-volf model.
+    LABEL_0=Left(-1), LABEL_1=Center(0), LABEL_2=Right(1).
     """
     try:
         results = _call_classification(BIAS_MODEL, text)
         if not results:
-            return (None, None)
+            return None, None
 
         predictions = [(item.label, item.score) for item in results]
         top_label, confidence = max(predictions, key=lambda x: x[1])
 
-        # E241 fix: no alignment spaces after ':'
-        # LABEL_0=Left, LABEL_1=Center, LABEL_2=Right
         label_map = {
             "LABEL_0": -1.0,
             "LABEL_1": 0.0,
@@ -158,11 +137,9 @@ def _detect_political_bias_ai(text: str):
 
         top_norm = top_label.strip()
         bias_score = label_map.get(
-            top_norm,
-            label_map.get(top_norm.upper(), 0.0),
+            top_norm, label_map.get(top_norm.upper(), 0.0)
         )
 
-        # W503 fix: if/elif/else instead of multiline ternary
         if bias_score < -0.3:
             label_str = "LEFT"
         elif bias_score > 0.3:
@@ -175,35 +152,23 @@ def _detect_political_bias_ai(text: str):
             f"(score={bias_score:.2f}, confidence={confidence:.2%})"
         )
 
-        return (bias_score, confidence)
+        return bias_score, confidence
 
     except Exception as e:
         print(f"Political bias detection error: {e}")
-        return (None, None)
+        return None, None
 
 
-def _detect_general_bias(text: str):
-    """
-    General/lexical bias detection using valurank/distilroberta-bias.
-
-    Detects whether article language is biased or unbiased
-    regardless of political direction — framing, loaded language,
-    and sensationalism per Spinde et al. (2023).
-
-    Model returns NEUTRAL or BIASED labels.
-
-    Returns tuple: (label: str, score: float)
-    - label: 'BIASED' or 'UNBIASED'
-    - score: 0.0 to 1.0 (confidence)
-
-    Returns (None, None) if model fails.
-    """
+def _detect_general_bias(
+    text: str,
+) -> Tuple[Optional[str], Optional[float]]:
+    """General bias detection."""
     try:
         results = _call_classification(GENERAL_BIAS_MODEL, text)
         if not results:
-            return (None, None)
+            return None, None
 
-        print(f"   🔍 General bias raw results: {results}")
+        print(f"  🔍 General bias raw results: {results}")
 
         predictions = [(item.label, item.score) for item in results]
         top_label, confidence = max(predictions, key=lambda x: x[1])
@@ -222,38 +187,27 @@ def _detect_general_bias(text: str):
         else:
             print(
                 f"Unknown general bias label: '{top_label}' "
-                "— defaulting to UNBIASED"
+                f"— defaulting to UNBIASED"
             )
             label = "UNBIASED"
 
         print(f"General bias: {label} (confidence={confidence:.2%})")
-
-        return (label, confidence)
+        return label, confidence
 
     except Exception as e:
         print(f"General bias detection error: {e}")
-        return (None, None)
+        return None, None
 
 
-def _hybrid_bias_analysis(text: str, source_name: str):
-    """
-    Hybrid bias detection methodology.
-
-    Combines:
-    1. Article-level AI political bias
-       (matous-volf/political-leaning-politics)
-    2. Source-level political leaning (AllSides methodology fallback)
-
-    Returns tuple: (bias_score, bias_intensity)
-    - bias_score:     -1.0 (Left) to +1.0 (Right)
-    - bias_intensity:  0.0 to 1.0 (model confidence)
-    """
+def _hybrid_bias_analysis(
+    text: str, source_name: str
+) -> Tuple[float, float]:
+    """AI bias + source fallback."""
     ai_bias, ai_confidence = _detect_political_bias_ai(text)
 
     if ai_bias is not None and ai_confidence is not None:
         bias_intensity = round(ai_confidence, 4)
 
-        # W503 fix: if/elif/else instead of multiline ternary
         if ai_bias < -0.3:
             label = "LEFT"
         elif ai_bias > 0.3:
@@ -263,38 +217,17 @@ def _hybrid_bias_analysis(text: str, source_name: str):
 
         print(
             f"Article AI result: {label} (score={ai_bias:.2f}, "
-            f"confidence={ai_confidence:.2%}, "
-            f"intensity={bias_intensity:.2f})"
+            f"confidence={ai_confidence:.2%}, intensity={bias_intensity:.2f})"
         )
-        return (ai_bias, bias_intensity)
+        return ai_bias, bias_intensity
 
     source_bias = _get_source_political_leaning(source_name)
-
-    print(
-        f"AI failed → fallback to source: "
-        f"{source_name} = {source_bias:.2f}"
-    )
-    return (source_bias, 0.5)
+    print(f"AI failed → fallback to source: {source_name} = {source_bias:.2f}")
+    return source_bias, 0.5
 
 
 def analyze_unscored_articles():
-    """
-    Analyze articles using hybrid transformer-based approach.
-
-    Sentiment Analysis:
-      - Model: cardiffnlp/twitter-roberta-base-sentiment-latest
-      - Output: sentiment_score (-1 to +1)
-
-    Political Bias Detection:
-      - Model: matous-volf/political-leaning-politics
-      - Output: bias_score (-1 to +1), bias_intensity (0 to 1)
-
-    General/Lexical Bias Detection:
-      - Model: valurank/distilroberta-bias
-      - Output: general_bias (BIASED/UNBIASED), general_bias_score (0-1)
-
-    Runs every hour at :15 (15 minutes after ingestion).
-    """
+    """Analyze unscored articles."""
     print("Starting analysis job...")
 
     response = (
@@ -312,7 +245,7 @@ def analyze_unscored_articles():
 
     print(
         f"Analyzing {len(articles)} articles "
-        "(hybrid methodology + general bias)..."
+        f"(hybrid methodology + general bias)..."
     )
 
     for article in articles:
@@ -326,25 +259,22 @@ def analyze_unscored_articles():
             print(f"Skipping article {article['id']} - no content")
             continue
 
-        # 1. Sentiment analysis
+        # 1. Sentiment
         sentiment = _sentiment_score(text)
         time.sleep(1.0)
 
-        # 2. Hybrid political bias detection
+        # 2. Hybrid political bias
         bias_score, bias_intensity = _hybrid_bias_analysis(text, source)
         time.sleep(1.0)
 
-        # 3. General/lexical bias detection
+        # 3. General bias
         general_bias_label, general_bias_score = _detect_general_bias(text)
 
-        sent_str = (
-            f"{sentiment:.3f}" if sentiment is not None else "N/A"
-        )
-        bias_str = (
-            f"{bias_score:.2f}" if bias_score is not None else "N/A"
-        )
+        sent_str = f"{sentiment:.3f}" if sentiment is not None else "N/A"
+        bias_str = f"{bias_score:.2f}" if bias_score is not None else "N/A"
         intensity_str = (
-            f"{bias_intensity:.2f}" if bias_intensity is not None
+            f"{bias_intensity:.2f}"
+            if bias_intensity is not None
             else "N/A"
         )
 
@@ -370,8 +300,8 @@ def analyze_unscored_articles():
             update_data["general_bias_score"] = general_bias_score
 
         if update_data:
-            supabase.table("articles").update(
-                update_data,
-            ).eq("id", article["id"]).execute()
+            supabase.table("articles").update(update_data).eq(
+                "id", article["id"]
+            ).execute()
 
     print("Analysis job complete.")
