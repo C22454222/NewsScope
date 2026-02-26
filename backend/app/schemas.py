@@ -1,16 +1,24 @@
-from pydantic import BaseModel, ConfigDict, Field
+# app/schemas.py
+"""
+NewsScope Pydantic schemas.
+Flake8: 0 errors.
+"""
+
 from datetime import datetime
-from typing import Optional, Dict, Any, List
+from typing import Any, Dict, List, Optional
 from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ArticleBase(BaseModel):
     """
     Shared fields for article records.
 
-    This base model is reused for create and read operations
-    to keep the schema consistent across the codebase.
+    Reused for create and read operations to keep the schema
+    consistent across the codebase.
     """
+
     source: Optional[str] = None
     url: str
     title: Optional[str] = None
@@ -20,21 +28,19 @@ class ArticleBase(BaseModel):
     sentiment_score: Optional[float] = None
     published_at: Optional[datetime] = None
     category: Optional[str] = None
-    general_bias: Optional[str] = None         # 'BIASED' or 'UNBIASED' ← NEW
-    general_bias_score: Optional[float] = None  # confidence 0.0–1.0    ← NEW
+    general_bias: Optional[str] = None
+    general_bias_score: Optional[float] = None
 
 
 class ArticleCreate(ArticleBase):
-    """
-    Payload expected when creating a new article via the API.
-    """
+    """Payload expected when creating a new article via the API."""
+
     pass
 
 
 class Article(ArticleBase):
-    """
-    Full article model as stored and returned by the backend.
-    """
+    """Full article model as stored and returned by the backend."""
+
     id: UUID
     source_id: Optional[UUID] = None
     created_at: datetime
@@ -42,10 +48,34 @@ class Article(ArticleBase):
     model_config = ConfigDict(from_attributes=True)
 
 
+class ArticleResponse(ArticleBase):
+    """
+    Full article response model returned by the API and used
+    internally by fact_checking.py and ingestion.py.
+
+    Extends ArticleBase with DB-generated fields and Week 4
+    credibility/fact-check columns. extra='ignore' silently drops
+    unknown Supabase columns so ArticleResponse(**row) is always safe.
+    """
+
+    id: Optional[str] = None
+    source_id: Optional[str] = None
+    description: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[str] = None
+
+    # Week 4 — credibility + fact-checking
+    credibility_score: Optional[float] = 80.0
+    fact_checks: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    claims_checked: Optional[int] = 0
+    credibility_reason: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True, extra="ignore")
+
+
 class UserBase(BaseModel):
-    """
-    Base user fields shared by create and read operations.
-    """
+    """Base user fields shared by create and read operations."""
+
     email: str
     preferences: Optional[Dict[str, Any]] = Field(default_factory=dict)
     bias_profile: Optional[Dict[str, Any]] = Field(default_factory=dict)
@@ -55,16 +85,16 @@ class UserCreate(UserBase):
     """
     Payload used when creating a new user record.
 
-    The id field is the Firebase UID, which is used as the
-    primary key in Supabase.
+    The id field is the Firebase UID used as the primary key
+    in Supabase.
     """
-    id: UUID  # Firebase UID
+
+    id: UUID
 
 
 class User(UserBase):
-    """
-    Full user model as returned by the backend.
-    """
+    """Full user model as returned by the backend."""
+
     id: UUID
     created_at: datetime
 
@@ -72,27 +102,24 @@ class User(UserBase):
 
 
 class SourceBase(BaseModel):
-    """
-    Base fields for a news source record.
-    """
+    """Base fields for a news source record."""
+
     name: str
     country: Optional[str] = None
     bias_rating: Optional[str] = None
 
 
 class Source(SourceBase):
-    """
-    Full source model as persisted in the database.
-    """
+    """Full source model as persisted in the database."""
+
     id: UUID
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class ReadingHistoryBase(BaseModel):
-    """
-    Base fields for reading history tracking.
-    """
+    """Base fields for reading history tracking."""
+
     article_id: UUID
     time_spent_seconds: int
 
@@ -100,16 +127,16 @@ class ReadingHistoryBase(BaseModel):
 class ReadingHistoryCreate(BaseModel):
     """
     Payload for tracking article reading time.
-    Sent from mobile app when user exits article.
+    Sent from the mobile app when the user exits an article.
     """
+
     article_id: str
     time_spent_seconds: int
 
 
 class ReadingHistory(ReadingHistoryBase):
-    """
-    Full reading history record as stored in database.
-    """
+    """Full reading history record as stored in the database."""
+
     id: UUID
     user_id: UUID
     opened_at: datetime
@@ -120,9 +147,10 @@ class ReadingHistory(ReadingHistoryBase):
 
 class BiasProfile(BaseModel):
     """
-    Calculated bias profile based on user's reading history.
-    Weighted by time spent on articles.
+    Calculated bias profile based on the user's reading history,
+    weighted by time spent on articles.
     """
+
     avg_bias: float
     avg_sentiment: float
     total_articles_read: int
@@ -132,16 +160,14 @@ class BiasProfile(BaseModel):
     most_read_source: str
     bias_distribution: Dict[str, float]
     reading_time_total_minutes: int
-
     positive_count: int = 0
     neutral_count: int = 0
     negative_count: int = 0
 
 
 class FactCheckBase(BaseModel):
-    """
-    Base fields for fact-check records.
-    """
+    """Base fields for fact-check records."""
+
     claim: str
     rating: Optional[str] = None
     source: Optional[str] = None
@@ -150,16 +176,14 @@ class FactCheckBase(BaseModel):
 
 
 class FactCheckCreate(FactCheckBase):
-    """
-    Payload for creating a fact-check record.
-    """
+    """Payload for creating a fact-check record."""
+
     article_id: Optional[UUID] = None
 
 
 class FactCheck(BaseModel):
-    """
-    Full fact-check record as stored in database.
-    """
+    """Full fact-check record as stored in the database."""
+
     id: UUID
     article_id: Optional[UUID] = None
     checked_at: Optional[datetime] = None
@@ -173,17 +197,15 @@ class FactCheck(BaseModel):
 
 
 class ComparisonRequest(BaseModel):
-    """
-    Request payload for comparing coverage across outlets.
-    """
+    """Request payload for comparing coverage across outlets."""
+
     topic: str
     limit: int = Field(default=5, ge=1, le=20)
 
 
 class ComparisonResponse(BaseModel):
-    """
-    Response containing articles grouped by political leaning.
-    """
+    """Response containing articles grouped by political leaning."""
+
     topic: str
     left_articles: List[Article]
     center_articles: List[Article]
@@ -192,9 +214,8 @@ class ComparisonResponse(BaseModel):
 
 
 class UserFactCheckView(BaseModel):
-    """
-    Track when users view fact-checks.
-    """
+    """Track when users view fact-checks."""
+
     id: UUID
     user_id: UUID
     fact_check_id: UUID
