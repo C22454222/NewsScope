@@ -6,24 +6,18 @@ from collections import Counter
 from datetime import datetime
 from typing import Optional, List
 
-from fastapi import (
-    FastAPI,
-    BackgroundTasks,
-    HTTPException,
-    Header,
-    Depends,
-)
+from fastapi import FastAPI, BackgroundTasks, HTTPException, Header, Depends
 from fastapi.responses import FileResponse
 
 import firebase_admin
 from firebase_admin import credentials, auth
 
 from app.routes import articles, users, sources
-from app.core.scheduler import start_scheduler
 from app.jobs.ingestion import run_ingestion_cycle
 from app.jobs.analysis import analyze_unscored_articles
 from app.jobs.archiving import archive_old_articles
 from app.jobs.keep_alive import start_keep_alive
+from app.db.supabase import supabase
 from app.schemas import (
     ReadingHistoryCreate,
     BiasProfile,
@@ -31,11 +25,11 @@ from app.schemas import (
     ComparisonRequest,
     ComparisonResponse,
 )
-from app.db.supabase import supabase
+from app.core.scheduler import start_scheduler
 
 
 def init_firebase():
-    """Initialize Firebase Admin SDK. Action"""
+    """Initialize Firebase Admin SDK."""
     try:
         service_account = os.getenv("FIREBASE_SERVICE_ACCOUNT")
         if service_account:
@@ -57,6 +51,7 @@ init_firebase()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Run ingestion, analysis, and archiving jobs on schedule."""
     from apscheduler.triggers.cron import CronTrigger
     from app.core.scheduler import scheduler
 
@@ -95,43 +90,30 @@ async def lifespan(app: FastAPI):
     else:
         print("Keep-alive disabled in development")
 
-    asyncio.create_task(_run_startup_jobs())
+    # Run ingestion only at startup (not analysis to save memory)
+    asyncio.create_task(_run_startup_ingestion())
 
     yield
-
     print("Server shutting down...")
 
 
-async def _run_startup_jobs():
-    print("Server startup: Running ingestion + analysis...")
-
+async def _run_startup_ingestion():
+    """Run ingestion once on startup."""
+    print("Server startup: Running ingestion...")
     try:
         await asyncio.to_thread(run_ingestion_cycle)
         print("Startup ingestion complete")
-
-        await asyncio.to_thread(analyze_unscored_articles)
-        print("Startup analysis complete")
     except Exception as e:
-        print(f"Startup jobs failed: {e}")
+        print(f"Startup ingestion failed: {e}")
 
 
-app = FastAPI(
-    title="NewsScope API",
-    version="1.0.0",
-    lifespan=lifespan,
-)
+app = FastAPI(title="NewsScope API", version="1.0.0", lifespan=lifespan)
 
 
-def get_current_user(authorization: Optional[str] = Header(None)):
-    """
-    Extract user ID from Firebase JWT token.
-    Used for authenticated endpoints.
-    """
+def get_current_user(authorization: Optional[str] = Header(None)) -> str:
+    """Extract user ID from Firebase JWT token."""
     if not authorization:
-        raise HTTPException(
-            status_code=401,
-            detail="Not authenticated",
-        )
+        raise HTTPException(status_code=401, detail="Not authenticated")
 
     token = authorization.replace("Bearer ", "")
 
@@ -140,22 +122,12 @@ def get_current_user(authorization: Optional[str] = Header(None)):
         user_id = decoded_token["uid"]
         print(f"Authenticated user: {user_id}")
         return user_id
-
     except auth.InvalidIdTokenError:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid authentication token",
-        )
+        raise HTTPException(status_code=401, detail="Invalid authentication token")
     except auth.ExpiredIdTokenError:
-        raise HTTPException(
-            status_code=401,
-            detail="Authentication token expired",
-        )
+        raise HTTPException(status_code=401, detail="Authentication token expired")
     except Exception as e:
-        raise HTTPException(
-            status_code=401,
-            detail=f"Authentication failed: {e}",
-        )
+        raise HTTPException(status_code=401, detail=f"Authentication failed: {e}")
 
 
 @app.get("/")
@@ -196,20 +168,9 @@ async def debug_archive(background_tasks: BackgroundTasks):
 
 
 @app.post("/api/reading-history")
-async def track_reading(
-    data: ReadingHistoryCreate,
-    user_id: str = Depends(get_current_user),
-):
-    """
-    Track article reading time for bias profile calculation.
-    Called when user exits article view in mobile app.
-    """
+async def track_reading(data: ReadingHistoryCreate, user_id: str = Depends(get_current_user)):
+    """Track article reading time for bias profile calculation."""
     try:
-        print(
-            f"Tracking reading: user={user_id}, "
-            f"article={data.article_id}, time={data.time_spent_seconds}s"
-        )
-
         payload = {
             "user_id": user_id,
             "article_id": data.article_id,
@@ -218,13 +179,11 @@ async def track_reading(
         }
 
         response = supabase.table("reading_history").upsert(
-            payload,
-            on_conflict="user_id,article_id",
+            payload, on_conflict="user_id,article_id"
         ).execute()
 
         print("Reading tracked successfully")
         return {"success": True, "data": response.data}
-
     except Exception as e:
         print(f"Error tracking reading: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -232,22 +191,15 @@ async def track_reading(
 
 @app.get("/api/bias-profile", response_model=BiasProfile)
 async def get_bias_profile(user_id: str = Depends(get_current_user)):
-    """
-    Calculate user's bias profile based on reading history.
-    Weighted by time spent on each article.
-    """
+    """Calculate user's bias profile from reading history."""
     try:
-        print(f"Fetching bias profile for user: {user_id}")
-
         response = (
             supabase.table("reading_history")
             .select("time_spent_seconds, articles(*)")
             .eq("user_id", user_id)
             .execute()
         )
-
         history = response.data
-        print(f"Found {len(history)} articles in reading history")
 
         if not history:
             return BiasProfile(
@@ -258,11 +210,7 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
                 center_count=0,
                 right_count=0,
                 most_read_source="N/A",
-                bias_distribution={
-                    "left": 0.0,
-                    "center": 0.0,
-                    "right": 0.0,
-                },
+                bias_distribution={"left": 0.0, "center": 0.0, "right": 0.0},
                 reading_time_total_minutes=0,
                 positive_count=0,
                 neutral_count=0,
@@ -276,78 +224,43 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
             for h in history
             if h["articles"].get("bias_score") is not None
         ]
-        if bias_terms:
-            bias_time = sum(t for t, _ in bias_terms)
-            weighted_bias = (
-                sum(t * b for t, b in bias_terms) / bias_time
-                if bias_time > 0
-                else 0.0
-            )
-        else:
-            weighted_bias = 0.0
-
         sent_terms = [
             (h["time_spent_seconds"], h["articles"].get("sentiment_score"))
             for h in history
             if h["articles"].get("sentiment_score") is not None
         ]
-        if sent_terms:
-            sent_time = sum(t for t, _ in sent_terms)
-            weighted_sentiment = (
-                sum(t * s for t, s in sent_terms) / sent_time
-                if sent_time > 0
-                else 0.0
-            )
-        else:
-            weighted_sentiment = 0.0
 
-        left = 0
-        center = 0
-        right = 0
-        for h in history:
-            bias = h["articles"].get("bias_score")
-            if bias is None:
-                continue
-            if bias < -0.3:
-                left += 1
-            elif bias > 0.3:
-                right += 1
-            else:
-                center += 1
+        weighted_bias = (
+            sum(t * b for t, b in bias_terms) / sum(t for t, _ in bias_terms)
+            if bias_terms
+            else 0.0
+        )
+        weighted_sentiment = (
+            sum(t * s for t, s in sent_terms) / sum(t for t, _ in sent_terms)
+            if sent_terms
+            else 0.0
+        )
 
-        pos_count = 0
-        neu_count = 0
-        neg_count = 0
-        for h in history:
-            s = h["articles"].get("sentiment_score")
-            if s is None:
-                continue
-            if s > 0.3:
-                pos_count += 1
-            elif s < -0.3:
-                neg_count += 1
-            else:
-                neu_count += 1
+        left = sum(1 for h in history if (b := h["articles"].get("bias_score")) is not None and b < -0.3)
+        right = sum(1 for h in history if (b := h["articles"].get("bias_score")) is not None and b > 0.3)
+        center = len(history) - left - right
 
-        sources_list = [
+        pos = sum(1 for h in history if (s := h["articles"].get("sentiment_score")) and s > 0.3)
+        neg = sum(1 for h in history if (s := h["articles"].get("sentiment_score")) and s < -0.3)
+        neu = len(history) - pos - neg
+
+        sources = [
             h["articles"]["source"]
             for h in history
             if h["articles"].get("source")
         ]
-        most_common = Counter(sources_list).most_common(1)
-        most_read = most_common[0][0] if most_common else "N/A"
+        most_read = Counter(sources).most_common(1)[0][0] if sources else "N/A"
 
         total_reads = len(history)
         distribution = {
-            "left": round(left / total_reads * 100, 1)
-            if total_reads > 0
-            else 0.0,
-            "center": round(center / total_reads * 100, 1)
-            if total_reads > 0
-            else 0.0,
-            "right": round(right / total_reads * 100, 1)
-            if total_reads > 0
-            else 0.0,
+            "left": round(left / total_reads * 100, 1) if total_reads else 0.0,
+            "center": round(center / total_reads * 100, 1) if total_reads else 0.0,
+            "right": round(right / total_reads * 100, 1) if total_reads else 0.0,
         }
 
         return BiasProfile(
@@ -360,44 +273,31 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
             most_read_source=most_read,
             bias_distribution=distribution,
             reading_time_total_minutes=round(total_time / 60),
-            positive_count=pos_count,
-            neutral_count=neu_count,
-            negative_count=neg_count,
+            positive_count=pos,
+            neutral_count=neu,
+            negative_count=neg,
         )
-
     except Exception as e:
         print(f"Error fetching bias profile: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# NOTE: POST /api/articles/compare kept for backwards compatibility
-# Flutter app now calls GET /articles/compare (via articles router)
 @app.post("/api/articles/compare", response_model=ComparisonResponse)
 async def compare_articles(request: ComparisonRequest):
-    """
-    Find articles from different outlets covering same topic.
-    Groups by political bias band (Left / Center / Right).
-    """
+    """Find articles on the same topic grouped by political bias."""
     try:
         response = (
             supabase.table("articles")
             .select("*")
-            .or_(
-                f"title.ilike.%{request.topic}%,"
-                f"content.ilike.%{request.topic}%"
-            )
+            .or_(f"title.ilike.%{request.topic}%,content.ilike.%{request.topic}%")
             .not_.is_("bias_score", "null")
             .order("published_at", desc=True)
             .execute()
         )
-
         articles_data = response.data
 
         left = [a for a in articles_data if a.get("bias_score", 0) < -0.3]
-        center = [
-            a for a in articles_data
-            if -0.3 <= a.get("bias_score", 0) <= 0.3
-        ]
+        center = [a for a in articles_data if -0.3 <= a.get("bias_score", 0) <= 0.3]
         right = [a for a in articles_data if a.get("bias_score", 0) > 0.3]
 
         return ComparisonResponse(
@@ -407,16 +307,13 @@ async def compare_articles(request: ComparisonRequest):
             right_articles=right,
             total_found=len(articles_data),
         )
-
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get(
-    "/api/fact-checks/{article_id}",
-    response_model=List[FactCheck],
-)
+@app.get("/api/fact-checks/{article_id}", response_model=List[FactCheck])
 async def get_article_fact_checks(article_id: str):
+    """Return stored fact-checks for an article."""
     try:
         response = (
             supabase.table("fact_checks")

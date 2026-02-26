@@ -30,9 +30,9 @@ lxml_html_clean
 # Testing
 pytest
 
-# ML/NLP — transformers loaded locally, no Inference API needed
-# torch 2.2.2 from PyPI = CPU-only on Linux, no CUDA, safe on 512 MB Render free tier
-torch==2.2.2
+# ML/NLP — CPU-safe & memory-efficient for Render
+numpy<2.0
+torch==2.1.0
 transformers==4.40.0
 sentencepiece>=0.1.99
 huggingface_hub>=0.23.0
@@ -42,7 +42,7 @@ en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_
 # Authentication
 firebase-admin==6.5.0
 
-# Evaluation (benchmarks only — not imported in production)
+# Evaluation (optional)
 datasets==3.2.0
 scikit-learn==1.6.1
 pandas
