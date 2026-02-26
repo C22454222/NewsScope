@@ -1,43 +1,47 @@
-
-# app/jobs/fact_checking.py
 """
-NewsScope Fact-Checking Service (Flake8: 0 errors).
+NewsScope Fact-Checking Service.
 Integrates PolitiFact API + spaCy claim extraction.
 """
 
-import httpx
-from typing import Dict, Any, List
 from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List
 
+import httpx
 import spacy
 
 from app.schemas import ArticleResponse
 from app.db.supabase import supabase
 
-
 nlp = spacy.load("en_core_web_sm")
 
 
 def extract_claims(text: str) -> List[str]:
-    """Extract verifiable claims (spaCy + heuristics)."""
+    """Extract verifiable claims using spaCy and heuristics."""
     doc = nlp(text)
-    claims = []
+    claims: List[str] = []
+
     for sent in doc.sents:
-        if (
-            not sent.is_question and len(sent) > 5 and any(
-                token.like_num or token.ent_type_ in ["DATE", "PERSON", "ORG"]
-                for token in sent
-            )
-        ):
-            claims.append(sent.text.strip())
+        sent_text = sent.text.strip()
+
+        # Skip questions
+        if sent_text.endswith("?"):
+            continue
+
+        if len(sent) <= 5:
+            continue
+
+        if any(token.like_num or token.ent_type_ in ("DATE", "PERSON", "ORG") for token in sent):
+            claims.append(sent_text)
+
         if len(claims) >= 5:
             break
+
     return claims
 
 
 async def check_politifact_claims(claims: List[str]) -> Dict[str, Any]:
-    """Query PolitiFact public API."""
-    results = {}
+    """Query PolitiFact public API for claim verification."""
+    results: Dict[str, Any] = {}
     async with httpx.AsyncClient(timeout=10.0) as client:
         for claim in claims:
             try:
@@ -48,6 +52,7 @@ async def check_politifact_claims(claims: List[str]) -> Dict[str, Any]:
                 )
                 resp.raise_for_status()
                 data = resp.json()
+
                 if data.get("items"):
                     top = data["items"][0]
                     ruling = top.get("ruling", {}).get("ruling", "Unknown")
@@ -58,29 +63,31 @@ async def check_politifact_claims(claims: List[str]) -> Dict[str, Any]:
                     }
                 else:
                     results[claim] = {"ruling": "No match", "url": None}
+
             except Exception:
                 results[claim] = {"ruling": "API Error", "url": None}
+
     return results
 
 
 def ruling_to_score(ruling: str) -> float:
-    """PolitiFact ruling → score (0-1)."""
-    ruling_lower = ruling.lower()
-    if "true" in ruling_lower:
+    """Convert PolitiFact ruling to a normalized credibility score (0–1)."""
+    r = ruling.lower()
+    if "true" in r and "mostly" not in r:
         return 1.0
-    if "mostly true" in ruling_lower:
+    if "mostly true" in r:
         return 0.8
-    if "half true" in ruling_lower:
+    if "half true" in r:
         return 0.5
-    if "mostly false" in ruling_lower:
+    if "mostly false" in r:
         return 0.2
-    if "false" in ruling_lower or "pants" in ruling_lower:
+    if "false" in r or "pants" in r:
         return 0.0
     return 0.5
 
 
 async def compute_credibility_score(article: ArticleResponse) -> Dict[str, Any]:
-    """Compute credibility (0-100)."""
+    """Compute a credibility score (0–100) for a given article."""
     text = f"{article.title} {article.description} {article.content}".strip()
     if len(text) < 100:
         return {
@@ -101,6 +108,7 @@ async def compute_credibility_score(article: ArticleResponse) -> Dict[str, Any]:
 
     fact_checks = await check_politifact_claims(claims)
     scores = [ruling_to_score(r["ruling"]) for r in fact_checks.values()]
+
     positive = sum(1 for s in scores if s >= 0.7)
     negative = sum(1 for s in scores if s < 0.3)
 
@@ -118,10 +126,8 @@ async def compute_credibility_score(article: ArticleResponse) -> Dict[str, Any]:
 
 
 async def batch_factcheck_recent(hours: int = 24) -> List[Dict[str, Any]]:
-    """Re-factcheck recent articles."""
-    cutoff = (
-        datetime.now(timezone.utc) - timedelta(hours=hours)
-    ).isoformat()
+    """Re-fact-check recent articles in the past `hours` hours."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
     recent = (
         supabase.table("articles")
         .select("id,title,content,description")
@@ -132,7 +138,7 @@ async def batch_factcheck_recent(hours: int = 24) -> List[Dict[str, Any]]:
         .data
     )
 
-    results = []
+    results: List[Dict[str, Any]] = []
     for art in recent:
         cred = await compute_credibility_score(ArticleResponse(**art))
         supabase.table("articles").update(
@@ -145,4 +151,5 @@ async def batch_factcheck_recent(hours: int = 24) -> List[Dict[str, Any]]:
             }
         ).eq("id", art["id"]).execute()
         results.append({"id": art["id"], **cred})
+
     return results
