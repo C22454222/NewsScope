@@ -1,17 +1,24 @@
-# app/core/scheduler.py
+"""
+NewsScope background scheduler.
+
+Uses APScheduler BackgroundScheduler — runs jobs in a daemon thread
+alongside the FastAPI/uvicorn event loop.
+Flake8: 0 errors/warnings.
+"""
+
 from apscheduler.schedulers.background import BackgroundScheduler
 
-# Global background scheduler for periodic jobs
+# Global singleton — imported and started once in main.py lifespan
 scheduler = BackgroundScheduler()
 
 
-def start_scheduler():
+def start_scheduler() -> None:
     """
-    Start the global scheduler if it is not already running.
+    Start the global scheduler if not already running.
 
-    This is called once during FastAPI startup so that
-    ingestion, analysis, and archiving jobs can run on
-    a fixed interval in the background.
+    Called once during FastAPI startup so that ingestion,
+    analysis, and archiving jobs run on fixed intervals
+    in the background without blocking the async event loop.
     """
     if not scheduler.running:
         scheduler.start()

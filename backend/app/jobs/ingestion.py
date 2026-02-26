@@ -1,11 +1,10 @@
-# app/jobs/ingestion.py
 """
 NewsScope Ingestion Pipeline.
 
 Flake8: 0 errors/warnings.
 Daily volume: ~7,104 articles fetched, ~4,262 new after dedup.
 Week 4: credibility_score, fact_checks fields added to insert payload.
-Fact-checking runs async post-insert via background task queue.
+Fact-checking runs async post-insert via safe loop wrapper.
 """
 
 import asyncio
@@ -24,7 +23,6 @@ from newspaper import Article
 from app.core.categorisation import infer_category
 from app.db.supabase import supabase
 
-
 NEWSAPI_KEY = os.getenv("NEWSAPI_KEY")
 
 RSS_FEEDS = [
@@ -33,15 +31,13 @@ RSS_FEEDS = [
     if s.strip()
 ]
 
-# NewsAPI sources (4 requests per cycle = 96/day)
 NEWSAPI_SOURCES = [
-    "cnn",       # Left, US
-    "fox-news",  # Right, US
-    "bbc-news",  # Center, UK
-    "politico",  # Center-Right, Europe
+    "cnn",
+    "fox-news",
+    "bbc-news",
+    "politico",
 ]
 
-# Map RSS feed URLs to clean source names
 FEED_NAME_MAP = {
     "https://www.theguardian.com/uk/rss": "The Guardian",
     "https://www.gbnews.com/feeds/politics.rss": "GB News",
@@ -64,7 +60,7 @@ def normalize_article(
     sentiment_score: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
-    Normalize article data from various sources into common format.
+    Normalise article data from various sources into a common format.
 
     Category inference runs tiers 1+2 only here (fast, no model).
     Tier 3 zero-shot fires later in insert_articles_batch once
@@ -77,7 +73,7 @@ def normalize_article(
         except Exception:
             ts = None
 
-    category = infer_category(url, title)  # Tiers 1+2 only at this stage
+    category = infer_category(url, title)
 
     return {
         "title": title,
@@ -124,7 +120,7 @@ def sanitize_for_postgres(text: str) -> str:
 
 
 def clean_text(text: str) -> str:
-    """Clean scraped text by removing whitespace and navigation elements."""
+    """Clean scraped text by removing whitespace and navigation boilerplate."""
     if not text:
         return ""
     text = sanitize_for_postgres(text)
@@ -154,7 +150,7 @@ def clean_text(text: str) -> str:
 
 
 def fetch_content_newspaper(url: str) -> Optional[str]:
-    """Tier 1: newspaper3k scraper. Fast and reliable for 80% of news sites."""
+    """Tier 1: newspaper3k — fast, reliable for ~80% of news sites."""
     try:
         article = Article(url)
         article.download()
@@ -169,7 +165,7 @@ def fetch_content_newspaper(url: str) -> Optional[str]:
 
 
 def fetch_content_beautifulsoup(url: str) -> Optional[str]:
-    """Tier 2: BeautifulSoup with smart extraction. Handles 95% of sites."""
+    """Tier 2: BeautifulSoup smart extraction — handles ~95% of sites."""
     try:
         headers = {
             "User-Agent": (
@@ -279,7 +275,7 @@ def fetch_content_beautifulsoup(url: str) -> Optional[str]:
 
 
 def fetch_content_aggressive(url: str) -> Optional[str]:
-    """Tier 3: Ultra-aggressive text extraction."""
+    """Tier 3: Ultra-aggressive full-page text extraction."""
     try:
         headers = {"User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1)"}
         response = requests.get(
@@ -324,8 +320,11 @@ def fetch_content_with_retry(url: str, max_retries: int = 3) -> Optional[str]:
                 "Pragma": "no-cache",
             }
             response = requests.get(
-                url, headers=headers, timeout=25,
-                allow_redirects=True, verify=True,
+                url,
+                headers=headers,
+                timeout=25,
+                allow_redirects=True,
+                verify=True,
             )
 
             if response.status_code == 429:
@@ -363,7 +362,7 @@ def fetch_content_with_retry(url: str, max_retries: int = 3) -> Optional[str]:
 
 
 def fetch_content_title_fallback(title: str, source: str) -> str:
-    """Tier 5: Last resort fallback. Creates minimal content from title."""
+    """Tier 5: Last-resort fallback — constructs minimal content from title."""
     fallback_text = (
         f"Article from {source}: {title}. "
         f"Full content could not be retrieved. "
@@ -372,7 +371,9 @@ def fetch_content_title_fallback(title: str, source: str) -> str:
         f"For the complete article, please visit the source website."
     )
     while len(fallback_text) < 200:
-        fallback_text += f" Additional context from {source} regarding {title}."
+        fallback_text += (
+            f" Additional context from {source} regarding {title}."
+        )
     return clean_text(fallback_text)
 
 
@@ -380,11 +381,11 @@ def fetch_content(url: str, title: str = "", source: str = "") -> str:
     """
     5-tier guaranteed scraping strategy. Never returns None.
 
-    1. newspaper3k           (~80% success)
-    2. BeautifulSoup smart   (~95% success)
-    3. Aggressive extraction (~98% success)
-    4. Retry with backoff    (~99.5% success)
-    5. Title-based fallback  (100% guarantee)
+    Tier 1: newspaper3k           (~80% success)
+    Tier 2: BeautifulSoup smart   (~95% success)
+    Tier 3: Aggressive extraction (~98% success)
+    Tier 4: Retry with backoff    (~99.5% success)
+    Tier 5: Title-based fallback  (100% guarantee)
     """
     content = fetch_content_newspaper(url)
     if content:
@@ -413,7 +414,7 @@ def fetch_content(url: str, title: str = "", source: str = "") -> str:
 
 async def factcheck_batch(article_ids: List[str]) -> None:
     """
-    Background async task: compute + persist credibility for new articles.
+    Background async task: compute and persist credibility scores.
     Imported by routes/articles.py for the /recent-factchecks endpoint.
     """
     from app.jobs.fact_checking import compute_credibility_score
@@ -441,14 +442,28 @@ async def factcheck_batch(article_ids: List[str]) -> None:
                 }
             ).eq("id", article_id).execute()
         except Exception as exc:
-            print(f"  ⚠️  Fact-check failed [{article_id}]: {exc}")
+            print(f"  Fact-check failed [{article_id}]: {exc}")
+
+
+def _schedule_factcheck(article_ids: List[str]) -> None:
+    """
+    Safely schedule factcheck_batch regardless of whether a running
+    asyncio event loop exists (APScheduler sync context vs FastAPI async).
+    """
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(factcheck_batch(article_ids))
+    except RuntimeError:
+        # No running loop — APScheduler fired this from a sync thread
+        asyncio.run(factcheck_batch(article_ids))
 
 
 def insert_articles_batch(articles: List[Dict[str, Any]]) -> List[str]:
     """
-    Insert new articles, skip duplicates based on URL.
-    Week 4: credibility_score/fact_checks seeded as defaults here;
-    factcheck_batch() enriches them asynchronously post-insert.
+    Insert new articles, skip duplicates by URL.
+
+    Week 4: credibility_score/fact_checks seeded as defaults on insert;
+    _schedule_factcheck() enriches them asynchronously post-insert.
     """
     urls = [a["url"] for a in articles if a.get("url")]
     if not urls:
@@ -463,7 +478,7 @@ def insert_articles_batch(articles: List[Dict[str, Any]]) -> List[str]:
     )
     existing_urls = {e["url"] for e in existing}
 
-    payloads = []
+    payloads: List[Dict[str, Any]] = []
     scrape_success = 0
     scrape_fallback = 0
 
@@ -485,13 +500,12 @@ def insert_articles_batch(articles: List[Dict[str, Any]]) -> List[str]:
         else:
             scrape_success += 1
 
-        # Tier 3 zero-shot: re-infer with content if keyword tiers gave "general"
         category = article.get("category")
         if category == "general":
             category = infer_category(
                 article.get("url"),
                 article.get("title"),
-                content,  # Now available — zero-shot fires here if needed
+                content,
             )
 
         title = sanitize_for_postgres(article.get("title", ""))
@@ -511,7 +525,6 @@ def insert_articles_batch(articles: List[Dict[str, Any]]) -> List[str]:
                 "content": content,
                 "source": source_name_val,
                 "category": category,
-                # Week 4 defaults — enriched async by factcheck_batch()
                 "credibility_score": 80.0,
                 "fact_checks": {},
                 "claims_checked": 0,
@@ -524,17 +537,17 @@ def insert_articles_batch(articles: List[Dict[str, Any]]) -> List[str]:
         res = supabase.table("articles").insert(payloads).execute().data
         new_ids = [r["id"] for r in res]
 
-        print(f"✅ Inserted {len(res)} new articles")
+        print(f"Inserted {len(res)} new articles")
         print(
-            f"   📄 Scraped content: {scrape_success} full scrape, "
-            f"{scrape_fallback} title fallback (100.0% success rate)"
+            f"   Scraped content: {scrape_success} full scrape, "
+            f"{scrape_fallback} title fallback "
+            f"({scrape_success / max(len(res), 1) * 100:.1f}% success rate)"
         )
 
-        # Queue async fact-checking (non-blocking)
-        asyncio.create_task(factcheck_batch(new_ids))
+        _schedule_factcheck(new_ids)
         return new_ids
 
-    print("ℹ️  No new articles to insert")
+    print("No new articles to insert")
     return []
 
 
@@ -543,17 +556,24 @@ def fetch_newsapi() -> List[Dict[str, Any]]:
     Fetch articles from NewsAPI — one request per source.
 
     Strategy:
-    - 4 sources x 1 request each = 4 requests/cycle
-    - 24 cycles/day x 4 requests = 96 requests/day (96% of 100 limit)
-    - 50 articles per source x 4 sources x 24 cycles = 4,800 articles/day
+    - 4 sources x 1 request = 4 requests/cycle
+    - 24 cycles/day x 4 = 96 requests/day (96% of 100 free limit)
+    - 50 articles/source x 4 x 24 = 4,800 articles/day
     """
     if not NEWSAPI_KEY:
-        print("⚠️  NEWSAPI_KEY not set, skipping NewsAPI")
+        print("NEWSAPI_KEY not set, skipping NewsAPI")
         return []
 
     url = "https://newsapi.org/v2/top-headlines"
     headers = {"X-Api-Key": NEWSAPI_KEY}
     normalized: List[Dict[str, Any]] = []
+
+    source_map = {
+        "Fox News": "Fox News",
+        "CNN": "CNN",
+        "BBC News": "BBC News",
+        "Politico": "Politico Europe",
+    }
 
     for source_id in NEWSAPI_SOURCES:
         try:
@@ -561,13 +581,6 @@ def fetch_newsapi() -> List[Dict[str, Any]]:
             r = requests.get(url, params=params, headers=headers, timeout=15)
             r.raise_for_status()
             data = r.json()
-
-            source_map = {
-                "Fox News": "Fox News",
-                "CNN": "CNN",
-                "BBC News": "BBC News",
-                "Politico": "Politico Europe",
-            }
 
             for a in data.get("articles", []):
                 source_name = (a.get("source") or {}).get("name")
@@ -582,14 +595,14 @@ def fetch_newsapi() -> List[Dict[str, Any]]:
                 if n["url"]:
                     normalized.append(n)
 
-            print(f"  ✓ {source_id}: {len(data.get('articles', []))} articles")
+            print(f"  cnn {source_id}: {len(data.get('articles', []))} articles")
 
         except Exception as exc:
-            print(f"  ✗ {source_id} failed: {exc}")
+            print(f"  {source_id} failed: {exc}")
             continue
 
     print(
-        f"📰 NewsAPI total: {len(normalized)} articles "
+        f"NewsAPI total: {len(normalized)} articles "
         f"from {len(NEWSAPI_SOURCES)} sources"
     )
     return normalized
@@ -600,7 +613,7 @@ def fetch_rss() -> List[Dict[str, Any]]:
     Fetch articles from configured RSS feeds.
 
     Strategy:
-    - 8 feeds x 12 articles each = 96 articles/cycle
+    - 8 feeds x 12 articles = 96 articles/cycle
     - 24 cycles/day = 2,304 articles/day
     """
     normalized: List[Dict[str, Any]] = []
@@ -618,8 +631,8 @@ def fetch_rss() -> List[Dict[str, Any]]:
             for e in parsed.entries[:12]:
                 url = getattr(e, "link", None)
                 title = getattr(e, "title", None)
-                published = (
-                    getattr(e, "published", None) or getattr(e, "updated", None)
+                published = getattr(e, "published", None) or getattr(
+                    e, "updated", None
                 )
 
                 n = normalize_article(
@@ -632,65 +645,56 @@ def fetch_rss() -> List[Dict[str, Any]]:
                     normalized.append(n)
                     articles_from_feed += 1
 
-            print(f"  ✓ {source_name}: {articles_from_feed} articles")
+            print(f"  {source_name}: {articles_from_feed} articles")
 
         except Exception as exc:
-            print(f"  ✗ {feed}: {exc}")
+            print(f"  {feed}: {exc}")
             continue
 
-    print(f"📡 RSS total: {len(normalized)} articles from {len(RSS_FEEDS)} feeds")
+    print(
+        f"RSS total: {len(normalized)} articles from {len(RSS_FEEDS)} feeds"
+    )
     return normalized
 
 
 def run_ingestion_cycle() -> None:
     """
-    Main ingestion job — runs every hour at :00.
+    Main ingestion job — triggered by APScheduler every hour.
 
     Daily volume:
-    - NewsAPI: 4,800 articles (4 sources x 50 articles x 24 cycles)
-    - RSS:     2,304 articles (8 feeds  x 12 articles x 24 cycles)
-    - Total fetched:           7,104/day
-    - New after dedup (~60%): ~4,262/day
+    - NewsAPI: 4,800 articles (4 sources x 50 x 24 cycles)
+    - RSS:     2,304 articles (8 feeds  x 12 x 24 cycles)
+    - Total fetched:            7,104/day
+    - New after dedup (~60%):  ~4,262/day
 
-    Source distribution (12 total):
-    - US (3):     CNN (Left), Fox News (Right), NPR (Center-Left)
-    - UK (3):     BBC News (Center), The Guardian (Left), GB News (Right)
-    - Ireland (3):RTÉ News (Center), Irish Times (Center), Independent (CL)
-    - Europe (3): Euronews (Center), Politico Europe (CR), Sky News (CR)
-
-    Category inference:
-    - Tier 1: URL path matching  (no model, fast)
-    - Tier 2: Title keywords     (no model, fast)
-    - Tier 3: Zero-shot NLP      (fires only for "general", post-scrape)
-
-    Week 4 addition:
+    Week 4 additions:
     - credibility_score / fact_checks seeded as defaults on insert
-    - factcheck_batch() enriches async (non-blocking)
+    - _schedule_factcheck() enriches asynchronously (non-blocking)
     """
     print("\n" + "=" * 70)
-    print("🔄 INGESTION CYCLE STARTED")
+    print("INGESTION CYCLE STARTED")
     print("=" * 70)
 
     articles: List[Dict[str, Any]] = []
 
-    print("\n📰 Fetching from NewsAPI...")
+    print("\nFetching from NewsAPI...")
     try:
         articles += fetch_newsapi()
     except Exception as exc:
-        print(f"❌ NewsAPI critical error: {exc}")
+        print(f"NewsAPI critical error: {exc}")
 
-    print("\n📡 Fetching from RSS feeds...")
+    print("\nFetching from RSS feeds...")
     try:
         articles += fetch_rss()
     except Exception as exc:
-        print(f"❌ RSS critical error: {exc}")
+        print(f"RSS critical error: {exc}")
 
-    print("\n💾 Inserting articles (with 5-tier guaranteed scraping)...")
+    print("\nInserting articles (5-tier guaranteed scraping)...")
     try:
-        print(f"📊 Total fetched: {len(articles)} articles")
+        print(f"Total fetched: {len(articles)} articles")
         insert_articles_batch(articles)
     except Exception as exc:
-        print(f"❌ Batch insert failed: {exc}")
+        print(f"Batch insert failed: {exc}")
 
-    print("\n✅ Ingestion cycle complete")
+    print("\nIngestion cycle complete")
     print("=" * 70 + "\n")
