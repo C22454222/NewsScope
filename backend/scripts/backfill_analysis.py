@@ -7,6 +7,7 @@ from app.db.supabase import supabase
 
 # Add backend to path so imports works
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+print("Hello")
 
 
 def run_backfill():
