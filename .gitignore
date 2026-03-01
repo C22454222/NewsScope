@@ -33,6 +33,8 @@ Thumbs.db
 
 # Virtual environments
 venv/
+.venv/
+.venv-*/
 backend/venv/
 
 # Firebase config
