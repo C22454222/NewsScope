@@ -1,3 +1,14 @@
-1. Look at categorising articles for home page and comparison page
-2. Once every article is in a category update UI home page and comparison page
-3. Release date of each article
+Bump transformers from 4.49.0 to 4.53.0
+
+Bumps [transformers](https://github.com/huggingface/transformers) from 4.49.0 to 4.53.0.
+- [Release notes](https://github.com/huggingface/transformers/releases)
+- [Commits](https://github.com/huggingface/transformers/compare/v4.49.0...v4.53.0)
+
+---
+updated-dependencies:
+- dependency-name: transformers
+  dependency-version: 4.53.0
+  dependency-type: direct:production
+...
+
+Signed-off-by: dependabot[bot] <support@github.com>
