@@ -1,6 +1,6 @@
-tree be41e53d5f58f7cce3d65b1d8291b06f5091c839
-parent 04673f186138b328d5285d05f1252864ef90fe3d
-author Christopher Noblett <C22454222@mytudublin.ie> 1763917865 +0000
-committer Christopher Noblett <C22454222@mytudublin.ie> 1763917865 +0000
+tree 213ac784877cb5fd1d1f05467a86048208233231
+parent fde62bda927157a933003905686ea1b3b8738f08
+author Christopher Noblett <C22454222@mytudublin.ie> 1769700325 +0000
+committer Christopher Noblett <C22454222@mytudublin.ie> 1769700325 +0000
 
-Trying to ingest articles onto my home screen
+Changing bias model to one with inference Huggin Face API Support
