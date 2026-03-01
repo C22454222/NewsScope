@@ -1,0 +1,11 @@
+c8a7a6c3f626bc4b73cba9b683ad1b554965d79d commit	refs/heads/constrain-deps-acb62
+3952726ee8c650c616a42cea682660a9d90d2d18 commit	refs/heads/dependabot/pip/requests-2.32.4
+2fb8bce6a87e70be302c528ce9a7e14e3f2772a1 commit	refs/heads/dependabot/pip/starlette-0.49.1
+287ea119a6d6286538ce8ad8edd8e22b751f34d5 commit	refs/heads/dependabot/pip/torch-2.8.0
+3d12134830cec2657cb1e08c46f3cf4f36ee5221 commit	refs/heads/dependabot/pip/transformers-4.53.0
+b3abf890cf1bccf9dcbd515b3c2d304a57661cbe commit	refs/heads/dev
+243b4aae92967d13b71c39b8a948dc28c07e0dca commit	refs/heads/main
+3070ab91cfbfec7cbb6bbf90f96cc691ac03005e commit	refs/remotes/origin/HEAD
+87c9d3e0900561ba0b34a1dbd0d96cf963694ca7 commit	refs/remotes/origin/constrain-deps-acb62
+b3abf890cf1bccf9dcbd515b3c2d304a57661cbe commit	refs/remotes/origin/dev
+3070ab91cfbfec7cbb6bbf90f96cc691ac03005e commit	refs/remotes/origin/main
