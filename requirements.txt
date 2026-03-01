@@ -35,9 +35,9 @@ pytest
 # transformers>=4.48.0 fixes deserialization (CVE-2024-3568, CVE-2024-11393), ReDoS (CVE-2024-12720)
 # sentencepiece>=0.2.1 fixes CVE-2026-1260 (heap overflow)
 numpy>=1.24,<2.0
-torch>=2.6.0
-transformers>=4.48.0
-sentencepiece>=0.2.1
+torch>=2.6.0,<2.11
+transformers>=4.48.0,<5.0
+sentencepiece>=0.2.1,<0.3
 huggingface_hub>=0.23.0
 spacy>=3.7.0
 en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
