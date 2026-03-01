@@ -5,8 +5,8 @@ uvicorn[standard]==0.37.0
 pydantic>=2.11.7,<3.0
 
 # HTTP clients
-httpx==0.27.2
-requests==2.32.4
+httpx>=0.27.2
+requests>=2.32.4
 
 # Environment
 python-dotenv==1.0.1
@@ -16,7 +16,7 @@ SQLAlchemy==2.0.43
 psycopg2-binary==2.9.10
 supabase==2.23.2
 
-# Scheduling + feedss
+# Scheduling + feeds
 apscheduler==3.10.4
 feedparser==6.0.11
 python-dateutil==2.9.0.post0
@@ -31,10 +31,13 @@ lxml_html_clean
 pytest
 
 # ML/NLP — CPU-safe & memory-efficient for Render
-numpy<2.0
-torch==2.1.0
-transformers==4.40.0
-sentencepiece>=0.1.99
+# torch>=2.6.0 fixes CVE-2025-32434 (Critical RCE), heap overflow, use-after-free
+# transformers>=4.48.0 fixes deserialization (CVE-2024-3568, CVE-2024-11393), ReDoS (CVE-2024-12720)
+# sentencepiece>=0.2.1 fixes CVE-2026-1260 (heap overflow)
+numpy>=1.24,<2.0
+torch>=2.6.0
+transformers>=4.48.0
+sentencepiece>=0.2.1
 huggingface_hub>=0.23.0
 spacy>=3.7.0
 en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
