@@ -37,3 +37,4 @@ backend/venv/
 
 # Firebase config
 google-services.json
+.venv-check/
