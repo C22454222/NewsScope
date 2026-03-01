@@ -1,6 +1,8 @@
-tree ba4fa00f0d097ebce689bea00b3990dcce846851
-parent 0b3338fe28c490f074a92e6e1af209df25fa3d83
-author Christopher Noblett <C22454222@mytudublin.ie> 1763211054 +0000
-committer GitHub <noreply@github.com> 1763211054 +0000
+tree 03588769c77a158250a298c22e64723d0117b8df
+parent 3a02ddad075b24e6f1bbfc7bba43f4733a346c37
+author Christopher Noblett <C22454222@mytudublin.ie> 1763211371 +0000
+committer GitHub <noreply@github.com> 1763211371 +0000
 
-Update CodeQL workflow for Android module and dependencies
+Enhance CodeQL workflow for Kotlin/Gradle with Flutter
+
+Added Flutter setup and environment variable export for Kotlin/Gradle build.
