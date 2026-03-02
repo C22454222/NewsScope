@@ -53,6 +53,20 @@ FEED_NAME_MAP = {
 # Max concurrent scrape workers — keeps RAM and network sockets bounded
 _SCRAPE_WORKERS = 6
 
+# Main event loop — captured at startup by set_main_event_loop()
+_main_event_loop: Optional[asyncio.AbstractEventLoop] = None
+
+
+def set_main_event_loop(
+    loop: asyncio.AbstractEventLoop,
+) -> None:
+    """
+    Store the main event loop so thread workers can schedule coroutines.
+    Called once from lifespan in main.py before any jobs run.
+    """
+    global _main_event_loop
+    _main_event_loop = loop
+
 
 def normalize_article(
     *,
@@ -119,12 +133,14 @@ def sanitize_for_postgres(text: str) -> str:
     text = text.replace("\x00", "")
     text = text.replace("\u0000", "")
     text = re.sub(r"[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f]", "", text)
-    text = text.encode("utf-8", errors="ignore").decode("utf-8", errors="ignore")
+    text = text.encode("utf-8", errors="ignore").decode(
+        "utf-8", errors="ignore"
+    )
     return text
 
 
 def clean_text(text: str) -> str:
-    """Clean scraped text by removing whitespace and navigation boilerplate."""
+    """Clean scraped text: remove whitespace and navigation boilerplate."""
     if not text:
         return ""
     text = sanitize_for_postgres(text)
@@ -241,7 +257,9 @@ def fetch_content_beautifulsoup(url: str) -> Optional[str]:
             try:
                 elements = soup.select(selector)
                 if elements:
-                    text = elements[0].get_text(separator="\n", strip=True)
+                    text = elements[0].get_text(
+                        separator="\n", strip=True
+                    )
                     if len(text) > 150:
                         content = text
                         break
@@ -283,7 +301,9 @@ def fetch_content_beautifulsoup(url: str) -> Optional[str]:
 def fetch_content_aggressive(url: str) -> Optional[str]:
     """Tier 3: Ultra-aggressive full-page text extraction."""
     try:
-        headers = {"User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1)"}
+        headers = {
+            "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1)"
+        }
         response = requests.get(
             url, headers=headers, timeout=15, allow_redirects=True
         )
@@ -370,7 +390,7 @@ def fetch_content_with_retry(
 
 
 def fetch_content_title_fallback(title: str, source: str) -> str:
-    """Tier 5: Last-resort fallback — constructs minimal content from title."""
+    """Tier 5: Last-resort fallback — builds minimal content from title."""
     fallback_text = (
         f"Article from {source}: {title}. "
         f"Full content could not be retrieved. "
@@ -487,7 +507,9 @@ async def factcheck_batch(article_ids: List[str]) -> None:
             )
             if not data:
                 continue
-            cred = await compute_credibility_score(ArticleResponse(**data[0]))
+            cred = await compute_credibility_score(
+                ArticleResponse(**data[0])
+            )
             supabase.table("articles").update(
                 {
                     "credibility_score": cred["score"],
@@ -503,22 +525,18 @@ async def factcheck_batch(article_ids: List[str]) -> None:
 
 def _schedule_factcheck(article_ids: List[str]) -> None:
     """
-    Safely schedule factcheck_batch from any context.
+    Schedule factcheck_batch onto the main event loop from any thread.
 
-    Called from a thread-pool worker (inside asyncio.to_thread), so
-    there IS a running event loop — use run_coroutine_threadsafe to
-    schedule the coroutine onto it without creating a second loop.
+    Uses the loop captured at startup via set_main_event_loop() —
+    safe to call from inside ThreadPoolExecutor workers where
+    asyncio.get_event_loop() has no running loop.
     """
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            asyncio.run_coroutine_threadsafe(
-                factcheck_batch(article_ids), loop
-            )
-        else:
-            loop.run_until_complete(factcheck_batch(article_ids))
-    except Exception as exc:
-        print(f"Could not schedule fact-check: {exc}")
+    if _main_event_loop is None or not _main_event_loop.is_running():
+        print("Fact-check skipped — no running event loop captured.")
+        return
+    asyncio.run_coroutine_threadsafe(
+        factcheck_batch(article_ids), _main_event_loop
+    )
 
 
 def insert_articles_batch(articles: List[Dict[str, Any]]) -> List[str]:
@@ -568,13 +586,13 @@ def insert_articles_batch(articles: List[Dict[str, Any]]) -> List[str]:
                     scrape_fallback += 1
                 else:
                     scrape_success += 1
-                # Strip internal flag before inserting
                 result.pop("_is_fallback", None)
                 payloads.append(result)
             except Exception as exc:
                 article = futures[future]
                 print(
-                    f"  Scrape error [{article.get('url', '?')}]: {exc}"
+                    f"  Scrape error "
+                    f"[{article.get('url', '?')}]: {exc}"
                 )
 
     if payloads:
@@ -705,7 +723,8 @@ def fetch_rss() -> List[Dict[str, Any]]:
             continue
 
     print(
-        f"RSS total: {len(normalized)} articles from {len(RSS_FEEDS)} feeds"
+        f"RSS total: {len(normalized)} articles "
+        f"from {len(RSS_FEEDS)} feeds"
     )
     return normalized
 

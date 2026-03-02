@@ -13,7 +13,7 @@ import firebase_admin
 from firebase_admin import credentials, auth
 
 from app.routes import articles, users, sources
-from app.jobs.ingestion import run_ingestion_cycle
+from app.jobs.ingestion import run_ingestion_cycle, set_main_event_loop
 from app.jobs.analysis import analyze_unscored_articles
 from app.jobs.archiving import archive_old_articles
 from app.jobs.keep_alive import start_keep_alive
@@ -27,7 +27,7 @@ from app.schemas import (
 )
 from app.core.scheduler import start_scheduler
 
-# ── Startup health flag — always return 200 immediately ──────────────────────
+# ── Startup complete flag — health returns 200 from first ping ────────────────
 _startup_complete = False
 
 # ── Ingestion guard — prevents overlap with analysis ─────────────────────────
@@ -64,6 +64,9 @@ async def lifespan(app: FastAPI):
     from app.core.scheduler import scheduler
 
     start_scheduler()
+
+    # Capture the running event loop for thread workers in ingestion.py
+    set_main_event_loop(asyncio.get_event_loop())
 
     # Ingestion on the hour
     scheduler.add_job(
@@ -141,7 +144,9 @@ async def _run_startup_ingestion() -> None:
 app = FastAPI(title="NewsScope API", version="1.0.0", lifespan=lifespan)
 
 
-def get_current_user(authorization: Optional[str] = Header(None)) -> str:
+def get_current_user(
+    authorization: Optional[str] = Header(None),
+) -> str:
     """Extract user ID from Firebase JWT token."""
     if not authorization:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -154,11 +159,17 @@ def get_current_user(authorization: Optional[str] = Header(None)) -> str:
         print(f"Authenticated user: {user_id}")
         return user_id
     except auth.InvalidIdTokenError:
-        raise HTTPException(status_code=401, detail="Invalid authentication token")
+        raise HTTPException(
+            status_code=401, detail="Invalid authentication token"
+        )
     except auth.ExpiredIdTokenError:
-        raise HTTPException(status_code=401, detail="Authentication token expired")
+        raise HTTPException(
+            status_code=401, detail="Authentication token expired"
+        )
     except Exception as e:
-        raise HTTPException(status_code=401, detail=f"Authentication failed: {e}")
+        raise HTTPException(
+            status_code=401, detail=f"Authentication failed: {e}"
+        )
 
 
 @app.get("/")
@@ -201,7 +212,8 @@ async def debug_archive(background_tasks: BackgroundTasks):
 
 @app.post("/api/reading-history")
 async def track_reading(
-    data: ReadingHistoryCreate, user_id: str = Depends(get_current_user)
+    data: ReadingHistoryCreate,
+    user_id: str = Depends(get_current_user),
 ):
     """Track article reading time for bias profile calculation."""
     try:
@@ -244,7 +256,9 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
                 center_count=0,
                 right_count=0,
                 most_read_source="N/A",
-                bias_distribution={"left": 0.0, "center": 0.0, "right": 0.0},
+                bias_distribution={
+                    "left": 0.0, "center": 0.0, "right": 0.0
+                },
                 reading_time_total_minutes=0,
                 positive_count=0,
                 neutral_count=0,
@@ -304,13 +318,21 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
             for h in history
             if h["articles"].get("source")
         ]
-        most_read = Counter(sources).most_common(1)[0][0] if sources else "N/A"
+        most_read = (
+            Counter(sources).most_common(1)[0][0] if sources else "N/A"
+        )
 
         total_reads = len(history)
         distribution = {
-            "left": round(left / total_reads * 100, 1) if total_reads else 0.0,
-            "center": round(center / total_reads * 100, 1) if total_reads else 0.0,
-            "right": round(right / total_reads * 100, 1) if total_reads else 0.0,
+            "left": (
+                round(left / total_reads * 100, 1) if total_reads else 0.0
+            ),
+            "center": (
+                round(center / total_reads * 100, 1) if total_reads else 0.0
+            ),
+            "right": (
+                round(right / total_reads * 100, 1) if total_reads else 0.0
+            ),
         }
 
         return BiasProfile(
@@ -340,7 +362,8 @@ async def compare_articles(request: ComparisonRequest):
             supabase.table("articles")
             .select("*")
             .or_(
-                f"title.ilike.%{request.topic}%,content.ilike.%{request.topic}%"
+                f"title.ilike.%{request.topic}%,"
+                f"content.ilike.%{request.topic}%"
             )
             .not_.is_("bias_score", "null")
             .order("published_at", desc=True)
@@ -348,11 +371,16 @@ async def compare_articles(request: ComparisonRequest):
         )
         articles_data = response.data
 
-        left = [a for a in articles_data if a.get("bias_score", 0) < -0.3]
-        center = [
-            a for a in articles_data if -0.3 <= a.get("bias_score", 0) <= 0.3
+        left = [
+            a for a in articles_data if a.get("bias_score", 0) < -0.3
         ]
-        right = [a for a in articles_data if a.get("bias_score", 0) > 0.3]
+        center = [
+            a for a in articles_data
+            if -0.3 <= a.get("bias_score", 0) <= 0.3
+        ]
+        right = [
+            a for a in articles_data if a.get("bias_score", 0) > 0.3
+        ]
 
         return ComparisonResponse(
             topic=request.topic,
