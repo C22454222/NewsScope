@@ -13,13 +13,13 @@ Flake8: 0 errors/warnings.
 """
 
 import os
+import asyncio
 from typing import Optional, Tuple
 
 from app.db.supabase import supabase
 
 HF_API_TOKEN = os.getenv("HF_API_TOKEN", "")
 
-# Allow model override via env vars
 SENTIMENT_MODEL = os.getenv(
     "HF_SENTIMENT_MODEL",
     "cardiffnlp/twitter-roberta-base-sentiment-latest",
@@ -40,6 +40,9 @@ _sentiment_pipeline = None
 _political_pipeline = None
 _general_bias_pipeline = None
 
+# ── Concurrency guard — prevents overlapping analysis runs ───────────────────
+_analysis_running = False
+
 
 def _get_sentiment_pipeline():
     """Load sentiment pipeline once and cache."""
@@ -54,7 +57,7 @@ def _get_sentiment_pipeline():
             tokenizer=SENTIMENT_MODEL,
             truncation=True,
             max_length=512,
-            device=-1,  # CPU — safe on 512 MB
+            device=-1,
             top_k=None,
         )
         print("Sentiment model loaded.")
@@ -170,7 +173,6 @@ def _sentiment_score(text: str) -> Optional[float]:
         pipe = _get_sentiment_pipeline()
         results = pipe(text[:512])
 
-        # pipeline with top_k=None returns list of lists
         items = results[0] if isinstance(results[0], list) else results
 
         sentiment_map: dict = {}
@@ -251,19 +253,14 @@ def _detect_general_bias(
 
         if "BIASED" in top_upper and "UN" not in top_upper:
             label = "BIASED"
-        elif (
-            "UNBIASED" in top_upper or "NON" in top_upper or "NEUTRAL" in top_upper
-        ):
+        elif "UNBIASED" in top_upper or "NON" in top_upper or "NEUTRAL" in top_upper:
             label = "UNBIASED"
         elif top_upper in ("LABEL_1", "1"):
             label = "BIASED"
         elif top_upper in ("LABEL_0", "0"):
             label = "UNBIASED"
         else:
-            print(
-                f"Unknown general bias label: '{top_label}' "
-                f"— defaulting to UNBIASED"
-            )
+            print(f"Unknown general bias label: '{top_label}' — defaulting to UNBIASED")
             label = "UNBIASED"
 
         print(f"General bias: {label} (confidence={confidence:.2%})")
@@ -304,17 +301,65 @@ def _hybrid_bias_analysis(
     return source_bias, 0.5
 
 
-# ── Public entry point ────────────────────────────────────────────────────────
+# ── Sync worker — runs in thread pool, never blocks the event loop ────────────
+
+_BATCH_SIZE = 5  # Process articles in small batches to cap peak RAM
 
 
-def analyze_unscored_articles() -> None:
-    """
-    Fetch and score all articles with null sentiment_score.
-    Runs as a background scheduled job after each ingestion cycle.
-    Limited to 25 articles per cycle to stay within RAM budget.
-    """
+def _score_article(article: dict) -> dict:
+    """Score a single article synchronously. Called from thread pool."""
     import time
 
+    content = article.get("content") or ""
+    title = article.get("title") or ""
+    source = article.get("source") or ""
+    text = f"{title}. {content}".strip()
+
+    if len(text) < 10:
+        print(f"Skipping article {article['id']} — no content")
+        return {}
+
+    sentiment = _sentiment_score(text)
+    time.sleep(0.3)
+
+    bias_score, bias_intensity = _hybrid_bias_analysis(text, source)
+    time.sleep(0.3)
+
+    general_bias_label, general_bias_score = _detect_general_bias(text)
+
+    sent_str = f"{sentiment:.3f}" if sentiment is not None else "N/A"
+    bias_str = f"{bias_score:.2f}" if bias_score is not None else "N/A"
+    intensity_str = f"{bias_intensity:.2f}" if bias_intensity is not None else "N/A"
+
+    print(
+        f"Article {article['id']}: "
+        f"Sentiment={sent_str}, "
+        f"Bias={bias_str}, "
+        f"Intensity={intensity_str}, "
+        f"GeneralBias={general_bias_label} "
+        f"({source})"
+    )
+
+    update_data: dict = {}
+    if sentiment is not None:
+        update_data["sentiment_score"] = sentiment
+    if bias_score is not None:
+        update_data["bias_score"] = bias_score
+    if bias_intensity is not None:
+        update_data["bias_intensity"] = bias_intensity
+    if general_bias_label is not None:
+        update_data["general_bias"] = general_bias_label
+    if general_bias_score is not None:
+        update_data["general_bias_score"] = general_bias_score
+
+    return {"id": article["id"], "update": update_data}
+
+
+def _run_analysis_sync() -> None:
+    """
+    Blocking analysis worker — must be called via asyncio.to_thread().
+    Fetches unscored articles in batches and scores each one.
+    """
     print("Starting analysis job...")
 
     response = (
@@ -335,54 +380,37 @@ def analyze_unscored_articles() -> None:
         f"(hybrid methodology + general bias)..."
     )
 
-    for article in articles:
-        content = article.get("content") or ""
-        title = article.get("title") or ""
-        source = article.get("source") or ""
-        text = f"{title}. {content}".strip()
-
-        if len(text) < 10:
-            print(f"Skipping article {article['id']} — no content")
-            continue
-
-        sentiment = _sentiment_score(text)
-        time.sleep(0.5)
-
-        bias_score, bias_intensity = _hybrid_bias_analysis(text, source)
-        time.sleep(0.5)
-
-        general_bias_label, general_bias_score = _detect_general_bias(text)
-
-        sent_str = f"{sentiment:.3f}" if sentiment is not None else "N/A"
-        bias_str = f"{bias_score:.2f}" if bias_score is not None else "N/A"
-        intensity_str = (
-            f"{bias_intensity:.2f}" if bias_intensity is not None else "N/A"
-        )
-
-        print(
-            f"Article {article['id']}: "
-            f"Sentiment={sent_str}, "
-            f"Bias={bias_str}, "
-            f"Intensity={intensity_str}, "
-            f"GeneralBias={general_bias_label} "
-            f"({source})"
-        )
-
-        update_data: dict = {}
-        if sentiment is not None:
-            update_data["sentiment_score"] = sentiment
-        if bias_score is not None:
-            update_data["bias_score"] = bias_score
-        if bias_intensity is not None:
-            update_data["bias_intensity"] = bias_intensity
-        if general_bias_label is not None:
-            update_data["general_bias"] = general_bias_label
-        if general_bias_score is not None:
-            update_data["general_bias_score"] = general_bias_score
-
-        if update_data:
-            supabase.table("articles").update(update_data).eq(
-                "id", article["id"]
-            ).execute()
+    # Process in small batches to keep peak RAM bounded
+    for batch_start in range(0, len(articles), _BATCH_SIZE):
+        batch = articles[batch_start: batch_start + _BATCH_SIZE]
+        for article in batch:
+            result = _score_article(article)
+            if result.get("update"):
+                supabase.table("articles").update(result["update"]).eq(
+                    "id", result["id"]
+                ).execute()
 
     print("Analysis job complete.")
+
+
+# ── Public entry point ────────────────────────────────────────────────────────
+
+
+async def analyze_unscored_articles() -> None:
+    """
+    Async entry point called by APScheduler and debug routes.
+    Offloads all CPU/IO-bound work to a thread so the event loop
+    (and health checks) are never blocked.
+    Skips silently if a run is already in progress.
+    """
+    global _analysis_running
+
+    if _analysis_running:
+        print("Analysis already running — skipping duplicate trigger.")
+        return
+
+    _analysis_running = True
+    try:
+        await asyncio.to_thread(_run_analysis_sync)
+    finally:
+        _analysis_running = False

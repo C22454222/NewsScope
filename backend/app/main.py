@@ -27,6 +27,12 @@ from app.schemas import (
 )
 from app.core.scheduler import start_scheduler
 
+# ── Startup health flag — always return 200 immediately ──────────────────────
+_startup_complete = False
+
+# ── Ingestion guard — prevents overlap with analysis ─────────────────────────
+_ingestion_running = False
+
 
 def init_firebase():
     """Initialize Firebase Admin SDK."""
@@ -51,20 +57,24 @@ init_firebase()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Run ingestion, analysis, and archiving jobs on schedule."""
+    """Start scheduler jobs then run startup ingestion."""
+    global _startup_complete
+
     from apscheduler.triggers.cron import CronTrigger
     from app.core.scheduler import scheduler
 
     start_scheduler()
 
+    # Ingestion on the hour
     scheduler.add_job(
-        run_ingestion_cycle,
+        _scheduled_ingestion,
         trigger=CronTrigger(minute=0),
         id="ingestion",
         max_instances=1,
         coalesce=True,
     )
 
+    # Analysis 15 min after ingestion — uses async entry point directly
     scheduler.add_job(
         analyze_unscored_articles,
         trigger=CronTrigger(minute=15),
@@ -90,21 +100,42 @@ async def lifespan(app: FastAPI):
     else:
         print("Keep-alive disabled in development")
 
-    # Run ingestion only at startup (not analysis to save memory)
+    # Fire startup ingestion as a background task — never blocks lifespan
     asyncio.create_task(_run_startup_ingestion())
+    _startup_complete = True
 
     yield
     print("Server shutting down...")
 
 
-async def _run_startup_ingestion():
-    """Run ingestion once on startup."""
+async def _scheduled_ingestion() -> None:
+    """Wrapper used by APScheduler for cron ingestion."""
+    global _ingestion_running
+
+    if _ingestion_running:
+        print("Ingestion already running — skipping duplicate trigger.")
+        return
+
+    _ingestion_running = True
+    try:
+        await asyncio.to_thread(run_ingestion_cycle)
+    finally:
+        _ingestion_running = False
+
+
+async def _run_startup_ingestion() -> None:
+    """Run ingestion once on startup, offloaded to thread pool."""
+    global _ingestion_running
+
     print("Server startup: Running ingestion...")
+    _ingestion_running = True
     try:
         await asyncio.to_thread(run_ingestion_cycle)
         print("Startup ingestion complete")
     except Exception as e:
         print(f"Startup ingestion failed: {e}")
+    finally:
+        _ingestion_running = False
 
 
 app = FastAPI(title="NewsScope API", version="1.0.0", lifespan=lifespan)
@@ -146,12 +177,13 @@ def root_head():
 
 @app.get("/health")
 def health():
+    """Instant in-memory response — never touches DB or models."""
     return {"status": "ok"}
 
 
 @app.post("/debug/ingest")
 async def debug_ingest(background_tasks: BackgroundTasks):
-    background_tasks.add_task(run_ingestion_cycle)
+    background_tasks.add_task(_scheduled_ingestion)
     return {"status": "ingestion triggered in background"}
 
 
@@ -168,7 +200,9 @@ async def debug_archive(background_tasks: BackgroundTasks):
 
 
 @app.post("/api/reading-history")
-async def track_reading(data: ReadingHistoryCreate, user_id: str = Depends(get_current_user)):
+async def track_reading(
+    data: ReadingHistoryCreate, user_id: str = Depends(get_current_user)
+):
     """Track article reading time for bias profile calculation."""
     try:
         payload = {
@@ -241,12 +275,28 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
             else 0.0
         )
 
-        left = sum(1 for h in history if (b := h["articles"].get("bias_score")) is not None and b < -0.3)
-        right = sum(1 for h in history if (b := h["articles"].get("bias_score")) is not None and b > 0.3)
+        left = sum(
+            1
+            for h in history
+            if (b := h["articles"].get("bias_score")) is not None and b < -0.3
+        )
+        right = sum(
+            1
+            for h in history
+            if (b := h["articles"].get("bias_score")) is not None and b > 0.3
+        )
         center = len(history) - left - right
 
-        pos = sum(1 for h in history if (s := h["articles"].get("sentiment_score")) and s > 0.3)
-        neg = sum(1 for h in history if (s := h["articles"].get("sentiment_score")) and s < -0.3)
+        pos = sum(
+            1
+            for h in history
+            if (s := h["articles"].get("sentiment_score")) and s > 0.3
+        )
+        neg = sum(
+            1
+            for h in history
+            if (s := h["articles"].get("sentiment_score")) and s < -0.3
+        )
         neu = len(history) - pos - neg
 
         sources = [
@@ -289,7 +339,9 @@ async def compare_articles(request: ComparisonRequest):
         response = (
             supabase.table("articles")
             .select("*")
-            .or_(f"title.ilike.%{request.topic}%,content.ilike.%{request.topic}%")
+            .or_(
+                f"title.ilike.%{request.topic}%,content.ilike.%{request.topic}%"
+            )
             .not_.is_("bias_score", "null")
             .order("published_at", desc=True)
             .execute()
@@ -297,7 +349,9 @@ async def compare_articles(request: ComparisonRequest):
         articles_data = response.data
 
         left = [a for a in articles_data if a.get("bias_score", 0) < -0.3]
-        center = [a for a in articles_data if -0.3 <= a.get("bias_score", 0) <= 0.3]
+        center = [
+            a for a in articles_data if -0.3 <= a.get("bias_score", 0) <= 0.3
+        ]
         right = [a for a in articles_data if a.get("bias_score", 0) > 0.3]
 
         return ComparisonResponse(

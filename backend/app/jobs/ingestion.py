@@ -11,6 +11,7 @@ import asyncio
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -48,6 +49,9 @@ FEED_NAME_MAP = {
     "https://feeds.skynews.com/feeds/rss/uk.xml": "Sky News",
     "https://www.euronews.com/rss": "Euronews",
 }
+
+# Max concurrent scrape workers — keeps RAM and network sockets bounded
+_SCRAPE_WORKERS = 6
 
 
 def normalize_article(
@@ -205,11 +209,11 @@ def fetch_content_beautifulsoup(url: str) -> Optional[str]:
         ]
         for pattern in unwanted_patterns:
             for element in soup.find_all(
-                class_=lambda x: x and pattern in x.lower()
+                class_=lambda x, p=pattern: x and p in x.lower()
             ):
                 element.decompose()
             for element in soup.find_all(
-                id=lambda x: x and pattern in x.lower()
+                id=lambda x, p=pattern: x and p in x.lower()
             ):
                 element.decompose()
 
@@ -248,7 +252,9 @@ def fetch_content_beautifulsoup(url: str) -> Optional[str]:
             all_containers = soup.find_all(["div", "section", "main"])
             max_text = ""
             for container in all_containers:
-                container_text = container.get_text(separator="\n", strip=True)
+                container_text = container.get_text(
+                    separator="\n", strip=True
+                )
                 if len(container_text) > len(max_text):
                     max_text = container_text
             if len(max_text) > 150:
@@ -304,7 +310,9 @@ def fetch_content_aggressive(url: str) -> Optional[str]:
     return None
 
 
-def fetch_content_with_retry(url: str, max_retries: int = 3) -> Optional[str]:
+def fetch_content_with_retry(
+    url: str, max_retries: int = 3
+) -> Optional[str]:
     """Tier 4: Retry with exponential backoff."""
     for attempt in range(max_retries):
         try:
@@ -412,6 +420,54 @@ def fetch_content(url: str, title: str = "", source: str = "") -> str:
     return fetch_content_title_fallback(title, source)
 
 
+def _scrape_one(article: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Scrape a single article and return it enriched with content.
+    Designed to run inside a ThreadPoolExecutor worker.
+    """
+    source_name_val = article.get("source")
+    content = fetch_content(
+        article["url"],
+        title=article.get("title", ""),
+        source=source_name_val or "",
+    )
+
+    category = article.get("category")
+    if category == "general":
+        category = infer_category(
+            article.get("url"),
+            article.get("title"),
+            content,
+        )
+
+    title = sanitize_for_postgres(article.get("title", ""))
+    url = sanitize_for_postgres(article["url"])
+    content = sanitize_for_postgres(content)
+    source_id = upsert_source(source_name_val) if source_name_val else None
+
+    is_fallback = "could not be retrieved" in content
+
+    return {
+        "title": title,
+        "url": url,
+        "published_at": article["published_at"],
+        "bias_score": article.get("bias_score"),
+        "sentiment_score": article.get("sentiment_score"),
+        "general_bias": article.get("general_bias"),
+        "general_bias_score": article.get("general_bias_score"),
+        "source_id": source_id,
+        "content": content,
+        "source": source_name_val,
+        "category": category,
+        "credibility_score": 80.0,
+        "fact_checks": {},
+        "claims_checked": 0,
+        "credibility_reason": "Pending",
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "_is_fallback": is_fallback,
+    }
+
+
 async def factcheck_batch(article_ids: List[str]) -> None:
     """
     Background async task: compute and persist credibility scores.
@@ -447,20 +503,28 @@ async def factcheck_batch(article_ids: List[str]) -> None:
 
 def _schedule_factcheck(article_ids: List[str]) -> None:
     """
-    Safely schedule factcheck_batch regardless of whether a running
-    asyncio event loop exists (APScheduler sync context vs FastAPI async).
+    Safely schedule factcheck_batch from any context.
+
+    Called from a thread-pool worker (inside asyncio.to_thread), so
+    there IS a running event loop — use run_coroutine_threadsafe to
+    schedule the coroutine onto it without creating a second loop.
     """
     try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(factcheck_batch(article_ids))
-    except RuntimeError:
-        # No running loop — APScheduler fired this from a sync thread
-        asyncio.run(factcheck_batch(article_ids))
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.run_coroutine_threadsafe(
+                factcheck_batch(article_ids), loop
+            )
+        else:
+            loop.run_until_complete(factcheck_batch(article_ids))
+    except Exception as exc:
+        print(f"Could not schedule fact-check: {exc}")
 
 
 def insert_articles_batch(articles: List[Dict[str, Any]]) -> List[str]:
     """
-    Insert new articles, skip duplicates by URL.
+    Deduplicate by URL, scrape all new articles concurrently with a
+    bounded thread pool, then bulk-insert into Supabase.
 
     Week 4: credibility_score/fact_checks seeded as defaults on insert;
     _schedule_factcheck() enriches them asynchronously post-insert.
@@ -478,60 +542,40 @@ def insert_articles_batch(articles: List[Dict[str, Any]]) -> List[str]:
     )
     existing_urls = {e["url"] for e in existing}
 
+    new_articles = [
+        a for a in articles
+        if a.get("url") and a["url"] not in existing_urls
+    ]
+
+    if not new_articles:
+        print("No new articles to insert")
+        return []
+
     payloads: List[Dict[str, Any]] = []
     scrape_success = 0
     scrape_fallback = 0
 
-    for article in articles:
-        if not article.get("url") or article["url"] in existing_urls:
-            continue
-
-        source_name_val = article.get("source")
-        source_id = upsert_source(source_name_val) if source_name_val else None
-
-        content = fetch_content(
-            article["url"],
-            title=article.get("title", ""),
-            source=source_name_val,
-        )
-
-        if "could not be retrieved" in content:
-            scrape_fallback += 1
-        else:
-            scrape_success += 1
-
-        category = article.get("category")
-        if category == "general":
-            category = infer_category(
-                article.get("url"),
-                article.get("title"),
-                content,
-            )
-
-        title = sanitize_for_postgres(article.get("title", ""))
-        url = sanitize_for_postgres(article["url"])
-        content = sanitize_for_postgres(content)
-
-        payloads.append(
-            {
-                "title": title,
-                "url": url,
-                "published_at": article["published_at"],
-                "bias_score": article.get("bias_score"),
-                "sentiment_score": article.get("sentiment_score"),
-                "general_bias": article.get("general_bias"),
-                "general_bias_score": article.get("general_bias_score"),
-                "source_id": source_id,
-                "content": content,
-                "source": source_name_val,
-                "category": category,
-                "credibility_score": 80.0,
-                "fact_checks": {},
-                "claims_checked": 0,
-                "credibility_reason": "Pending",
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }
-        )
+    # Concurrent scraping — bounded by _SCRAPE_WORKERS to cap RAM & sockets
+    with ThreadPoolExecutor(max_workers=_SCRAPE_WORKERS) as executor:
+        futures = {
+            executor.submit(_scrape_one, article): article
+            for article in new_articles
+        }
+        for future in as_completed(futures):
+            try:
+                result = future.result()
+                if result["_is_fallback"]:
+                    scrape_fallback += 1
+                else:
+                    scrape_success += 1
+                # Strip internal flag before inserting
+                result.pop("_is_fallback", None)
+                payloads.append(result)
+            except Exception as exc:
+                article = futures[future]
+                print(
+                    f"  Scrape error [{article.get('url', '?')}]: {exc}"
+                )
 
     if payloads:
         res = supabase.table("articles").insert(payloads).execute().data
@@ -577,8 +621,14 @@ def fetch_newsapi() -> List[Dict[str, Any]]:
 
     for source_id in NEWSAPI_SOURCES:
         try:
-            params = {"sources": source_id, "pageSize": 50, "language": "en"}
-            r = requests.get(url, params=params, headers=headers, timeout=15)
+            params = {
+                "sources": source_id,
+                "pageSize": 50,
+                "language": "en",
+            }
+            r = requests.get(
+                url, params=params, headers=headers, timeout=15
+            )
             r.raise_for_status()
             data = r.json()
 
@@ -595,7 +645,10 @@ def fetch_newsapi() -> List[Dict[str, Any]]:
                 if n["url"]:
                     normalized.append(n)
 
-            print(f"  cnn {source_id}: {len(data.get('articles', []))} articles")
+            print(
+                f"  cnn {source_id}: "
+                f"{len(data.get('articles', []))} articles"
+            )
 
         except Exception as exc:
             print(f"  {source_id} failed: {exc}")
