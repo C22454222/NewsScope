@@ -1,5 +1,5 @@
 """
-NewsScope Analysis Service.
+NewsScope Analysis Service. Switching model
 
 Hybrid inference strategy to minimise RAM on Render free tier:
   - Political bias : local transformers pipeline  (~270 MB, needs
