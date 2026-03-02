@@ -1,11 +1,11 @@
 """
-NewsScope Analysis Service. Switching model
+NewsScope Analysis Service.
 
 Hybrid inference strategy to minimise RAM on Render free tier:
   - Political bias : local transformers pipeline  (~270 MB, needs
                      custom launch/POLITICS tokenizer — API unsupported)
-  - Sentiment      : HuggingFace Inference API    (zero RAM)
-  - General bias   : HuggingFace Inference API    (zero RAM)
+  - Sentiment      : HuggingFace Serverless Inference (zero RAM)
+  - General bias   : HuggingFace Serverless Inference (zero RAM)
 
 Total RAM footprint: ~270 MB (political model only).
 
@@ -25,7 +25,7 @@ HF_API_TOKEN = os.getenv("HF_API_TOKEN", "")
 
 SENTIMENT_MODEL = os.getenv(
     "HF_SENTIMENT_MODEL",
-    "cardiffnlp/twitter-roberta-base-sentiment-latest",
+    "distilbert/distilbert-base-uncased-finetuned-sst-2-english",
 ).strip()
 
 BIAS_MODEL = os.getenv(
@@ -38,8 +38,8 @@ GENERAL_BIAS_MODEL = os.getenv(
     "valurank/distilroberta-bias",
 ).strip()
 
-# HuggingFace Inference API base URL
-_HF_API_BASE = "https://api-inference.huggingface.co/models"
+# HuggingFace Serverless Inference — replaces deprecated api-inference endpoint
+_HF_API_BASE = "https://router.huggingface.co/hf-inference/models"
 
 # ── Lazy singleton — political model only, loaded once ───────────────────────
 _political_pipeline = None
@@ -60,7 +60,7 @@ def _inference_api_call(
     retries: int = 3,
 ) -> Optional[list]:
     """
-    POST to HuggingFace Inference API with retry + model warm-up handling.
+    POST to HuggingFace Serverless Inference with retry + warm-up handling.
     Returns raw list of label/score dicts, or None on failure.
     """
     if not HF_API_TOKEN:
@@ -97,7 +97,10 @@ def _inference_api_call(
                 return result
 
         except Exception as exc:
-            print(f"Inference API error [{model}] attempt {attempt + 1}: {exc}")
+            print(
+                f"Inference API error [{model}] "
+                f"attempt {attempt + 1}: {exc}"
+            )
             if attempt < retries - 1:
                 time.sleep(2 ** attempt)
 
@@ -185,15 +188,14 @@ def _get_source_political_leaning(source_name: str) -> float:
     return _SOURCE_BIAS_MAP.get(source_name, 0.0)
 
 
-# ── Sentiment — Inference API ─────────────────────────────────────────────────
+# ── Sentiment — HuggingFace Serverless Inference ──────────────────────────────
 
 
 def _sentiment_score(text: str) -> Optional[float]:
     """
-    Run sentiment analysis via HuggingFace Inference API.
+    Run sentiment analysis via HuggingFace Serverless Inference.
     Returns float from -1.0 (negative) to +1.0 (positive).
-    Falls back to None on API failure — article will be skipped
-    and retried on next analysis cycle.
+    Falls back to None on API failure — article retried next cycle.
     """
     items = _inference_api_call(SENTIMENT_MODEL, text)
     if not items:
@@ -221,14 +223,14 @@ def _sentiment_score(text: str) -> Optional[float]:
         return None
 
 
-# ── General bias — Inference API ─────────────────────────────────────────────
+# ── General bias — HuggingFace Serverless Inference ──────────────────────────
 
 
 def _detect_general_bias(
     text: str,
 ) -> Tuple[Optional[str], Optional[float]]:
     """
-    Run general bias classification via HuggingFace Inference API.
+    Run general bias classification via HuggingFace Serverless Inference.
     Returns (label, confidence): label is 'BIASED' or 'UNBIASED'.
     """
     items = _inference_api_call(GENERAL_BIAS_MODEL, text)
