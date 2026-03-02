@@ -366,7 +366,7 @@ def _run_analysis_sync() -> None:
         supabase.table("articles")
         .select("id, content, title, source")
         .is_("sentiment_score", "null")
-        .limit(3)
+        .limit(1)
         .execute()
     )
     articles = response.data

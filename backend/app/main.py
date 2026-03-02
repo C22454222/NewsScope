@@ -12,6 +12,9 @@ from fastapi.responses import FileResponse
 import firebase_admin
 from firebase_admin import credentials, auth
 
+from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.triggers.cron import CronTrigger
+
 from app.routes import articles, users, sources
 from app.jobs.ingestion import run_ingestion_cycle, set_main_event_loop
 from app.jobs.analysis import analyze_unscored_articles
@@ -27,11 +30,12 @@ from app.schemas import (
 )
 from app.core.scheduler import start_scheduler
 
-# ── Startup complete flag — health returns 200 from first ping ────────────────
-_startup_complete = False
+# ── Main event loop — captured in lifespan for sync bridges ──────────────────
+_main_loop: Optional[asyncio.AbstractEventLoop] = None
 
-# ── Ingestion guard — prevents overlap with analysis ─────────────────────────
+# ── Job guards — prevent concurrent overlap ───────────────────────────────────
 _ingestion_running = False
+_analysis_running = False
 
 
 def init_firebase():
@@ -55,39 +59,88 @@ def init_firebase():
 init_firebase()
 
 
+# ── Sync bridges for APScheduler (cannot schedule async def directly) ─────────
+
+
+def _sync_ingestion() -> None:
+    """Sync bridge — runs _scheduled_ingestion on the main event loop."""
+    if _main_loop is None or not _main_loop.is_running():
+        print("Ingestion bridge: no running loop, skipping.")
+        return
+    future = asyncio.run_coroutine_threadsafe(
+        _scheduled_ingestion(), _main_loop
+    )
+    try:
+        future.result(timeout=3600)
+    except Exception as e:
+        print(f"Scheduled ingestion error: {e}")
+
+
+def _sync_analysis() -> None:
+    """
+    Sync bridge — runs analyze_unscored_articles on the main event loop.
+    Called every 5 minutes so even a brief stable window scores articles.
+    """
+    if _main_loop is None or not _main_loop.is_running():
+        print("Analysis bridge: no running loop, skipping.")
+        return
+    future = asyncio.run_coroutine_threadsafe(
+        analyze_unscored_articles(), _main_loop
+    )
+    try:
+        future.result(timeout=600)
+    except Exception as e:
+        print(f"Scheduled analysis error: {e}")
+
+
+def _sync_archive() -> None:
+    """Sync bridge — runs archive_old_articles on the main event loop."""
+    if _main_loop is None or not _main_loop.is_running():
+        print("Archive bridge: no running loop, skipping.")
+        return
+    future = asyncio.run_coroutine_threadsafe(
+        archive_old_articles(), _main_loop
+    )
+    try:
+        future.result(timeout=1800)
+    except Exception as e:
+        print(f"Scheduled archiving error: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Start scheduler jobs then run startup ingestion."""
-    global _startup_complete
+    global _main_loop
 
-    from apscheduler.triggers.cron import CronTrigger
     from app.core.scheduler import scheduler
+
+    # Capture loop before any jobs run — shared with ingestion.py
+    _main_loop = asyncio.get_event_loop()
+    set_main_event_loop(_main_loop)
 
     start_scheduler()
 
-    # Capture the running event loop for thread workers in ingestion.py
-    set_main_event_loop(asyncio.get_event_loop())
-
     # Ingestion on the hour
     scheduler.add_job(
-        _scheduled_ingestion,
+        _sync_ingestion,
         trigger=CronTrigger(minute=0),
         id="ingestion",
         max_instances=1,
         coalesce=True,
     )
 
-    # Analysis at :15 — keep-alive mini-batches handle the rest
+    # Analysis every 5 minutes, batch of 1 — survives instance rotations
     scheduler.add_job(
-        analyze_unscored_articles,
-        trigger=CronTrigger(minute=15),
+        _sync_analysis,
+        trigger=IntervalTrigger(minutes=5),
         id="analysis",
         max_instances=1,
         coalesce=True,
     )
 
+    # Archiving at 3am daily
     scheduler.add_job(
-        archive_old_articles,
+        _sync_archive,
         trigger=CronTrigger(hour=3, minute=0),
         id="archiving",
         max_instances=1,
@@ -103,16 +156,14 @@ async def lifespan(app: FastAPI):
     else:
         print("Keep-alive disabled in development")
 
-    # Fire startup ingestion as a background task — never blocks lifespan
     asyncio.create_task(_run_startup_ingestion())
-    _startup_complete = True
 
     yield
     print("Server shutting down...")
 
 
 async def _scheduled_ingestion() -> None:
-    """Wrapper used by APScheduler for cron ingestion."""
+    """Async ingestion wrapper with overlap guard."""
     global _ingestion_running
 
     if _ingestion_running:
@@ -195,8 +246,8 @@ def health():
 @app.post("/internal/analyze-batch")
 async def internal_analyze_batch():
     """
-    Called by keep-alive every 14 minutes to score a mini batch.
-    Scores 3 articles per call — resumable across instance rotations.
+    Called by keep-alive every 14 min as an additional analysis trigger.
+    Scores 1 article per call — fully resumable across instance rotations.
     Skips silently if analysis is already running.
     """
     asyncio.create_task(analyze_unscored_articles())
