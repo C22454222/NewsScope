@@ -1,20 +1,23 @@
 """
 NewsScope Analysis Service.
 
-Uses local transformers pipelines — no Inference API dependency.
-Models loaded lazily as singletons to stay within 512 MB RAM.
-All three models total ~280 MB on CPU.
+Hybrid inference strategy to minimise RAM on Render free tier:
+  - Political bias : local transformers pipeline  (~270 MB, needs
+                     custom launch/POLITICS tokenizer — API unsupported)
+  - Sentiment      : HuggingFace Inference API    (zero RAM)
+  - General bias   : HuggingFace Inference API    (zero RAM)
 
-Sentiment : cardiffnlp/twitter-roberta-base-sentiment-latest (~280 MB)
-Political : matous-volf/political-leaning-politics            (~270 MB)
-General   : valurank/distilroberta-bias                       (~260 MB)
+Total RAM footprint: ~270 MB (political model only).
 
 Flake8: 0 errors/warnings.
 """
 
 import os
+import time
 import asyncio
 from typing import Optional, Tuple
+
+import requests
 
 from app.db.supabase import supabase
 
@@ -35,39 +38,79 @@ GENERAL_BIAS_MODEL = os.getenv(
     "valurank/distilroberta-bias",
 ).strip()
 
-# ── Lazy singletons — loaded once, reused forever ────────────────────────────
-_sentiment_pipeline = None
+# HuggingFace Inference API base URL
+_HF_API_BASE = "https://api-inference.huggingface.co/models"
+
+# ── Lazy singleton — political model only, loaded once ───────────────────────
 _political_pipeline = None
-_general_bias_pipeline = None
 
 # ── Concurrency guard — prevents overlapping analysis runs ───────────────────
 _analysis_running = False
 
+# ── Batch size: 1 article per trigger — survives Render rotations ─────────────
+_BATCH_SIZE = 1
 
-def _get_sentiment_pipeline():
-    """Load sentiment pipeline once and cache."""
-    global _sentiment_pipeline
-    if _sentiment_pipeline is None:
-        from transformers import pipeline
 
-        print(f"Loading sentiment model: {SENTIMENT_MODEL}")
-        _sentiment_pipeline = pipeline(
-            "text-classification",
-            model=SENTIMENT_MODEL,
-            tokenizer=SENTIMENT_MODEL,
-            truncation=True,
-            max_length=512,
-            device=-1,
-            top_k=None,
-        )
-        print("Sentiment model loaded.")
-    return _sentiment_pipeline
+# ── Inference API helper ──────────────────────────────────────────────────────
+
+
+def _inference_api_call(
+    model: str,
+    text: str,
+    retries: int = 3,
+) -> Optional[list]:
+    """
+    POST to HuggingFace Inference API with retry + model warm-up handling.
+    Returns raw list of label/score dicts, or None on failure.
+    """
+    if not HF_API_TOKEN:
+        print("HF_API_TOKEN not set — skipping Inference API call.")
+        return None
+
+    url = f"{_HF_API_BASE}/{model}"
+    headers = {"Authorization": f"Bearer {HF_API_TOKEN}"}
+    payload = {"inputs": text[:512]}
+
+    for attempt in range(retries):
+        try:
+            response = requests.post(
+                url, headers=headers, json=payload, timeout=30
+            )
+
+            # 503 = model loading — wait and retry
+            if response.status_code == 503:
+                wait = 10 + (attempt * 5)
+                print(
+                    f"Model {model} loading, "
+                    f"waiting {wait}s (attempt {attempt + 1})..."
+                )
+                time.sleep(wait)
+                continue
+
+            response.raise_for_status()
+            result = response.json()
+
+            # API returns [[{...}]] or [{...}] depending on model
+            if isinstance(result, list) and result:
+                if isinstance(result[0], list):
+                    return result[0]
+                return result
+
+        except Exception as exc:
+            print(f"Inference API error [{model}] attempt {attempt + 1}: {exc}")
+            if attempt < retries - 1:
+                time.sleep(2 ** attempt)
+
+    return None
+
+
+# ── Political bias — local transformer ───────────────────────────────────────
 
 
 def _get_political_pipeline():
     """
-    Load political bias pipeline once and cache.
-    matous-volf model requires launch/POLITICS tokenizer.
+    Load political bias pipeline once and cache as singleton.
+    Requires launch/POLITICS tokenizer — not supported via Inference API.
     """
     global _political_pipeline
     if _political_pipeline is None:
@@ -87,26 +130,7 @@ def _get_political_pipeline():
     return _political_pipeline
 
 
-def _get_general_bias_pipeline():
-    """Load general bias pipeline once and cache."""
-    global _general_bias_pipeline
-    if _general_bias_pipeline is None:
-        from transformers import pipeline
-
-        print(f"Loading general bias model: {GENERAL_BIAS_MODEL}")
-        _general_bias_pipeline = pipeline(
-            "text-classification",
-            model=GENERAL_BIAS_MODEL,
-            truncation=True,
-            max_length=512,
-            device=-1,
-            top_k=None,
-        )
-        print("General bias model loaded.")
-    return _general_bias_pipeline
-
-
-# ── Source fallback (used when AI model fails) ────────────────────────────────
+# ── Source fallback ───────────────────────────────────────────────────────────
 
 _SOURCE_BIAS_MAP = {
     "CNN": -1.0,
@@ -161,20 +185,22 @@ def _get_source_political_leaning(source_name: str) -> float:
     return _SOURCE_BIAS_MAP.get(source_name, 0.0)
 
 
-# ── Individual model callers ──────────────────────────────────────────────────
+# ── Sentiment — Inference API ─────────────────────────────────────────────────
 
 
 def _sentiment_score(text: str) -> Optional[float]:
     """
-    Run sentiment analysis.
+    Run sentiment analysis via HuggingFace Inference API.
     Returns float from -1.0 (negative) to +1.0 (positive).
+    Falls back to None on API failure — article will be skipped
+    and retried on next analysis cycle.
     """
+    items = _inference_api_call(SENTIMENT_MODEL, text)
+    if not items:
+        print("Sentiment API call failed — will retry next cycle.")
+        return None
+
     try:
-        pipe = _get_sentiment_pipeline()
-        results = pipe(text[:512])
-
-        items = results[0] if isinstance(results[0], list) else results
-
         sentiment_map: dict = {}
         for item in items:
             label = item["label"].lower()
@@ -191,16 +217,67 @@ def _sentiment_score(text: str) -> Optional[float]:
         return round(pos - neg, 4)
 
     except Exception as exc:
-        print(f"Sentiment error: {exc}")
+        print(f"Sentiment parse error: {exc}")
         return None
+
+
+# ── General bias — Inference API ─────────────────────────────────────────────
+
+
+def _detect_general_bias(
+    text: str,
+) -> Tuple[Optional[str], Optional[float]]:
+    """
+    Run general bias classification via HuggingFace Inference API.
+    Returns (label, confidence): label is 'BIASED' or 'UNBIASED'.
+    """
+    items = _inference_api_call(GENERAL_BIAS_MODEL, text)
+    if not items:
+        print("General bias API call failed — will retry next cycle.")
+        return None, None
+
+    try:
+        print(f"  General bias raw results: {items}")
+        predictions = [(item["label"], item["score"]) for item in items]
+        top_label, confidence = max(predictions, key=lambda x: x[1])
+        top_upper = top_label.upper()
+
+        if "BIASED" in top_upper and "UN" not in top_upper:
+            label = "BIASED"
+        elif (
+            "UNBIASED" in top_upper or "NON" in top_upper or "NEUTRAL" in top_upper
+        ):
+            label = "UNBIASED"
+        elif top_upper in ("LABEL_1", "1"):
+            label = "BIASED"
+        elif top_upper in ("LABEL_0", "0"):
+            label = "UNBIASED"
+        else:
+            print(
+                f"Unknown general bias label: '{top_label}' "
+                f"— defaulting to UNBIASED"
+            )
+            label = "UNBIASED"
+
+        print(f"General bias: {label} (confidence={confidence:.2%})")
+        return label, round(confidence, 4)
+
+    except Exception as exc:
+        print(f"General bias parse error: {exc}")
+        return None, None
+
+
+# ── Political bias — local transformer ───────────────────────────────────────
 
 
 def _detect_political_bias_ai(
     text: str,
 ) -> Tuple[Optional[float], Optional[float]]:
     """
-    Run political bias classification.
-    Returns (bias_score, confidence): bias_score -1.0=Left, 0=Center, 1=Right.
+    Run political bias classification via local transformer.
+    Returns (bias_score, confidence): -1.0=Left, 0=Center, 1=Right.
+    Uses local pipeline — Inference API dropped support for this model
+    and it requires the custom launch/POLITICS tokenizer.
     """
     try:
         pipe = _get_political_pipeline()
@@ -233,44 +310,6 @@ def _detect_political_bias_ai(
         return None, None
 
 
-def _detect_general_bias(
-    text: str,
-) -> Tuple[Optional[str], Optional[float]]:
-    """
-    Run general bias classification.
-    Returns (label, confidence): label is 'BIASED' or 'UNBIASED'.
-    """
-    try:
-        pipe = _get_general_bias_pipeline()
-        results = pipe(text[:512])
-
-        items = results[0] if isinstance(results[0], list) else results
-        print(f"  General bias raw results: {items}")
-
-        predictions = [(item["label"], item["score"]) for item in items]
-        top_label, confidence = max(predictions, key=lambda x: x[1])
-        top_upper = top_label.upper()
-
-        if "BIASED" in top_upper and "UN" not in top_upper:
-            label = "BIASED"
-        elif "UNBIASED" in top_upper or "NON" in top_upper or "NEUTRAL" in top_upper:
-            label = "UNBIASED"
-        elif top_upper in ("LABEL_1", "1"):
-            label = "BIASED"
-        elif top_upper in ("LABEL_0", "0"):
-            label = "UNBIASED"
-        else:
-            print(f"Unknown general bias label: '{top_label}' — defaulting to UNBIASED")
-            label = "UNBIASED"
-
-        print(f"General bias: {label} (confidence={confidence:.2%})")
-        return label, round(confidence, 4)
-
-    except Exception as exc:
-        print(f"General bias error: {exc}")
-        return None, None
-
-
 def _hybrid_bias_analysis(
     text: str,
     source_name: str,
@@ -297,19 +336,18 @@ def _hybrid_bias_analysis(
         return ai_bias, ai_confidence
 
     source_bias = _get_source_political_leaning(source_name)
-    print(f"AI failed -> fallback to source: {source_name} = {source_bias:.2f}")
+    print(
+        f"AI failed -> fallback to source: "
+        f"{source_name} = {source_bias:.2f}"
+    )
     return source_bias, 0.5
 
 
 # ── Sync worker — runs in thread pool, never blocks the event loop ────────────
 
-_BATCH_SIZE = 5  # Process articles in small batches to cap peak RAM
-
 
 def _score_article(article: dict) -> dict:
     """Score a single article synchronously. Called from thread pool."""
-    import time
-
     content = article.get("content") or ""
     title = article.get("title") or ""
     source = article.get("source") or ""
@@ -329,7 +367,9 @@ def _score_article(article: dict) -> dict:
 
     sent_str = f"{sentiment:.3f}" if sentiment is not None else "N/A"
     bias_str = f"{bias_score:.2f}" if bias_score is not None else "N/A"
-    intensity_str = f"{bias_intensity:.2f}" if bias_intensity is not None else "N/A"
+    intensity_str = (
+        f"{bias_intensity:.2f}" if bias_intensity is not None else "N/A"
+    )
 
     print(
         f"Article {article['id']}: "
@@ -358,7 +398,9 @@ def _score_article(article: dict) -> dict:
 def _run_analysis_sync() -> None:
     """
     Blocking analysis worker — must be called via asyncio.to_thread().
-    Fetches unscored articles in batches and scores each one.
+    Fetches 1 unscored article per call — fully resumable across
+    Render instance rotations. State persisted in Supabase after
+    every article so no work is lost on rotation.
     """
     print("Starting analysis job...")
 
@@ -366,7 +408,7 @@ def _run_analysis_sync() -> None:
         supabase.table("articles")
         .select("id, content, title, source")
         .is_("sentiment_score", "null")
-        .limit(1)
+        .limit(_BATCH_SIZE)
         .execute()
     )
     articles = response.data
@@ -380,15 +422,14 @@ def _run_analysis_sync() -> None:
         f"(hybrid methodology + general bias)..."
     )
 
-    # Process in small batches to keep peak RAM bounded
     for batch_start in range(0, len(articles), _BATCH_SIZE):
         batch = articles[batch_start: batch_start + _BATCH_SIZE]
         for article in batch:
             result = _score_article(article)
             if result.get("update"):
-                supabase.table("articles").update(result["update"]).eq(
-                    "id", result["id"]
-                ).execute()
+                supabase.table("articles").update(
+                    result["update"]
+                ).eq("id", result["id"]).execute()
 
     print("Analysis job complete.")
 
