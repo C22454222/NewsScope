@@ -77,7 +77,7 @@ async def lifespan(app: FastAPI):
         coalesce=True,
     )
 
-    # Analysis 15 min after ingestion — uses async entry point directly
+    # Analysis at :15 — keep-alive mini-batches handle the rest
     scheduler.add_job(
         analyze_unscored_articles,
         trigger=CronTrigger(minute=15),
@@ -189,6 +189,17 @@ def root_head():
 @app.get("/health")
 def health():
     """Instant in-memory response — never touches DB or models."""
+    return {"status": "ok"}
+
+
+@app.post("/internal/analyze-batch")
+async def internal_analyze_batch():
+    """
+    Called by keep-alive every 14 minutes to score a mini batch.
+    Scores 3 articles per call — resumable across instance rotations.
+    Skips silently if analysis is already running.
+    """
+    asyncio.create_task(analyze_unscored_articles())
     return {"status": "ok"}
 
 
