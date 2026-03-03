@@ -11,6 +11,7 @@ General bias   : valurank/distilroberta-bias
 Flake8: 0 errors/warnings.
 """
 
+import gc
 import os
 import time
 import asyncio
@@ -19,6 +20,7 @@ from typing import Optional, Tuple
 import requests
 
 from app.db.supabase import supabase
+
 
 HF_API_TOKEN = os.getenv("HF_API_TOKEN", "")
 
@@ -37,16 +39,14 @@ GENERAL_BIAS_MODEL = os.getenv(
     "valurank/distilroberta-bias",
 ).strip()
 
-# HuggingFace Serverless Inference — replaces deprecated api-inference endpoint
 _HF_API_BASE = "https://router.huggingface.co/hf-inference/models"
 
-# ── Concurrency guard — prevents overlapping analysis runs ───────────────────
+_BATCH_SIZE = 20
+
+_TEXT_LIMIT = 1024
+
 _analysis_running = False
 
-# ── Batch size: 1 article per trigger — survives Render rotations ─────────────
-_BATCH_SIZE = 25
-
-# ── Source fallback map ───────────────────────────────────────────────────────
 _SOURCE_BIAS_MAP = {
     "CNN": -1.0,
     "The Guardian": -1.0,
@@ -63,7 +63,7 @@ _SOURCE_BIAS_MAP = {
 }
 
 
-# ── Inference API helper — sentiment + general bias ───────────────────────────
+# ── Inference API helper ──────────────────────────────────────────────────────
 
 
 def _inference_api_call(
@@ -74,7 +74,7 @@ def _inference_api_call(
     """
     POST to HuggingFace Serverless Inference with retry + warm-up handling.
     Returns raw list of label/score dicts, or None on failure.
-    Used for standard text-classification models only.
+    Uses an explicit session that is always closed to prevent connection leaks.
     """
     if not HF_API_TOKEN:
         print("HF_API_TOKEN not set — skipping Inference API call.")
@@ -83,37 +83,39 @@ def _inference_api_call(
     url = f"{_HF_API_BASE}/{model}"
     headers = {"Authorization": f"Bearer {HF_API_TOKEN}"}
     payload = {"inputs": text[:512]}
+    session = requests.Session()
 
-    for attempt in range(retries):
-        try:
-            response = requests.post(
-                url, headers=headers, json=payload, timeout=30
-            )
-
-            if response.status_code == 503:
-                wait = 10 + (attempt * 5)
-                print(
-                    f"Model {model} loading, "
-                    f"waiting {wait}s (attempt {attempt + 1})..."
+    try:
+        for attempt in range(retries):
+            try:
+                response = session.post(
+                    url, headers=headers, json=payload, timeout=30
                 )
-                time.sleep(wait)
-                continue
 
-            response.raise_for_status()
-            result = response.json()
+                if response.status_code == 503:
+                    wait = 10 + (attempt * 5)
+                    print(
+                        f"Model {model} loading, "
+                        f"waiting {wait}s (attempt {attempt + 1})..."
+                    )
+                    time.sleep(wait)
+                    continue
 
-            if isinstance(result, list) and result:
-                if isinstance(result[0], list):
-                    return result[0]
-                return result
+                response.raise_for_status()
+                result = response.json()
 
-        except Exception as exc:
-            print(
-                f"Inference API error [{model}] "
-                f"attempt {attempt + 1}: {exc}"
-            )
-            if attempt < retries - 1:
-                time.sleep(2 ** attempt)
+                if isinstance(result, list) and result:
+                    return result[0] if isinstance(result[0], list) else result
+
+            except Exception as exc:
+                print(
+                    f"Inference API error [{model}] "
+                    f"attempt {attempt + 1}: {exc}"
+                )
+                if attempt < retries - 1:
+                    time.sleep(2 ** attempt)
+    finally:
+        session.close()
 
     return None
 
@@ -146,14 +148,13 @@ def _get_source_political_leaning(source_name: str) -> float:
     return _SOURCE_BIAS_MAP.get(source_name, 0.0)
 
 
-# ── Sentiment — HuggingFace Serverless Inference ─────────────────────────────
+# ── Sentiment ─────────────────────────────────────────────────────────────────
 
 
 def _sentiment_score(text: str) -> Optional[float]:
     """
     Run sentiment analysis via HuggingFace Serverless Inference.
-    Returns float from -1.0 (negative) to +1.0 (positive).
-    Returns None on failure — article retried on next cycle.
+    Returns float from -1.0 (negative) to +1.0 (positive), or None on failure.
     """
     items = _inference_api_call(SENTIMENT_MODEL, text)
     if not items:
@@ -181,18 +182,16 @@ def _sentiment_score(text: str) -> Optional[float]:
         return None
 
 
-# ── Political bias — zero-shot via HuggingFace Serverless Inference ───────────
+# ── Political bias ────────────────────────────────────────────────────────────
 
 
 def _detect_political_bias_ai(
     text: str,
 ) -> Tuple[Optional[float], Optional[float]]:
     """
-    Run political bias via zero-shot classification (facebook/bart-large-mnli).
-    Router returns list of {label, score} dicts — same format as standard
-    text-classification models, not zero-shot {labels, scores} format.
-    Derives bias score from (right-wing - left-wing) probability difference.
-    Returns (bias_score, confidence): -1.0=Left, 0=Center, 1=Right.
+    Zero-shot political bias via facebook/bart-large-mnli.
+    Returns (bias_score, confidence): -1.0=Left, 0.0=Center, 1.0=Right.
+    bias_score is derived from (right-wing - left-wing) probability difference.
     """
     if not HF_API_TOKEN:
         print("Political bias: HF_API_TOKEN not set — skipping.")
@@ -206,74 +205,79 @@ def _detect_political_bias_ai(
             "candidate_labels": ["left-wing", "centrist", "right-wing"]
         },
     }
+    session = requests.Session()
 
-    for attempt in range(3):
-        try:
-            response = requests.post(
-                url, headers=headers, json=payload, timeout=30
-            )
-
-            print(
-                f"  Political bias HTTP {response.status_code} "
-                f"(attempt {attempt + 1})"
-            )
-
-            if response.status_code == 503:
-                wait = 10 + (attempt * 5)
-                print(
-                    f"  Political bias model loading, "
-                    f"waiting {wait}s..."
+    try:
+        for attempt in range(3):
+            try:
+                response = session.post(
+                    url, headers=headers, json=payload, timeout=30
                 )
-                time.sleep(wait)
-                continue
 
-            response.raise_for_status()
-            result = response.json()
-
-            print(f"  Political bias raw result: {result}")
-
-            if not isinstance(result, list) or not result:
                 print(
-                    "  Political bias: unexpected response shape "
-                    "— returning None"
+                    f"  Political bias HTTP {response.status_code} "
+                    f"(attempt {attempt + 1})"
                 )
-                return None, None
 
-            label_score_map = {
-                item["label"]: item["score"] for item in result
-            }
-            left = label_score_map.get("left-wing", 0.0)
-            center = label_score_map.get("centrist", 0.0)
-            right = label_score_map.get("right-wing", 0.0)
+                if response.status_code == 503:
+                    wait = 10 + (attempt * 5)
+                    print(
+                        f"  Political bias model loading, "
+                        f"waiting {wait}s..."
+                    )
+                    time.sleep(wait)
+                    continue
 
-            print(
-                f"  Political bias scores — "
-                f"left={left:.3f}, center={center:.3f}, "
-                f"right={right:.3f}"
-            )
+                response.raise_for_status()
+                result = response.json()
 
-            bias_score = round(right - left, 4)
-            confidence = round(max(left, center, right), 4)
+                print(f"  Political bias raw result: {result}")
 
-            if bias_score < -0.3:
-                label_str = "LEFT"
-            elif bias_score > 0.3:
-                label_str = "RIGHT"
-            else:
-                label_str = "CENTER"
+                if not isinstance(result, list) or not result:
+                    print(
+                        "  Political bias: unexpected response shape "
+                        "— returning None"
+                    )
+                    return None, None
 
-            print(
-                f"Political bias: {label_str} "
-                f"(score={bias_score:.2f}, confidence={confidence:.2%})"
-            )
-            return bias_score, confidence
+                label_score_map = {
+                    item["label"]: item["score"] for item in result
+                }
+                left = label_score_map.get("left-wing", 0.0)
+                center = label_score_map.get("centrist", 0.0)
+                right = label_score_map.get("right-wing", 0.0)
 
-        except Exception as exc:
-            print(
-                f"Political bias error attempt {attempt + 1}: {exc}"
-            )
-            if attempt < 2:
-                time.sleep(2 ** attempt)
+                print(
+                    f"  Political bias scores — "
+                    f"left={left:.3f}, center={center:.3f}, "
+                    f"right={right:.3f}"
+                )
+
+                bias_score = round(right - left, 4)
+                confidence = round(max(left, center, right), 4)
+
+                if bias_score < -0.3:
+                    label_str = "LEFT"
+                elif bias_score > 0.3:
+                    label_str = "RIGHT"
+                else:
+                    label_str = "CENTER"
+
+                print(
+                    f"Political bias: {label_str} "
+                    f"(score={bias_score:.2f}, "
+                    f"confidence={confidence:.2%})"
+                )
+                return bias_score, confidence
+
+            except Exception as exc:
+                print(
+                    f"Political bias error attempt {attempt + 1}: {exc}"
+                )
+                if attempt < 2:
+                    time.sleep(2 ** attempt)
+    finally:
+        session.close()
 
     print("Political bias API call failed — will retry next cycle.")
     return None, None
@@ -312,14 +316,14 @@ def _hybrid_bias_analysis(
     return source_bias, 0.5
 
 
-# ── General bias — HuggingFace Serverless Inference ──────────────────────────
+# ── General bias ──────────────────────────────────────────────────────────────
 
 
 def _detect_general_bias(
     text: str,
 ) -> Tuple[Optional[str], Optional[float]]:
     """
-    Run general bias classification via HuggingFace Serverless Inference.
+    General bias classification via valurank/distilroberta-bias.
     Returns (label, confidence): label is 'BIASED' or 'UNBIASED'.
     """
     items = _inference_api_call(GENERAL_BIAS_MODEL, text)
@@ -331,9 +335,9 @@ def _detect_general_bias(
         print(f"  General bias raw results: {items}")
         predictions = [(item["label"], item["score"]) for item in items]
         top_label, confidence = max(predictions, key=lambda x: x[1])
-        top_upper = top_label.upper()
+        top_upper = top_label.strip().upper()
 
-        if "BIASED" in top_upper and "UN" not in top_upper:
+        if "BIASED" in top_upper and "UN" not in top_upper and "NON" not in top_upper:
             label = "BIASED"
         elif (
             "UNBIASED" in top_upper or "NON" in top_upper or "NEUTRAL" in top_upper
@@ -346,7 +350,7 @@ def _detect_general_bias(
         else:
             print(
                 f"Unknown general bias label: '{top_label}' "
-                f"— defaulting to UNBIASED"
+                "— defaulting to UNBIASED"
             )
             label = "UNBIASED"
 
@@ -358,12 +362,15 @@ def _detect_general_bias(
         return None, None
 
 
-# ── Sync worker — runs in thread pool, never blocks the event loop ────────────
+# ── Single article scorer ─────────────────────────────────────────────────────
 
 
 def _score_article(article: dict) -> dict:
-    """Score a single article synchronously. Called from thread pool."""
-    content = article.get("content") or ""
+    """
+    Score a single article synchronously. Called from thread pool.
+    Only title, content (truncated), and published_at are used.
+    """
+    content = (article.get("content") or "")[:_TEXT_LIMIT]
     title = article.get("title") or ""
     source = article.get("source") or ""
     text = f"{title}. {content}".strip()
@@ -410,23 +417,32 @@ def _score_article(article: dict) -> dict:
     return {"id": article["id"], "update": update_data}
 
 
+# ── Sync worker ───────────────────────────────────────────────────────────────
+
+
 def _run_analysis_sync() -> None:
     """
     Blocking analysis worker — must be called via asyncio.to_thread().
-    Fetches 1 unscored article per call — fully resumable across
-    Render instance rotations. State persisted in Supabase after
-    every article so no work is lost on rotation.
+    Fetches _BATCH_SIZE unscored articles per call. Only selects the
+    fields required for analysis to minimise memory usage. Persists
+    results to Supabase after each article so no work is lost on
+    Render instance rotation. Calls gc.collect() after each article
+    to release memory promptly.
     """
     print("Starting analysis job...")
 
     response = (
         supabase.table("articles")
-        .select("id, content, title, source")
+        .select("id, title, source, content, published_at")
         .is_("sentiment_score", "null")
         .limit(_BATCH_SIZE)
         .execute()
     )
-    articles = response.data
+
+    articles = [
+        {**a, "content": (a.get("content") or "")[:_TEXT_LIMIT]}
+        for a in (response.data or [])
+    ]
 
     if not articles:
         print("No unscored articles found.")
@@ -434,17 +450,16 @@ def _run_analysis_sync() -> None:
 
     print(
         f"Analyzing {len(articles)} articles "
-        f"(hybrid methodology + general bias)..."
+        "(hybrid methodology + general bias)..."
     )
 
-    for batch_start in range(0, len(articles), _BATCH_SIZE):
-        batch = articles[batch_start: batch_start + _BATCH_SIZE]
-        for article in batch:
-            result = _score_article(article)
-            if result.get("update"):
-                supabase.table("articles").update(
-                    result["update"]
-                ).eq("id", result["id"]).execute()
+    for article in articles:
+        result = _score_article(article)
+        if result.get("update"):
+            supabase.table("articles").update(
+                result["update"]
+            ).eq("id", result["id"]).execute()
+        gc.collect()
 
     print("Analysis job complete.")
 
@@ -456,8 +471,8 @@ async def analyze_unscored_articles() -> None:
     """
     Async entry point called by APScheduler and debug routes.
     Offloads all CPU/IO-bound work to a thread so the event loop
-    (and health checks) are never blocked.
-    Skips silently if a run is already in progress.
+    (and health checks) are never blocked. Skips silently if a run
+    is already in progress.
     """
     global _analysis_running
 
