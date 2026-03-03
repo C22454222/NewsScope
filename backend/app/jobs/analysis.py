@@ -189,9 +189,9 @@ def _detect_political_bias_ai(
 ) -> Tuple[Optional[float], Optional[float]]:
     """
     Run political bias via zero-shot classification (facebook/bart-large-mnli).
-    Sends candidate labels left-wing/centrist/right-wing and derives a
-    bias score from (right - left) probability difference.
-    Router may wrap response in a list — unwrapped before parsing.
+    Router returns list of {label, score} dicts — same format as standard
+    text-classification models, not zero-shot {labels, scores} format.
+    Derives bias score from (right-wing - left-wing) probability difference.
     Returns (bias_score, confidence): -1.0=Left, 0=Center, 1=Right.
     """
     if not HF_API_TOKEN:
@@ -230,29 +230,27 @@ def _detect_political_bias_ai(
             response.raise_for_status()
             result = response.json()
 
-            # DEBUG — log raw response shape to diagnose parsing issues
-            print(f"  Political bias raw result type: {type(result)}")
             print(f"  Political bias raw result: {result}")
 
-            # Router may wrap response in a list — unwrap if so
-            if isinstance(result, list) and result:
-                print("  Political bias: unwrapping list response")
-                result = result[0]
-
-            labels = result.get("labels", [])
-            scores = result.get("scores", [])
-
-            print(f"  Political bias labels: {labels}")
-            print(f"  Political bias scores: {scores}")
-
-            if not labels:
-                print("  Political bias: empty labels — returning None")
+            if not isinstance(result, list) or not result:
+                print(
+                    "  Political bias: unexpected response shape "
+                    "— returning None"
+                )
                 return None, None
 
-            label_score_map = dict(zip(labels, scores))
+            label_score_map = {
+                item["label"]: item["score"] for item in result
+            }
             left = label_score_map.get("left-wing", 0.0)
             center = label_score_map.get("centrist", 0.0)
             right = label_score_map.get("right-wing", 0.0)
+
+            print(
+                f"  Political bias scores — "
+                f"left={left:.3f}, center={center:.3f}, "
+                f"right={right:.3f}"
+            )
 
             bias_score = round(right - left, 4)
             confidence = round(max(left, center, right), 4)
