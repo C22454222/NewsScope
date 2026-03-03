@@ -41,9 +41,15 @@ GENERAL_BIAS_MODEL = os.getenv(
 
 _HF_API_BASE = "https://router.huggingface.co/hf-inference/models"
 
-_BATCH_SIZE = 20
+# Reduced from 20 — each article makes 3 API calls with up to 3 retries
+# each at 30s timeout. 10 articles = manageable memory + time budget.
+_BATCH_SIZE = 10
 
 _TEXT_LIMIT = 1024
+
+# Reduced timeout — fail fast and fall back to source bias rather than
+# holding open connections for 30s × 3 retries × 20 articles.
+_REQUEST_TIMEOUT = 15
 
 _analysis_running = False
 
@@ -69,12 +75,13 @@ _SOURCE_BIAS_MAP = {
 def _inference_api_call(
     model: str,
     text: str,
-    retries: int = 3,
+    retries: int = 2,
 ) -> Optional[list]:
     """
     POST to HuggingFace Serverless Inference with retry + warm-up handling.
     Returns raw list of label/score dicts, or None on failure.
-    Uses an explicit session that is always closed to prevent connection leaks.
+    Uses an explicit session closed in a finally block to prevent leaks.
+    Retries capped at 2 to limit memory pressure from stacked connections.
     """
     if not HF_API_TOKEN:
         print("HF_API_TOKEN not set — skipping Inference API call.")
@@ -89,7 +96,10 @@ def _inference_api_call(
         for attempt in range(retries):
             try:
                 response = session.post(
-                    url, headers=headers, json=payload, timeout=30
+                    url,
+                    headers=headers,
+                    json=payload,
+                    timeout=_REQUEST_TIMEOUT,
                 )
 
                 if response.status_code == 503:
@@ -191,7 +201,8 @@ def _detect_political_bias_ai(
     """
     Zero-shot political bias via facebook/bart-large-mnli.
     Returns (bias_score, confidence): -1.0=Left, 0.0=Center, 1.0=Right.
-    bias_score is derived from (right-wing - left-wing) probability difference.
+    bias_score derived from (right-wing probability - left-wing probability).
+    Retries capped at 2 to avoid holding connections on timeout-heavy articles.
     """
     if not HF_API_TOKEN:
         print("Political bias: HF_API_TOKEN not set — skipping.")
@@ -208,10 +219,13 @@ def _detect_political_bias_ai(
     session = requests.Session()
 
     try:
-        for attempt in range(3):
+        for attempt in range(2):
             try:
                 response = session.post(
-                    url, headers=headers, json=payload, timeout=30
+                    url,
+                    headers=headers,
+                    json=payload,
+                    timeout=_REQUEST_TIMEOUT,
                 )
 
                 print(
@@ -230,8 +244,6 @@ def _detect_political_bias_ai(
 
                 response.raise_for_status()
                 result = response.json()
-
-                print(f"  Political bias raw result: {result}")
 
                 if not isinstance(result, list) or not result:
                     print(
@@ -274,8 +286,8 @@ def _detect_political_bias_ai(
                 print(
                     f"Political bias error attempt {attempt + 1}: {exc}"
                 )
-                if attempt < 2:
-                    time.sleep(2 ** attempt)
+                if attempt < 1:
+                    time.sleep(2)
     finally:
         session.close()
 
@@ -332,12 +344,13 @@ def _detect_general_bias(
         return None, None
 
     try:
-        print(f"  General bias raw results: {items}")
         predictions = [(item["label"], item["score"]) for item in items]
         top_label, confidence = max(predictions, key=lambda x: x[1])
         top_upper = top_label.strip().upper()
 
-        if "BIASED" in top_upper and "UN" not in top_upper and "NON" not in top_upper:
+        if (
+            "BIASED" in top_upper and "UN" not in top_upper and "NON" not in top_upper
+        ):
             label = "BIASED"
         elif (
             "UNBIASED" in top_upper or "NON" in top_upper or "NEUTRAL" in top_upper
@@ -368,7 +381,8 @@ def _detect_general_bias(
 def _score_article(article: dict) -> dict:
     """
     Score a single article synchronously. Called from thread pool.
-    Only title, content (truncated), and published_at are used.
+    Only title, content (truncated to _TEXT_LIMIT), source are used.
+    published_at is available in the dict for future use.
     """
     content = (article.get("content") or "")[:_TEXT_LIMIT]
     title = article.get("title") or ""
@@ -423,11 +437,10 @@ def _score_article(article: dict) -> dict:
 def _run_analysis_sync() -> None:
     """
     Blocking analysis worker — must be called via asyncio.to_thread().
-    Fetches _BATCH_SIZE unscored articles per call. Only selects the
-    fields required for analysis to minimise memory usage. Persists
-    results to Supabase after each article so no work is lost on
-    Render instance rotation. Calls gc.collect() after each article
-    to release memory promptly.
+    Fetches _BATCH_SIZE unscored articles per call. Selects only the
+    fields required for analysis to minimise memory. Persists each
+    result to Supabase immediately so no work is lost on instance
+    rotation. Calls gc.collect() after each article to release RAM.
     """
     print("Starting analysis job...")
 
@@ -471,7 +484,7 @@ async def analyze_unscored_articles() -> None:
     """
     Async entry point called by APScheduler and debug routes.
     Offloads all CPU/IO-bound work to a thread so the event loop
-    (and health checks) are never blocked. Skips silently if a run
+    and health checks are never blocked. Skips silently if a run
     is already in progress.
     """
     global _analysis_running

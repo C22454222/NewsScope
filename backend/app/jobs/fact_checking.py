@@ -1,36 +1,65 @@
 """
 NewsScope Fact-Checking Service.
-Integrates PolitiFact API + spaCy claim extraction.
+
+Integrates PolitiFact API with spaCy claim extraction.
+spaCy is lazy-loaded on first use — not imported at module level —
+to avoid loading 50MB+ into Render RAM on startup.
+
+Flake8: 0 errors/warnings.
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import httpx
-import spacy
 
 from app.schemas import ArticleResponse
 from app.db.supabase import supabase
 
-nlp = spacy.load("en_core_web_sm")
+
+# ── spaCy lazy loader ─────────────────────────────────────────────────────────
+
+_nlp = None
+
+
+def _get_nlp():
+    """
+    Lazy-load spaCy en_core_web_sm on first call only.
+    Prevents 50MB model from loading into Render RAM at startup.
+    """
+    global _nlp
+    if _nlp is None:
+        import spacy
+        _nlp = spacy.load("en_core_web_sm")
+    return _nlp
+
+
+# ── Claim extraction ──────────────────────────────────────────────────────────
 
 
 def extract_claims(text: str) -> List[str]:
-    """Extract verifiable claims using spaCy and heuristics."""
-    doc = nlp(text)
+    """
+    Extract up to 5 verifiable claims from article text using spaCy.
+    Filters out questions and very short sentences. Prioritises sentences
+    containing named entities (dates, people, organisations) or numbers.
+    """
+    doc = _get_nlp()(text)
     claims: List[str] = []
 
     for sent in doc.sents:
         sent_text = sent.text.strip()
 
-        # Skip questions
         if sent_text.endswith("?"):
             continue
 
         if len(sent) <= 5:
             continue
 
-        if any(token.like_num or token.ent_type_ in ("DATE", "PERSON", "ORG") for token in sent):
+        has_entity = any(
+            token.like_num or token.ent_type_ in ("DATE", "PERSON", "ORG")
+            for token in sent
+        )
+        if has_entity:
             claims.append(sent_text)
 
         if len(claims) >= 5:
@@ -39,9 +68,19 @@ def extract_claims(text: str) -> List[str]:
     return claims
 
 
-async def check_politifact_claims(claims: List[str]) -> Dict[str, Any]:
-    """Query PolitiFact public API for claim verification."""
+# ── PolitiFact API ────────────────────────────────────────────────────────────
+
+
+async def check_politifact_claims(
+    claims: List[str],
+) -> Dict[str, Any]:
+    """
+    Query PolitiFact public search API for each extracted claim.
+    Returns a dict mapping each claim to its top ruling and URL.
+    Fails gracefully per claim — one API error does not abort the batch.
+    """
     results: Dict[str, Any] = {}
+
     async with httpx.AsyncClient(timeout=10.0) as client:
         for claim in claims:
             try:
@@ -70,8 +109,14 @@ async def check_politifact_claims(claims: List[str]) -> Dict[str, Any]:
     return results
 
 
+# ── Ruling normalisation ──────────────────────────────────────────────────────
+
+
 def ruling_to_score(ruling: str) -> float:
-    """Convert PolitiFact ruling to a normalized credibility score (0–1)."""
+    """
+    Convert a PolitiFact ruling string to a normalised credibility score.
+    Returns a float between 0.0 (least credible) and 1.0 (most credible).
+    """
     r = ruling.lower()
     if "true" in r and "mostly" not in r:
         return 1.0
@@ -86,9 +131,22 @@ def ruling_to_score(ruling: str) -> float:
     return 0.5
 
 
-async def compute_credibility_score(article: ArticleResponse) -> Dict[str, Any]:
-    """Compute a credibility score (0–100) for a given article."""
-    text = f"{article.title} {article.description} {article.content}".strip()
+# ── Credibility scoring ───────────────────────────────────────────────────────
+
+
+async def compute_credibility_score(
+    article: ArticleResponse,
+) -> Dict[str, Any]:
+    """
+    Compute a credibility score (0–100) for a given article.
+    Uses claim extraction + PolitiFact verification as primary signal.
+    Falls back to a default of 85.0 for short articles or when no
+    verifiable claims are found.
+    """
+    text = (
+        f"{article.title} {article.description} {article.content}".strip()
+    )
+
     if len(text) < 100:
         return {
             "score": 85.0,
@@ -125,12 +183,25 @@ async def compute_credibility_score(article: ArticleResponse) -> Dict[str, Any]:
     }
 
 
-async def batch_factcheck_recent(hours: int = 24) -> List[Dict[str, Any]]:
-    """Re-fact-check recent articles in the past `hours` hours."""
-    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
-    recent = (
+# ── Batch re-check ────────────────────────────────────────────────────────────
+
+
+async def batch_factcheck_recent(
+    hours: int = 24,
+) -> List[Dict[str, Any]]:
+    """
+    Re-fact-check articles published in the last `hours` hours
+    whose credibility score is at or below 80.1.
+    Persists updated scores, fact_checks, and reason to Supabase.
+    Returns a list of result dicts keyed by article ID.
+    """
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(hours=hours)
+    ).isoformat()
+
+    recent: Optional[list] = (
         supabase.table("articles")
-        .select("id,title,content,description")
+        .select("id, title, content, description")
         .gte("published_at", cutoff)
         .lte("credibility_score", 80.1)
         .limit(50)
@@ -139,7 +210,8 @@ async def batch_factcheck_recent(hours: int = 24) -> List[Dict[str, Any]]:
     )
 
     results: List[Dict[str, Any]] = []
-    for art in recent:
+
+    for art in (recent or []):
         cred = await compute_credibility_score(ArticleResponse(**art))
         supabase.table("articles").update(
             {
