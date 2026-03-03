@@ -1,13 +1,12 @@
 """
 NewsScope Analysis Service.
 
-Hybrid inference strategy to minimise RAM on Render free tier:
-  - Political bias : local transformers pipeline  (~270 MB, needs
-                     custom launch/POLITICS tokenizer — API unsupported)
-  - Sentiment      : HuggingFace Serverless Inference (zero RAM)
-  - General bias   : HuggingFace Serverless Inference (zero RAM)
+All three models run via HuggingFace Serverless Inference — zero local
+RAM footprint. No transformers/torch loaded on Render.
 
-Total RAM footprint: ~270 MB (political model only).
+Sentiment      : distilbert/distilbert-base-uncased-finetuned-sst-2-english
+Political bias : matous-volf/political-leaning-politics
+General bias   : valurank/distilroberta-bias
 
 Flake8: 0 errors/warnings.
 """
@@ -41,100 +40,13 @@ GENERAL_BIAS_MODEL = os.getenv(
 # HuggingFace Serverless Inference — replaces deprecated api-inference endpoint
 _HF_API_BASE = "https://router.huggingface.co/hf-inference/models"
 
-# ── Lazy singleton — political model only, loaded once ───────────────────────
-_political_pipeline = None
-
 # ── Concurrency guard — prevents overlapping analysis runs ───────────────────
 _analysis_running = False
 
 # ── Batch size: 1 article per trigger — survives Render rotations ─────────────
 _BATCH_SIZE = 1
 
-
-# ── Inference API helper ──────────────────────────────────────────────────────
-
-
-def _inference_api_call(
-    model: str,
-    text: str,
-    retries: int = 3,
-) -> Optional[list]:
-    """
-    POST to HuggingFace Serverless Inference with retry + warm-up handling.
-    Returns raw list of label/score dicts, or None on failure.
-    """
-    if not HF_API_TOKEN:
-        print("HF_API_TOKEN not set — skipping Inference API call.")
-        return None
-
-    url = f"{_HF_API_BASE}/{model}"
-    headers = {"Authorization": f"Bearer {HF_API_TOKEN}"}
-    payload = {"inputs": text[:512]}
-
-    for attempt in range(retries):
-        try:
-            response = requests.post(
-                url, headers=headers, json=payload, timeout=30
-            )
-
-            # 503 = model loading — wait and retry
-            if response.status_code == 503:
-                wait = 10 + (attempt * 5)
-                print(
-                    f"Model {model} loading, "
-                    f"waiting {wait}s (attempt {attempt + 1})..."
-                )
-                time.sleep(wait)
-                continue
-
-            response.raise_for_status()
-            result = response.json()
-
-            # API returns [[{...}]] or [{...}] depending on model
-            if isinstance(result, list) and result:
-                if isinstance(result[0], list):
-                    return result[0]
-                return result
-
-        except Exception as exc:
-            print(
-                f"Inference API error [{model}] "
-                f"attempt {attempt + 1}: {exc}"
-            )
-            if attempt < retries - 1:
-                time.sleep(2 ** attempt)
-
-    return None
-
-
-# ── Political bias — local transformer ───────────────────────────────────────
-
-
-def _get_political_pipeline():
-    """
-    Load political bias pipeline once and cache as singleton.
-    Requires launch/POLITICS tokenizer — not supported via Inference API.
-    """
-    global _political_pipeline
-    if _political_pipeline is None:
-        from transformers import pipeline
-
-        print(f"Loading political bias model: {BIAS_MODEL}")
-        _political_pipeline = pipeline(
-            "text-classification",
-            model=BIAS_MODEL,
-            tokenizer="launch/POLITICS",
-            truncation=True,
-            max_length=512,
-            device=-1,
-            top_k=None,
-        )
-        print("Political bias model loaded.")
-    return _political_pipeline
-
-
-# ── Source fallback ───────────────────────────────────────────────────────────
-
+# ── Source fallback map ───────────────────────────────────────────────────────
 _SOURCE_BIAS_MAP = {
     "CNN": -1.0,
     "The Guardian": -1.0,
@@ -163,6 +75,63 @@ _POLITICAL_LABEL_MAP = {
 }
 
 
+# ── Inference API helper ──────────────────────────────────────────────────────
+
+
+def _inference_api_call(
+    model: str,
+    text: str,
+    retries: int = 3,
+) -> Optional[list]:
+    """
+    POST to HuggingFace Serverless Inference with retry + warm-up handling.
+    Returns raw list of label/score dicts, or None on failure.
+    """
+    if not HF_API_TOKEN:
+        print("HF_API_TOKEN not set — skipping Inference API call.")
+        return None
+
+    url = f"{_HF_API_BASE}/{model}"
+    headers = {"Authorization": f"Bearer {HF_API_TOKEN}"}
+    payload = {"inputs": text[:512]}
+
+    for attempt in range(retries):
+        try:
+            response = requests.post(
+                url, headers=headers, json=payload, timeout=30
+            )
+
+            if response.status_code == 503:
+                wait = 10 + (attempt * 5)
+                print(
+                    f"Model {model} loading, "
+                    f"waiting {wait}s (attempt {attempt + 1})..."
+                )
+                time.sleep(wait)
+                continue
+
+            response.raise_for_status()
+            result = response.json()
+
+            if isinstance(result, list) and result:
+                if isinstance(result[0], list):
+                    return result[0]
+                return result
+
+        except Exception as exc:
+            print(
+                f"Inference API error [{model}] "
+                f"attempt {attempt + 1}: {exc}"
+            )
+            if attempt < retries - 1:
+                time.sleep(2 ** attempt)
+
+    return None
+
+
+# ── Source fallback ───────────────────────────────────────────────────────────
+
+
 def _get_source_political_leaning(source_name: str) -> float:
     """Retrieve source bias from DB, fall back to hardcoded map."""
     try:
@@ -188,14 +157,14 @@ def _get_source_political_leaning(source_name: str) -> float:
     return _SOURCE_BIAS_MAP.get(source_name, 0.0)
 
 
-# ── Sentiment — HuggingFace Serverless Inference ──────────────────────────────
+# ── Sentiment — HuggingFace Serverless Inference ─────────────────────────────
 
 
 def _sentiment_score(text: str) -> Optional[float]:
     """
     Run sentiment analysis via HuggingFace Serverless Inference.
     Returns float from -1.0 (negative) to +1.0 (positive).
-    Falls back to None on API failure — article retried next cycle.
+    Returns None on failure — article retried on next cycle.
     """
     items = _inference_api_call(SENTIMENT_MODEL, text)
     if not items:
@@ -221,6 +190,81 @@ def _sentiment_score(text: str) -> Optional[float]:
     except Exception as exc:
         print(f"Sentiment parse error: {exc}")
         return None
+
+
+# ── Political bias — HuggingFace Serverless Inference ────────────────────────
+
+
+def _detect_political_bias_ai(
+    text: str,
+) -> Tuple[Optional[float], Optional[float]]:
+    """
+    Run political bias classification via HuggingFace Serverless Inference.
+    Returns (bias_score, confidence): -1.0=Left, 0=Center, 1=Right.
+    """
+    items = _inference_api_call(BIAS_MODEL, text)
+    if not items:
+        print("Political bias API call failed — will retry next cycle.")
+        return None, None
+
+    try:
+        predictions = [(item["label"], item["score"]) for item in items]
+        top_label, confidence = max(predictions, key=lambda x: x[1])
+
+        top_norm = top_label.strip()
+        bias_score = _POLITICAL_LABEL_MAP.get(
+            top_norm, _POLITICAL_LABEL_MAP.get(top_norm.upper(), 0.0)
+        )
+
+        if bias_score < -0.3:
+            label_str = "LEFT"
+        elif bias_score > 0.3:
+            label_str = "RIGHT"
+        else:
+            label_str = "CENTER"
+
+        print(
+            f"Political bias: {label_str} "
+            f"(score={bias_score:.2f}, confidence={confidence:.2%})"
+        )
+        return round(bias_score, 4), round(confidence, 4)
+
+    except Exception as exc:
+        print(f"Political bias parse error: {exc}")
+        return None, None
+
+
+def _hybrid_bias_analysis(
+    text: str,
+    source_name: str,
+) -> Tuple[float, float]:
+    """
+    Political bias with graceful source fallback.
+    Returns (bias_score, bias_intensity).
+    """
+    ai_bias, ai_confidence = _detect_political_bias_ai(text)
+
+    if ai_bias is not None and ai_confidence is not None:
+        if ai_bias < -0.3:
+            label = "LEFT"
+        elif ai_bias > 0.3:
+            label = "RIGHT"
+        else:
+            label = "CENTER"
+
+        print(
+            f"Article AI result: {label} "
+            f"(score={ai_bias:.2f}, confidence={ai_confidence:.2%}, "
+            f"intensity={ai_confidence:.2f})"
+        )
+        return ai_bias, ai_confidence
+
+    source_bias = _get_source_political_leaning(source_name)
+    print(
+        f"AI failed -> fallback to source: "
+        f"{source_name} = {source_bias:.2f}"
+    )
+    return source_bias, 0.5
 
 
 # ── General bias — HuggingFace Serverless Inference ──────────────────────────
@@ -267,82 +311,6 @@ def _detect_general_bias(
     except Exception as exc:
         print(f"General bias parse error: {exc}")
         return None, None
-
-
-# ── Political bias — local transformer ───────────────────────────────────────
-
-
-def _detect_political_bias_ai(
-    text: str,
-) -> Tuple[Optional[float], Optional[float]]:
-    """
-    Run political bias classification via local transformer.
-    Returns (bias_score, confidence): -1.0=Left, 0=Center, 1=Right.
-    Uses local pipeline — Inference API dropped support for this model
-    and it requires the custom launch/POLITICS tokenizer.
-    """
-    try:
-        pipe = _get_political_pipeline()
-        results = pipe(text[:512])
-
-        items = results[0] if isinstance(results[0], list) else results
-        predictions = [(item["label"], item["score"]) for item in items]
-        top_label, confidence = max(predictions, key=lambda x: x[1])
-
-        top_norm = top_label.strip()
-        bias_score = _POLITICAL_LABEL_MAP.get(
-            top_norm, _POLITICAL_LABEL_MAP.get(top_norm.upper(), 0.0)
-        )
-
-        if bias_score < -0.3:
-            label_str = "LEFT"
-        elif bias_score > 0.3:
-            label_str = "RIGHT"
-        else:
-            label_str = "CENTER"
-
-        print(
-            f"Political bias: {label_str} "
-            f"(score={bias_score:.2f}, confidence={confidence:.2%})"
-        )
-        return round(bias_score, 4), round(confidence, 4)
-
-    except Exception as exc:
-        print(f"Political bias error: {exc}")
-        return None, None
-
-
-def _hybrid_bias_analysis(
-    text: str,
-    source_name: str,
-) -> Tuple[float, float]:
-    """
-    Political bias with graceful source fallback.
-    Returns (bias_score, bias_intensity).
-    """
-    ai_bias, ai_confidence = _detect_political_bias_ai(text)
-
-    if ai_bias is not None and ai_confidence is not None:
-        if ai_bias < -0.3:
-            label = "LEFT"
-        elif ai_bias > 0.3:
-            label = "RIGHT"
-        else:
-            label = "CENTER"
-
-        print(
-            f"Article AI result: {label} "
-            f"(score={ai_bias:.2f}, confidence={ai_confidence:.2%}, "
-            f"intensity={ai_confidence:.2f})"
-        )
-        return ai_bias, ai_confidence
-
-    source_bias = _get_source_political_leaning(source_name)
-    print(
-        f"AI failed -> fallback to source: "
-        f"{source_name} = {source_bias:.2f}"
-    )
-    return source_bias, 0.5
 
 
 # ── Sync worker — runs in thread pool, never blocks the event loop ────────────
