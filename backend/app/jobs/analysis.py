@@ -195,6 +195,7 @@ def _detect_political_bias_ai(
     Returns (bias_score, confidence): -1.0=Left, 0=Center, 1=Right.
     """
     if not HF_API_TOKEN:
+        print("Political bias: HF_API_TOKEN not set — skipping.")
         return None, None
 
     url = f"{_HF_API_BASE}/{BIAS_MODEL}"
@@ -212,11 +213,16 @@ def _detect_political_bias_ai(
                 url, headers=headers, json=payload, timeout=30
             )
 
+            print(
+                f"  Political bias HTTP {response.status_code} "
+                f"(attempt {attempt + 1})"
+            )
+
             if response.status_code == 503:
                 wait = 10 + (attempt * 5)
                 print(
-                    f"Political bias model loading, "
-                    f"waiting {wait}s (attempt {attempt + 1})..."
+                    f"  Political bias model loading, "
+                    f"waiting {wait}s..."
                 )
                 time.sleep(wait)
                 continue
@@ -224,13 +230,23 @@ def _detect_political_bias_ai(
             response.raise_for_status()
             result = response.json()
 
+            # DEBUG — log raw response shape to diagnose parsing issues
+            print(f"  Political bias raw result type: {type(result)}")
+            print(f"  Political bias raw result: {result}")
+
             # Router may wrap response in a list — unwrap if so
             if isinstance(result, list) and result:
+                print("  Political bias: unwrapping list response")
                 result = result[0]
 
             labels = result.get("labels", [])
             scores = result.get("scores", [])
+
+            print(f"  Political bias labels: {labels}")
+            print(f"  Political bias scores: {scores}")
+
             if not labels:
+                print("  Political bias: empty labels — returning None")
                 return None, None
 
             label_score_map = dict(zip(labels, scores))
