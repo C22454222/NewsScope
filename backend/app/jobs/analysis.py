@@ -44,7 +44,7 @@ _HF_API_BASE = "https://router.huggingface.co/hf-inference/models"
 _analysis_running = False
 
 # ── Batch size: 1 article per trigger — survives Render rotations ─────────────
-_BATCH_SIZE = 1
+_BATCH_SIZE = 25
 
 # ── Source fallback map ───────────────────────────────────────────────────────
 _SOURCE_BIAS_MAP = {
