@@ -5,10 +5,10 @@ All three models run via HuggingFace Serverless Inference — zero local
 RAM footprint. No transformers/torch loaded on Render.
 
 Sentiment      : distilbert/distilbert-base-uncased-finetuned-sst-2-english
-Political bias : matous-volf/political-leaning-politics
+Political bias : facebook/bart-large-mnli (zero-shot classification)
 General bias   : valurank/distilroberta-bias
 
-Flake8: 0 errors/warnings. Test
+Flake8: 0 errors/warnings.
 """
 
 import os
@@ -62,20 +62,8 @@ _SOURCE_BIAS_MAP = {
     "GB News": 1.0,
 }
 
-_POLITICAL_LABEL_MAP = {
-    "LABEL_0": -1.0,
-    "LABEL_1": 0.0,
-    "LABEL_2": 1.0,
-    "LEFT": -1.0,
-    "CENTER": 0.0,
-    "RIGHT": 1.0,
-    "0": -1.0,
-    "1": 0.0,
-    "2": 1.0,
-}
 
-
-# ── Inference API helper ──────────────────────────────────────────────────────
+# ── Inference API helper — sentiment + general bias ───────────────────────────
 
 
 def _inference_api_call(
@@ -86,6 +74,7 @@ def _inference_api_call(
     """
     POST to HuggingFace Serverless Inference with retry + warm-up handling.
     Returns raw list of label/score dicts, or None on failure.
+    Used for standard text-classification models only.
     """
     if not HF_API_TOKEN:
         print("HF_API_TOKEN not set — skipping Inference API call.")
@@ -192,46 +181,83 @@ def _sentiment_score(text: str) -> Optional[float]:
         return None
 
 
-# ── Political bias — HuggingFace Serverless Inference ────────────────────────
+# ── Political bias — zero-shot via HuggingFace Serverless Inference ───────────
 
 
 def _detect_political_bias_ai(
     text: str,
 ) -> Tuple[Optional[float], Optional[float]]:
     """
-    Run political bias classification via HuggingFace Serverless Inference.
+    Run political bias via zero-shot classification (facebook/bart-large-mnli).
+    Sends candidate labels left-wing/centrist/right-wing and derives a
+    bias score from (right - left) probability difference.
     Returns (bias_score, confidence): -1.0=Left, 0=Center, 1=Right.
     """
-    items = _inference_api_call(BIAS_MODEL, text)
-    if not items:
-        print("Political bias API call failed — will retry next cycle.")
+    if not HF_API_TOKEN:
         return None, None
 
-    try:
-        predictions = [(item["label"], item["score"]) for item in items]
-        top_label, confidence = max(predictions, key=lambda x: x[1])
+    url = f"{_HF_API_BASE}/{BIAS_MODEL}"
+    headers = {"Authorization": f"Bearer {HF_API_TOKEN}"}
+    payload = {
+        "inputs": text[:512],
+        "parameters": {
+            "candidate_labels": ["left-wing", "centrist", "right-wing"]
+        },
+    }
 
-        top_norm = top_label.strip()
-        bias_score = _POLITICAL_LABEL_MAP.get(
-            top_norm, _POLITICAL_LABEL_MAP.get(top_norm.upper(), 0.0)
-        )
+    for attempt in range(3):
+        try:
+            response = requests.post(
+                url, headers=headers, json=payload, timeout=30
+            )
 
-        if bias_score < -0.3:
-            label_str = "LEFT"
-        elif bias_score > 0.3:
-            label_str = "RIGHT"
-        else:
-            label_str = "CENTER"
+            if response.status_code == 503:
+                wait = 10 + (attempt * 5)
+                print(
+                    f"Political bias model loading, "
+                    f"waiting {wait}s (attempt {attempt + 1})..."
+                )
+                time.sleep(wait)
+                continue
 
-        print(
-            f"Political bias: {label_str} "
-            f"(score={bias_score:.2f}, confidence={confidence:.2%})"
-        )
-        return round(bias_score, 4), round(confidence, 4)
+            response.raise_for_status()
+            result = response.json()
 
-    except Exception as exc:
-        print(f"Political bias parse error: {exc}")
-        return None, None
+            labels = result.get("labels", [])
+            scores = result.get("scores", [])
+            if not labels:
+                return None, None
+
+            label_score_map = dict(zip(labels, scores))
+            left = label_score_map.get("left-wing", 0.0)
+            center = label_score_map.get("centrist", 0.0)
+            right = label_score_map.get("right-wing", 0.0)
+
+            bias_score = round(right - left, 4)
+            confidence = round(max(left, center, right), 4)
+
+            if bias_score < -0.3:
+                label_str = "LEFT"
+            elif bias_score > 0.3:
+                label_str = "RIGHT"
+            else:
+                label_str = "CENTER"
+
+            print(
+                f"Political bias: {label_str} "
+                f"(score={bias_score:.2f}, confidence={confidence:.2%})"
+            )
+            return bias_score, confidence
+
+        except Exception as exc:
+            print(
+                f"Political bias error attempt {attempt + 1}: {exc}"
+            )
+            if attempt < 2:
+                time.sleep(2 ** attempt)
+
+    print("Political bias API call failed — will retry next cycle.")
+    return None, None
 
 
 def _hybrid_bias_analysis(
