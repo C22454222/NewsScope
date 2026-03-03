@@ -41,14 +41,8 @@ GENERAL_BIAS_MODEL = os.getenv(
 
 _HF_API_BASE = "https://router.huggingface.co/hf-inference/models"
 
-# Reduced from 20 — each article makes 3 API calls with up to 3 retries
-# each at 30s timeout. 10 articles = manageable memory + time budget.
 _BATCH_SIZE = 10
-
 _TEXT_LIMIT = 1024
-
-# Reduced timeout — fail fast and fall back to source bias rather than
-# holding open connections for 30s × 3 retries × 20 articles.
 _REQUEST_TIMEOUT = 30
 
 _analysis_running = False
@@ -81,7 +75,6 @@ def _inference_api_call(
     POST to HuggingFace Serverless Inference with retry + warm-up handling.
     Returns raw list of label/score dicts, or None on failure.
     Uses an explicit session closed in a finally block to prevent leaks.
-    Retries capped at 2 to limit memory pressure from stacked connections.
     """
     if not HF_API_TOKEN:
         print("HF_API_TOKEN not set — skipping Inference API call.")
@@ -164,7 +157,7 @@ def _get_source_political_leaning(source_name: str) -> float:
 def _sentiment_score(text: str) -> Optional[float]:
     """
     Run sentiment analysis via HuggingFace Serverless Inference.
-    Returns float from -1.0 (negative) to +1.0 (positive), or None on failure.
+    Returns float from -1.0 (negative) to +1.0 (positive), or None.
     """
     items = _inference_api_call(SENTIMENT_MODEL, text)
     if not items:
@@ -202,7 +195,6 @@ def _detect_political_bias_ai(
     Zero-shot political bias via facebook/bart-large-mnli.
     Returns (bias_score, confidence): -1.0=Left, 0.0=Center, 1.0=Right.
     bias_score derived from (right-wing probability - left-wing probability).
-    Retries capped at 2 to avoid holding connections on timeout-heavy articles.
     """
     if not HF_API_TOKEN:
         print("Political bias: HF_API_TOKEN not set — skipping.")
@@ -382,7 +374,6 @@ def _score_article(article: dict) -> dict:
     """
     Score a single article synchronously. Called from thread pool.
     Only title, content (truncated to _TEXT_LIMIT), source are used.
-    published_at is available in the dict for future use.
     """
     content = (article.get("content") or "")[:_TEXT_LIMIT]
     title = article.get("title") or ""

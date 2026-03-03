@@ -8,6 +8,7 @@ Fact-checking runs async post-insert via safe loop wrapper.
 """
 
 import asyncio
+import gc
 import os
 import re
 import time
@@ -23,6 +24,7 @@ from newspaper import Article
 
 from app.core.categorisation import infer_category
 from app.db.supabase import supabase
+
 
 NEWSAPI_KEY = os.getenv("NEWSAPI_KEY")
 
@@ -50,8 +52,9 @@ FEED_NAME_MAP = {
     "https://www.euronews.com/rss": "Euronews",
 }
 
-# Max concurrent scrape workers — keeps RAM and network sockets bounded
-_SCRAPE_WORKERS = 6
+# Reduced from 6 — each worker holds a full HTML parse tree in RAM.
+# 3 workers = ~150-200MB peak vs 6 workers = ~300-400MB peak on Render.
+_SCRAPE_WORKERS = 3
 
 # Main event loop — captured at startup by set_main_event_loop()
 _main_event_loop: Optional[asyncio.AbstractEventLoop] = None
@@ -185,7 +188,11 @@ def fetch_content_newspaper(url: str) -> Optional[str]:
 
 
 def fetch_content_beautifulsoup(url: str) -> Optional[str]:
-    """Tier 2: BeautifulSoup smart extraction — handles ~95% of sites."""
+    """
+    Tier 2: BeautifulSoup smart extraction — handles ~95% of sites.
+    Uses html.parser (pure Python) instead of lxml to reduce RAM usage.
+    Response content is deleted immediately after parsing.
+    """
     try:
         headers = {
             "User-Agent": (
@@ -204,11 +211,14 @@ def fetch_content_beautifulsoup(url: str) -> Optional[str]:
             "Referer": "https://www.google.com/",
         }
         response = requests.get(
-            url, headers=headers, timeout=20, allow_redirects=True
+            url, headers=headers, timeout=15, allow_redirects=True
         )
         response.raise_for_status()
 
+        # Parse then immediately free the raw response bytes
         soup = BeautifulSoup(response.content, "html.parser")
+        del response
+
         for element in soup(
             [
                 "script", "style", "nav", "footer", "aside", "header",
@@ -288,6 +298,10 @@ def fetch_content_beautifulsoup(url: str) -> Optional[str]:
             if long_paragraphs:
                 content = "\n\n".join(long_paragraphs)
 
+        # Free the soup tree before returning
+        soup.decompose()
+        del soup
+
         if content and len(content) > 150:
             cleaned = clean_text(content)
             if len(cleaned) > 150:
@@ -299,7 +313,10 @@ def fetch_content_beautifulsoup(url: str) -> Optional[str]:
 
 
 def fetch_content_aggressive(url: str) -> Optional[str]:
-    """Tier 3: Ultra-aggressive full-page text extraction."""
+    """
+    Tier 3: Ultra-aggressive full-page text extraction.
+    Uses html.parser to avoid lxml RAM overhead.
+    """
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1)"
@@ -310,6 +327,8 @@ def fetch_content_aggressive(url: str) -> Optional[str]:
         response.raise_for_status()
 
         soup = BeautifulSoup(response.content, "html.parser")
+        del response
+
         for element in soup(
             [
                 "script", "style", "nav", "footer", "aside", "header",
@@ -320,6 +339,9 @@ def fetch_content_aggressive(url: str) -> Optional[str]:
             element.decompose()
 
         text = soup.get_text(separator="\n", strip=True)
+        soup.decompose()
+        del soup
+
         if len(text) > 300:
             cleaned = clean_text(text)
             if len(cleaned) > 150:
@@ -331,9 +353,13 @@ def fetch_content_aggressive(url: str) -> Optional[str]:
 
 
 def fetch_content_with_retry(
-    url: str, max_retries: int = 3
+    url: str, max_retries: int = 2
 ) -> Optional[str]:
-    """Tier 4: Retry with exponential backoff."""
+    """
+    Tier 4: Retry with exponential backoff.
+    Max retries reduced from 3 to 2 to cap memory dwell time.
+    Uses html.parser throughout — lxml removed to reduce RAM.
+    """
     for attempt in range(max_retries):
         try:
             headers = {
@@ -350,7 +376,7 @@ def fetch_content_with_retry(
             response = requests.get(
                 url,
                 headers=headers,
-                timeout=25,
+                timeout=20,
                 allow_redirects=True,
                 verify=True,
             )
@@ -360,7 +386,10 @@ def fetch_content_with_retry(
                 continue
 
             response.raise_for_status()
-            soup = BeautifulSoup(response.content, "lxml")
+
+            # html.parser instead of lxml — lower RAM, no C extension
+            soup = BeautifulSoup(response.content, "html.parser")
+            del response
 
             for unwanted in soup(
                 ["script", "style", "head", "title", "meta", "link"]
@@ -368,6 +397,9 @@ def fetch_content_with_retry(
                 unwanted.decompose()
 
             text = soup.get_text(separator=" ", strip=True)
+            soup.decompose()
+            del soup
+
             sentences = re.split(r"[.!?]+", text)
             meaningful_sentences = [
                 s.strip()
@@ -417,24 +449,28 @@ def fetch_content(url: str, title: str = "", source: str = "") -> str:
     """
     content = fetch_content_newspaper(url)
     if content:
+        gc.collect()
         return content
 
     time.sleep(0.3)
 
     content = fetch_content_beautifulsoup(url)
     if content:
+        gc.collect()
         return content
 
     time.sleep(0.5)
 
     content = fetch_content_aggressive(url)
     if content:
+        gc.collect()
         return content
 
     time.sleep(0.5)
 
-    content = fetch_content_with_retry(url, max_retries=3)
+    content = fetch_content_with_retry(url, max_retries=2)
     if content:
+        gc.collect()
         return content
 
     return fetch_content_title_fallback(title, source)
@@ -444,6 +480,7 @@ def _scrape_one(article: Dict[str, Any]) -> Dict[str, Any]:
     """
     Scrape a single article and return it enriched with content.
     Designed to run inside a ThreadPoolExecutor worker.
+    Calls gc.collect() before returning to free parse tree RAM promptly.
     """
     source_name_val = article.get("source")
     content = fetch_content(
@@ -467,7 +504,7 @@ def _scrape_one(article: Dict[str, Any]) -> Dict[str, Any]:
 
     is_fallback = "could not be retrieved" in content
 
-    return {
+    result = {
         "title": title,
         "url": url,
         "published_at": article["published_at"],
@@ -486,6 +523,9 @@ def _scrape_one(article: Dict[str, Any]) -> Dict[str, Any]:
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "_is_fallback": is_fallback,
     }
+
+    gc.collect()
+    return result
 
 
 async def factcheck_batch(article_ids: List[str]) -> None:
@@ -544,8 +584,9 @@ def insert_articles_batch(articles: List[Dict[str, Any]]) -> List[str]:
     Deduplicate by URL, scrape all new articles concurrently with a
     bounded thread pool, then bulk-insert into Supabase.
 
-    Week 4: credibility_score/fact_checks seeded as defaults on insert;
-    _schedule_factcheck() enriches them asynchronously post-insert.
+    Workers capped at _SCRAPE_WORKERS=3 to prevent simultaneous
+    BeautifulSoup parse trees from exhausting Render free tier RAM.
+    gc.collect() runs after each completed future for prompt cleanup.
     """
     urls = [a["url"] for a in articles if a.get("url")]
     if not urls:
@@ -573,7 +614,6 @@ def insert_articles_batch(articles: List[Dict[str, Any]]) -> List[str]:
     scrape_success = 0
     scrape_fallback = 0
 
-    # Concurrent scraping — bounded by _SCRAPE_WORKERS to cap RAM & sockets
     with ThreadPoolExecutor(max_workers=_SCRAPE_WORKERS) as executor:
         futures = {
             executor.submit(_scrape_one, article): article
@@ -594,6 +634,8 @@ def insert_articles_batch(articles: List[Dict[str, Any]]) -> List[str]:
                     f"  Scrape error "
                     f"[{article.get('url', '?')}]: {exc}"
                 )
+            finally:
+                gc.collect()
 
     if payloads:
         res = supabase.table("articles").insert(payloads).execute().data
@@ -768,5 +810,6 @@ def run_ingestion_cycle() -> None:
     except Exception as exc:
         print(f"Batch insert failed: {exc}")
 
+    gc.collect()
     print("\nIngestion cycle complete")
     print("=" * 70 + "\n")
