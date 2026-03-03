@@ -3,6 +3,7 @@ NewsScope background scheduler.
 
 Uses APScheduler BackgroundScheduler — runs jobs in a daemon thread
 alongside the FastAPI/uvicorn event loop.
+
 Flake8: 0 errors/warnings.
 """
 

@@ -1,3 +1,14 @@
+"""
+NewsScope FastAPI application entry point.
+
+Lifespan manages scheduler startup, job registration, keep-alive,
+and a single startup ingestion run. Analysis is deliberately delayed
+60 seconds after startup ingestion to prevent simultaneous memory
+pressure from both jobs on Render free tier (512MB limit).
+
+Flake8: 0 errors/warnings.
+"""
+
 import os
 import json
 import asyncio
@@ -30,6 +41,7 @@ from app.schemas import (
 )
 from app.core.scheduler import start_scheduler
 
+
 # ── Main event loop — captured in lifespan for sync bridges ──────────────────
 _main_loop: Optional[asyncio.AbstractEventLoop] = None
 
@@ -37,9 +49,12 @@ _main_loop: Optional[asyncio.AbstractEventLoop] = None
 _ingestion_running = False
 _analysis_running = False
 
+# ── Startup analysis delay — lets ingestion RAM clear before analysis runs ────
+_ANALYSIS_STARTUP_DELAY_SECONDS = 60
 
-def init_firebase():
-    """Initialize Firebase Admin SDK."""
+
+def init_firebase() -> None:
+    """Initialise Firebase Admin SDK from env var or local file."""
     try:
         service_account = os.getenv("FIREBASE_SERVICE_ACCOUNT")
         if service_account:
@@ -47,19 +62,18 @@ def init_firebase():
             cred = credentials.Certificate(cred_dict)
         else:
             cred = credentials.Certificate("firebase-service-account.json")
-
         firebase_admin.initialize_app(cred)
         print("Firebase Admin initialized")
     except ValueError:
-        print("ℹ Firebase Admin already initialized")
-    except Exception as e:
-        print(f"Firebase Admin init failed: {e}")
+        print("Firebase Admin already initialized")
+    except Exception as exc:
+        print(f"Firebase Admin init failed: {exc}")
 
 
 init_firebase()
 
 
-# ── Sync bridges for APScheduler (cannot schedule async def directly) ─────────
+# ── Sync bridges for APScheduler ──────────────────────────────────────────────
 
 
 def _sync_ingestion() -> None:
@@ -72,14 +86,14 @@ def _sync_ingestion() -> None:
     )
     try:
         future.result(timeout=3600)
-    except Exception as e:
-        print(f"Scheduled ingestion error: {e}")
+    except Exception as exc:
+        print(f"Scheduled ingestion error: {exc}")
 
 
 def _sync_analysis() -> None:
     """
     Sync bridge — runs analyze_unscored_articles on the main event loop.
-    Called every 5 minutes so even a brief stable window scores articles.
+    Fires every 5 minutes so even brief stable windows score articles.
     """
     if _main_loop is None or not _main_loop.is_running():
         print("Analysis bridge: no running loop, skipping.")
@@ -89,8 +103,8 @@ def _sync_analysis() -> None:
     )
     try:
         future.result(timeout=600)
-    except Exception as e:
-        print(f"Scheduled analysis error: {e}")
+    except Exception as exc:
+        print(f"Scheduled analysis error: {exc}")
 
 
 def _sync_archive() -> None:
@@ -103,48 +117,63 @@ def _sync_archive() -> None:
     )
     try:
         future.result(timeout=1800)
-    except Exception as e:
-        print(f"Scheduled archiving error: {e}")
+    except Exception as exc:
+        print(f"Scheduled archiving error: {exc}")
+
+
+# ── Lifespan ──────────────────────────────────────────────────────────────────
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Start scheduler jobs then run startup ingestion."""
+    """
+    FastAPI lifespan context manager.
+
+    Startup order:
+      1. Capture main event loop for sync bridges
+      2. Start APScheduler with ingestion, analysis, archiving jobs
+      3. Start keep-alive pinger (production only)
+      4. Run startup ingestion in background
+      5. Delay 60s then run first analysis — prevents simultaneous
+         ingestion + analysis memory pressure on Render free tier
+
+    Shutdown:
+      - Logs shutdown message (scheduler stops automatically)
+    """
     global _main_loop
 
     from app.core.scheduler import scheduler
 
-    # Capture loop before any jobs run — shared with ingestion.py
     _main_loop = asyncio.get_event_loop()
     set_main_event_loop(_main_loop)
 
     start_scheduler()
 
-    # Ingestion on the hour
     scheduler.add_job(
         _sync_ingestion,
         trigger=CronTrigger(minute=0),
         id="ingestion",
         max_instances=1,
         coalesce=True,
+        replace_existing=True,
     )
 
-    # Analysis every 5 minutes, batch of 1 — survives instance rotations
     scheduler.add_job(
         _sync_analysis,
         trigger=IntervalTrigger(minutes=5),
         id="analysis",
         max_instances=1,
         coalesce=True,
+        replace_existing=True,
     )
 
-    # Archiving at 3am daily
     scheduler.add_job(
         _sync_archive,
         trigger=CronTrigger(hour=3, minute=0),
         id="archiving",
         max_instances=1,
         coalesce=True,
+        replace_existing=True,
     )
 
     env = os.getenv("ENVIRONMENT", "production")
@@ -156,10 +185,13 @@ async def lifespan(app: FastAPI):
     else:
         print("Keep-alive disabled in development")
 
-    asyncio.create_task(_run_startup_ingestion())
+    asyncio.create_task(_run_startup_sequence())
 
     yield
     print("Server shutting down...")
+
+
+# ── Startup helpers ───────────────────────────────────────────────────────────
 
 
 async def _scheduled_ingestion() -> None:
@@ -177,8 +209,12 @@ async def _scheduled_ingestion() -> None:
         _ingestion_running = False
 
 
-async def _run_startup_ingestion() -> None:
-    """Run ingestion once on startup, offloaded to thread pool."""
+async def _run_startup_sequence() -> None:
+    """
+    Run ingestion on startup, then wait for RAM to clear before
+    triggering the first analysis run. Prevents simultaneous memory
+    pressure from both jobs crashing the Render free tier instance.
+    """
     global _ingestion_running
 
     print("Server startup: Running ingestion...")
@@ -186,19 +222,33 @@ async def _run_startup_ingestion() -> None:
     try:
         await asyncio.to_thread(run_ingestion_cycle)
         print("Startup ingestion complete")
-    except Exception as e:
-        print(f"Startup ingestion failed: {e}")
+    except Exception as exc:
+        print(f"Startup ingestion failed: {exc}")
     finally:
         _ingestion_running = False
+
+    print(
+        f"Waiting {_ANALYSIS_STARTUP_DELAY_SECONDS}s before first "
+        "analysis run to allow ingestion RAM to clear..."
+    )
+    await asyncio.sleep(_ANALYSIS_STARTUP_DELAY_SECONDS)
+    print("Starting post-startup analysis run...")
+    await analyze_unscored_articles()
+
+
+# ── App ───────────────────────────────────────────────────────────────────────
 
 
 app = FastAPI(title="NewsScope API", version="1.0.0", lifespan=lifespan)
 
 
+# ── Auth ──────────────────────────────────────────────────────────────────────
+
+
 def get_current_user(
     authorization: Optional[str] = Header(None),
 ) -> str:
-    """Extract user ID from Firebase JWT token."""
+    """Extract and verify user ID from Firebase JWT token."""
     if not authorization:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
@@ -217,16 +267,22 @@ def get_current_user(
         raise HTTPException(
             status_code=401, detail="Authentication token expired"
         )
-    except Exception as e:
+    except Exception as exc:
         raise HTTPException(
-            status_code=401, detail=f"Authentication failed: {e}"
+            status_code=401, detail=f"Authentication failed: {exc}"
         )
+
+
+# ── Core routes ───────────────────────────────────────────────────────────────
 
 
 @app.get("/")
 def root():
+    """API root — returns version and docs link."""
     return {
-        "message": "Welcome to NewsScope API. Try /health to check status.",
+        "message": (
+            "Welcome to NewsScope API. Try /health to check status."
+        ),
         "version": "1.0.0",
         "docs": "/docs",
     }
@@ -234,6 +290,7 @@ def root():
 
 @app.head("/")
 def root_head():
+    """HEAD handler for uptime monitors."""
     return {}
 
 
@@ -243,11 +300,13 @@ def health():
     return {"status": "ok"}
 
 
+# ── Internal + debug routes ───────────────────────────────────────────────────
+
+
 @app.post("/internal/analyze-batch")
 async def internal_analyze_batch():
     """
-    Called by keep-alive every 14 min as an additional analysis trigger.
-    Scores 1 article per call — fully resumable across instance rotations.
+    Additional analysis trigger called by keep-alive every 14 minutes.
     Skips silently if analysis is already running.
     """
     asyncio.create_task(analyze_unscored_articles())
@@ -256,20 +315,26 @@ async def internal_analyze_batch():
 
 @app.post("/debug/ingest")
 async def debug_ingest(background_tasks: BackgroundTasks):
+    """Manually trigger an ingestion cycle."""
     background_tasks.add_task(_scheduled_ingestion)
     return {"status": "ingestion triggered in background"}
 
 
 @app.post("/debug/analyze")
 async def debug_analyze(background_tasks: BackgroundTasks):
+    """Manually trigger an analysis cycle."""
     background_tasks.add_task(analyze_unscored_articles)
     return {"status": "analysis triggered in background"}
 
 
 @app.post("/debug/archive")
 async def debug_archive(background_tasks: BackgroundTasks):
+    """Manually trigger an archiving cycle."""
     background_tasks.add_task(archive_old_articles)
     return {"status": "archiving triggered in background"}
+
+
+# ── User API ──────────────────────────────────────────────────────────────────
 
 
 @app.post("/api/reading-history")
@@ -285,16 +350,14 @@ async def track_reading(
             "time_spent_seconds": data.time_spent_seconds,
             "opened_at": datetime.utcnow().isoformat(),
         }
-
         response = supabase.table("reading_history").upsert(
             payload, on_conflict="user_id,article_id"
         ).execute()
-
         print("Reading tracked successfully")
         return {"success": True, "data": response.data}
-    except Exception as e:
-        print(f"Error tracking reading: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as exc:
+        print(f"Error tracking reading: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @app.get("/api/bias-profile", response_model=BiasProfile)
@@ -411,9 +474,9 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
             neutral_count=neu,
             negative_count=neg,
         )
-    except Exception as e:
-        print(f"Error fetching bias profile: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as exc:
+        print(f"Error fetching bias profile: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @app.post("/api/articles/compare", response_model=ComparisonResponse)
@@ -451,13 +514,13 @@ async def compare_articles(request: ComparisonRequest):
             right_articles=right,
             total_found=len(articles_data),
         )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @app.get("/api/fact-checks/{article_id}", response_model=List[FactCheck])
 async def get_article_fact_checks(article_id: str):
-    """Return stored fact-checks for an article."""
+    """Return stored fact-checks for a given article."""
     try:
         response = (
             supabase.table("fact_checks")
@@ -466,9 +529,11 @@ async def get_article_fact_checks(article_id: str):
             .execute()
         )
         return response.data
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
+
+# ── Routers ───────────────────────────────────────────────────────────────────
 
 app.include_router(articles.router, prefix="/articles", tags=["articles"])
 app.include_router(users.router, prefix="/users", tags=["users"])
@@ -479,6 +544,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 @app.get("/favicon.ico")
 async def favicon():
+    """Serve favicon if present, otherwise return empty response."""
     file_path = os.path.join(BASE_DIR, "..", "static", "favicon.ico")
     if os.path.exists(file_path):
         return FileResponse(file_path)
