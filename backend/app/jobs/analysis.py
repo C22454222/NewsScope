@@ -29,7 +29,7 @@ SENTIMENT_MODEL = os.getenv(
 
 BIAS_MODEL = os.getenv(
     "HF_BIAS_MODEL",
-    "matous-volf/political-leaning-politics",
+    "matous-volf/political-leaning-deberta-large",
 ).strip()
 
 GENERAL_BIAS_MODEL = os.getenv(
