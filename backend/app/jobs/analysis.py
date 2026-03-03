@@ -191,6 +191,7 @@ def _detect_political_bias_ai(
     Run political bias via zero-shot classification (facebook/bart-large-mnli).
     Sends candidate labels left-wing/centrist/right-wing and derives a
     bias score from (right - left) probability difference.
+    Router may wrap response in a list — unwrapped before parsing.
     Returns (bias_score, confidence): -1.0=Left, 0=Center, 1=Right.
     """
     if not HF_API_TOKEN:
@@ -222,6 +223,10 @@ def _detect_political_bias_ai(
 
             response.raise_for_status()
             result = response.json()
+
+            # Router may wrap response in a list — unwrap if so
+            if isinstance(result, list) and result:
+                result = result[0]
 
             labels = result.get("labels", [])
             scores = result.get("scores", [])
