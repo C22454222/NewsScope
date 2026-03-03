@@ -49,7 +49,7 @@ _TEXT_LIMIT = 1024
 
 # Reduced timeout — fail fast and fall back to source bias rather than
 # holding open connections for 30s × 3 retries × 20 articles.
-_REQUEST_TIMEOUT = 15
+_REQUEST_TIMEOUT = 30
 
 _analysis_running = False
 
@@ -287,7 +287,7 @@ def _detect_political_bias_ai(
                     f"Political bias error attempt {attempt + 1}: {exc}"
                 )
                 if attempt < 1:
-                    time.sleep(2)
+                    time.sleep(5)
     finally:
         session.close()
 
