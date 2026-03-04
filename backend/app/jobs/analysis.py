@@ -43,7 +43,10 @@ _HF_API_BASE = "https://router.huggingface.co/hf-inference/models"
 
 _BATCH_SIZE = 10
 _TEXT_LIMIT = 1024
-_REQUEST_TIMEOUT = 30
+
+# Increased from 30s — gives bart-large-mnli sufficient time to respond
+# on cold starts without triggering fallback on the first attempt.
+_REQUEST_TIMEOUT = 60
 
 _analysis_running = False
 

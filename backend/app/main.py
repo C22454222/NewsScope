@@ -10,6 +10,10 @@ Redeploy guard in _run_startup_sequence checks DB for recent ingestion
 (< 10 minutes ago) and skips startup ingestion on zero-downtime redeploys
 where the old instance already ran it — prevents double-ingestion OOM.
 
+Heavy job lock (_heavy_job_running) prevents ingestion and analysis
+from ever running simultaneously — the root cause of ConnectionTerminated
+errors and OOM crashes on the Render free tier.
+
 Flake8: 0 errors/warnings.
 """
 
@@ -51,8 +55,12 @@ from app.core.scheduler import start_scheduler
 # ── Main event loop — captured in lifespan for sync bridges ──────────────────
 _main_loop: Optional[asyncio.AbstractEventLoop] = None
 
-# ── Job guards — prevent concurrent overlap ───────────────────────────────────
+# ── Job guards ────────────────────────────────────────────────────────────────
+# _ingestion_running : prevents duplicate ingestion triggers
+# _heavy_job_running : shared lock — prevents ingestion + analysis overlap
+#                      which causes ConnectionTerminated + OOM on free tier
 _ingestion_running = False
+_heavy_job_running = False
 
 # ── Startup analysis delay — lets ingestion RAM clear before analysis runs ────
 _ANALYSIS_STARTUP_DELAY_SECONDS = 60
@@ -85,7 +93,13 @@ init_firebase()
 
 
 def _sync_ingestion() -> None:
-    """Sync bridge — runs _scheduled_ingestion on the main event loop."""
+    """
+    Sync bridge — runs _scheduled_ingestion on the main event loop.
+    Skips if any heavy job is already running.
+    """
+    if _heavy_job_running:
+        print("Heavy job in progress — skipping scheduled ingestion.")
+        return
     if _main_loop is None or not _main_loop.is_running():
         print("Ingestion bridge: no running loop, skipping.")
         return
@@ -101,8 +115,11 @@ def _sync_ingestion() -> None:
 def _sync_analysis() -> None:
     """
     Sync bridge — runs analyze_unscored_articles on the main event loop.
-    Fires every 5 minutes so even brief stable windows score articles.
+    Fires every 5 minutes. Skips if ingestion or analysis is running.
     """
+    if _heavy_job_running:
+        print("Heavy job in progress — skipping scheduled analysis.")
+        return
     if _main_loop is None or not _main_loop.is_running():
         print("Analysis bridge: no running loop, skipping.")
         return
@@ -143,7 +160,8 @@ async def lifespan(app: FastAPI):
       3. Start keep-alive pinger (production only)
       4. Run startup sequence in background task:
          a. Check DB — skip ingestion if run < 10 min ago (redeploy guard)
-         b. Otherwise run ingestion, wait 60s, then run analysis
+         b. Set _heavy_job_running during ingestion to block analysis
+         c. Wait 60s after ingestion, then run first analysis
 
     Shutdown:
       - Logs shutdown message (scheduler stops automatically)
@@ -206,9 +224,9 @@ def _ingestion_ran_recently() -> bool:
     """
     Check whether ingestion ran within _REDEPLOY_GUARD_MINUTES.
 
-    Queries the most recently updated article. If it was inserted
-    or updated less than _REDEPLOY_GUARD_MINUTES ago, the old instance
-    already ran ingestion during a zero-downtime redeploy — skip it.
+    Queries the most recently updated article. If updated less than
+    _REDEPLOY_GUARD_MINUTES ago, the old instance already ran ingestion
+    during a redeploy — skip to avoid double-ingestion OOM.
     Returns True if ingestion should be skipped, False otherwise.
     """
     try:
@@ -239,24 +257,32 @@ def _ingestion_ran_recently() -> bool:
             return True
 
     except Exception as exc:
-        print(f"Redeploy guard check failed: {exc} — proceeding with ingestion.")
+        print(
+            f"Redeploy guard check failed: {exc} "
+            f"— proceeding with ingestion."
+        )
 
     return False
 
 
 async def _scheduled_ingestion() -> None:
-    """Async ingestion wrapper with overlap guard."""
-    global _ingestion_running
+    """
+    Async ingestion wrapper with overlap guard.
+    Sets _heavy_job_running to block analysis during scraping.
+    """
+    global _ingestion_running, _heavy_job_running
 
-    if _ingestion_running:
-        print("Ingestion already running — skipping duplicate trigger.")
+    if _ingestion_running or _heavy_job_running:
+        print("Heavy job already running — skipping ingestion trigger.")
         return
 
     _ingestion_running = True
+    _heavy_job_running = True
     try:
         await asyncio.to_thread(run_ingestion_cycle)
     finally:
         _ingestion_running = False
+        _heavy_job_running = False
 
 
 async def _run_startup_sequence() -> None:
@@ -265,11 +291,14 @@ async def _run_startup_sequence() -> None:
     triggering the first analysis run.
 
     Redeploy guard: if the DB shows articles updated within
-    _REDEPLOY_GUARD_MINUTES, the old instance already ran ingestion
-    during a zero-downtime redeploy. Skip ingestion entirely and go
-    straight to a short wait + analysis to avoid double-ingestion OOM.
+    _REDEPLOY_GUARD_MINUTES, skip ingestion and go straight to
+    analysis to avoid double-ingestion OOM on redeploy.
+
+    Heavy job lock: _heavy_job_running is held during ingestion so
+    the APScheduler analysis bridge cannot fire simultaneously —
+    the root cause of ConnectionTerminated + OOM.
     """
-    global _ingestion_running
+    global _ingestion_running, _heavy_job_running
 
     if _ingestion_ran_recently():
         print(
@@ -282,6 +311,7 @@ async def _run_startup_sequence() -> None:
 
     print("Server startup: Running ingestion...")
     _ingestion_running = True
+    _heavy_job_running = True
     try:
         await asyncio.to_thread(run_ingestion_cycle)
         print("Startup ingestion complete")
@@ -289,6 +319,7 @@ async def _run_startup_sequence() -> None:
         print(f"Startup ingestion failed: {exc}")
     finally:
         _ingestion_running = False
+        _heavy_job_running = False
 
     print(
         f"Waiting {_ANALYSIS_STARTUP_DELAY_SECONDS}s before first "
@@ -370,8 +401,10 @@ def health():
 async def internal_analyze_batch():
     """
     Additional analysis trigger called by keep-alive every 14 minutes.
-    Skips silently if analysis is already running.
+    Skips silently if any heavy job is already running.
     """
+    if _heavy_job_running:
+        return {"status": "skipped — heavy job in progress"}
     asyncio.create_task(analyze_unscored_articles())
     return {"status": "ok"}
 
