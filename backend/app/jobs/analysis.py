@@ -12,32 +12,20 @@ Flake8: 0 errors/warnings.
 """
 
 import gc
-import os
 import time
 import asyncio
 from typing import Optional, Tuple
 
 import requests
 
+from app.core.config import settings
 from app.db.supabase import supabase
 
 
-HF_API_TOKEN = os.getenv("HF_API_TOKEN", "")
-
-SENTIMENT_MODEL = os.getenv(
-    "HF_SENTIMENT_MODEL",
-    "distilbert/distilbert-base-uncased-finetuned-sst-2-english",
-).strip()
-
-BIAS_MODEL = os.getenv(
-    "HF_BIAS_MODEL",
-    "facebook/bart-large-mnli",
-).strip()
-
-GENERAL_BIAS_MODEL = os.getenv(
-    "HF_GENERAL_BIAS_MODEL",
-    "valurank/distilroberta-bias",
-).strip()
+HF_API_TOKEN = settings.HF_API_TOKEN
+SENTIMENT_MODEL = settings.HF_SENTIMENT_MODEL.strip()
+BIAS_MODEL = settings.HF_BIAS_MODEL.strip()
+GENERAL_BIAS_MODEL = settings.HF_GENERAL_BIAS_MODEL.strip()
 
 _HF_API_BASE = "https://router.huggingface.co/hf-inference/models"
 

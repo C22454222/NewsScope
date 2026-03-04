@@ -17,39 +17,36 @@ errors and OOM crashes on the Render free tier.
 Flake8: 0 errors/warnings.
 """
 
-import os
-import json
 import asyncio
-from contextlib import asynccontextmanager
+import json
+import os
 from collections import Counter
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Optional, List
-
-from fastapi import FastAPI, BackgroundTasks, HTTPException, Header, Depends
-from fastapi.responses import FileResponse
+from typing import List, Optional
 
 import firebase_admin
-from firebase_admin import credentials, auth
-
-from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.triggers.cron import CronTrigger
-
+from apscheduler.triggers.interval import IntervalTrigger
 from dateutil import parser as dtparser
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
+from fastapi.responses import FileResponse
+from firebase_admin import auth, credentials
 
-from app.routes import articles, users, sources
-from app.jobs.ingestion import run_ingestion_cycle, set_main_event_loop
+from app.core.scheduler import start_scheduler
+from app.db.supabase import supabase
 from app.jobs.analysis import analyze_unscored_articles
 from app.jobs.archiving import archive_old_articles
+from app.jobs.ingestion import run_ingestion_cycle, set_main_event_loop
 from app.jobs.keep_alive import start_keep_alive
-from app.db.supabase import supabase
+from app.routes import articles, sources, users
 from app.schemas import (
-    ReadingHistoryCreate,
     BiasProfile,
-    FactCheck,
     ComparisonRequest,
     ComparisonResponse,
+    FactCheck,
+    ReadingHistoryCreate,
 )
-from app.core.scheduler import start_scheduler
 
 
 # ── Main event loop — captured in lifespan for sync bridges ──────────────────
@@ -62,10 +59,10 @@ _main_loop: Optional[asyncio.AbstractEventLoop] = None
 _ingestion_running = False
 _heavy_job_running = False
 
-# ── Startup analysis delay — lets ingestion RAM clear before analysis runs ────
+# ── Startup analysis delay ────────────────────────────────────────────────────
 _ANALYSIS_STARTUP_DELAY_SECONDS = 60
 
-# ── Redeploy guard — skip startup ingestion if run within this window ─────────
+# ── Redeploy guard ────────────────────────────────────────────────────────────
 _REDEPLOY_GUARD_MINUTES = 10
 
 
@@ -133,12 +130,15 @@ def _sync_analysis() -> None:
 
 
 def _sync_archive() -> None:
-    """Sync bridge — runs archive_old_articles on the main event loop."""
+    """
+    Sync bridge — runs archive_old_articles on the main event loop.
+    archive_old_articles is synchronous — wrapped in to_thread.
+    """
     if _main_loop is None or not _main_loop.is_running():
         print("Archive bridge: no running loop, skipping.")
         return
     future = asyncio.run_coroutine_threadsafe(
-        archive_old_articles(), _main_loop
+        asyncio.to_thread(archive_old_articles), _main_loop
     )
     try:
         future.result(timeout=1800)
@@ -252,14 +252,14 @@ def _ingestion_ran_recently() -> bool:
         if age_minutes < _REDEPLOY_GUARD_MINUTES:
             print(
                 f"Redeploy guard: last ingestion {age_minutes:.1f} min ago "
-                f"— skipping startup ingestion to prevent double-OOM."
+                "— skipping startup ingestion to prevent double-OOM."
             )
             return True
 
     except Exception as exc:
         print(
             f"Redeploy guard check failed: {exc} "
-            f"— proceeding with ingestion."
+            "— proceeding with ingestion."
         )
 
     return False
@@ -295,8 +295,7 @@ async def _run_startup_sequence() -> None:
     analysis to avoid double-ingestion OOM on redeploy.
 
     Heavy job lock: _heavy_job_running is held during ingestion so
-    the APScheduler analysis bridge cannot fire simultaneously —
-    the root cause of ConnectionTerminated + OOM.
+    the APScheduler analysis bridge cannot fire simultaneously.
     """
     global _ingestion_running, _heavy_job_running
 
@@ -331,7 +330,6 @@ async def _run_startup_sequence() -> None:
 
 
 # ── App ───────────────────────────────────────────────────────────────────────
-
 
 app = FastAPI(title="NewsScope API", version="1.0.0", lifespan=lifespan)
 

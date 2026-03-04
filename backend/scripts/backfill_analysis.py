@@ -1,23 +1,44 @@
-# backend/scripts/backfill_analysis.py test
-import time
+"""
+NewsScope analysis backfill script.
+
+Runs analyze_unscored_articles() in a loop until all articles
+in the database have sentiment and bias scores.
+
+Run from backend/ directory:
+    python -m scripts.backfill_analysis
+
+Flake8: 0 errors/warnings.
+"""
+
+import asyncio
 import os
 import sys
-from app.jobs.analysis import analyze_unscored_articles
-from app.db.supabase import supabase
+import time
 
-# Add backend to path so imports works
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-print("Hello")
+# Add backend root to path so app.* imports resolve
+sys.path.insert(
+    0, os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)
+
+from app.db.supabase import supabase  # noqa: E402
+from app.jobs.analysis import analyze_unscored_articles  # noqa: E402
 
 
-def run_backfill():
-    print("Starting full backfill of analysis...")
+def run_backfill() -> None:
+    """
+    Loop until all articles have a sentiment score.
+    Runs one batch per iteration with a 2s pause between
+    batches to stay within HuggingFace API rate limits.
+    """
+    print("Starting full analysis backfill...")
+
     while True:
-        # Check how many are left
-        count_response = supabase.table("articles")\
-            .select("id", count="exact")\
-            .is_("sentiment_score ", "null")\
+        count_response = (
+            supabase.table("articles")
+            .select("id", count="exact")
+            .is_("sentiment_score", "null")
             .execute()
+        )
 
         count = count_response.count
         if count == 0:
@@ -26,10 +47,8 @@ def run_backfill():
 
         print(f"Remaining unscored articles: {count}")
 
-        # Run one batch (5 articles)
-        analyze_unscored_articles()
+        asyncio.run(analyze_unscored_articles())
 
-        # Wait a bit to be nice to Hugging Face API limits
         time.sleep(2)
 
 

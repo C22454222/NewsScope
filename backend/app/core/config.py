@@ -50,9 +50,19 @@ class Settings:
         "FIREBASE_SERVICE_ACCOUNT", ""
     )
 
+    # ── Archiving ─────────────────────────────────────────────────────────────
+    ARCHIVE_DAYS: int = int(os.getenv("ARCHIVE_DAYS", "30"))
+    ARCHIVE_BUCKET: str = os.getenv(
+        "ARCHIVE_BUCKET", "articles-archive"
+    )
+
     # ── App ───────────────────────────────────────────────────────────────────
     PROJECT_NAME: str = "NewsScope API"
     ENVIRONMENT: str = os.getenv("ENVIRONMENT", "production")
+    RENDER_EXTERNAL_URL: str = os.getenv(
+        "RENDER_EXTERNAL_URL",
+        "https://newsscope-backend.onrender.com",
+    )
 
     def __init__(self) -> None:
         if not self.SUPABASE_URL:

@@ -1,29 +1,36 @@
-# app/routes/sources.py
-from fastapi import APIRouter
-from app.db.supabase import supabase
-from backend.app.schemas import SourceBase
+"""
+NewsScope Sources API Router.
+Flake8: 0 errors/warnings.
+"""
 
-# Router for news source metadata (BBC, CNN, etc.)
+from fastapi import APIRouter
+
+from app.db.supabase import supabase
+from app.schemas import SourceBase
+
 router = APIRouter()
 
 
 @router.get("/sources")
-def get_sources():
+def get_sources() -> list:
     """
     Return the list of configured news sources.
 
-    This can be used to power filter UIs or diagnostics.
+    Used to power filter UIs and source diagnostics.
     """
-    response = supabase.table("sources").select("*").execute()
-    return response.data
+    return supabase.table("sources").select("*").execute().data
 
 
 @router.post("/sources")
-def add_source(source: SourceBase):
+def add_source(source: SourceBase) -> list:
     """
     Add a new news source record.
 
-    Uses Pydantic's model_dump() to convert the model to a dict.
+    Uses model_dump() to convert the Pydantic model to a dict.
     """
-    response = supabase.table("sources").insert(source.model_dump()).execute()
-    return response.data
+    return (
+        supabase.table("sources")
+        .insert(source.model_dump())
+        .execute()
+        .data
+    )

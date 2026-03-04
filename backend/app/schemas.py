@@ -88,13 +88,13 @@ class UserCreate(UserBase):
     in Supabase.
     """
 
-    id: UUID
+    id: str  # Firebase UID is a plain string, not UUID
 
 
 class User(UserBase):
     """Full user model as returned by the backend."""
 
-    id: UUID
+    id: str  # Firebase UID
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
@@ -137,7 +137,7 @@ class ReadingHistory(ReadingHistoryBase):
     """Full reading history record as stored in the database."""
 
     id: UUID
-    user_id: UUID
+    user_id: str  # text in DB — Firebase UID, not UUID
     opened_at: datetime
     created_at: datetime
 
@@ -216,7 +216,7 @@ class UserFactCheckView(BaseModel):
     """Track when users view fact-checks."""
 
     id: UUID
-    user_id: UUID
+    user_id: str  # Firebase UID — text, not UUID
     fact_check_id: UUID
     viewed_at: datetime
 

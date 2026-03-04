@@ -1,30 +1,37 @@
-# app/jobs/archiving.py
+"""
+NewsScope Archiving Job.
+
+Archives articles older than ARCHIVE_DAYS to Supabase Storage,
+then deletes them from the articles table. Runs daily at 03:00.
+
+Flake8: 0 errors/warnings.
+"""
+
 import json
-import os
 from datetime import datetime, timedelta, timezone
+
+from app.core.config import settings
 from app.db.supabase import supabase
 
+ARCHIVE_DAYS = settings.ARCHIVE_DAYS
+BUCKET = settings.ARCHIVE_BUCKET
 
-ARCHIVE_DAYS = int(os.getenv("ARCHIVE_DAYS", "30"))
-BUCKET = os.getenv("ARCHIVE_BUCKET", "articles-archive")
 
-
-def archive_old_articles():
+def archive_old_articles() -> None:
     """
-    Archive ALL articles older than 30 days and delete from database.
-    Runs daily at 3:00 AM.
+    Archive all articles older than ARCHIVE_DAYS to Supabase Storage
+    and delete them from the database.
 
-    Example: If today is 2026-01-26, archives articles published
-    BEFORE 2025-12-27 (exactly 30 days ago).
+    Processes in batches of 500 to avoid memory spikes on Render.
+    Deletes only articles that were successfully archived to prevent
+    data loss on partial failures.
     """
-    # Calculate cutoff date: 30 days ago from now
     now = datetime.now(timezone.utc)
-    cutoff_datetime = now - timedelta(days=ARCHIVE_DAYS)
-    cutoff = cutoff_datetime.isoformat()
+    cutoff = (now - timedelta(days=ARCHIVE_DAYS)).isoformat()
 
-    print(f"🗄️ Today: {now.isoformat()}")
-    print(f"🗄️ Cutoff (30 days ago): {cutoff}")
-    print(f"🗄️ Archiving articles published BEFORE {cutoff}...")
+    print(f"Today: {now.isoformat()}")
+    print(f"Cutoff ({ARCHIVE_DAYS} days ago): {cutoff}")
+    print(f"Archiving articles published before {cutoff}...")
 
     # Step 1: Count total articles to archive
     try:
@@ -35,12 +42,12 @@ def archive_old_articles():
             .execute()
         )
         total = count_response.count
-    except Exception as e:
-        print(f"Failed to count articles: {e}")
+    except Exception as exc:
+        print(f"Failed to count articles: {exc}")
         return
 
     if total == 0:
-        print("ℹNo old articles to archive.")
+        print("No old articles to archive.")
         return
 
     print(f"Found {total} articles to archive...")
@@ -50,7 +57,7 @@ def archive_old_articles():
     offset = 0
     batch_size = 500
 
-    # Step 2: Process articles in batches
+    # Step 2: Process in batches
     while True:
         batch_num = offset // batch_size + 1
         expected = min(batch_size, total - offset)
@@ -61,7 +68,6 @@ def archive_old_articles():
         )
 
         try:
-            # Fetch batch of old articles
             rows = (
                 supabase.table("articles")
                 .select("*")
@@ -71,23 +77,21 @@ def archive_old_articles():
                 .execute()
                 .data
             )
-        except Exception as e:
-            print(f"Failed to fetch batch {batch_num}: {e}")
+        except Exception as exc:
+            print(f"Failed to fetch batch {batch_num}: {exc}")
             break
 
-        # Stop if no more rows
         if not rows:
             print(f"No more articles at offset {offset}")
             break
 
         print(f"Retrieved {len(rows)} articles in batch {batch_num}")
 
-        # Step 3: Archive each article to storage
+        # Step 3: Upload each article to Supabase Storage
         for row in rows:
-            article_id = row['id']
+            article_id = row["id"]
             key = f"{article_id}.json"
-            content_str = json.dumps(row, default=str)
-            content_bytes = content_str.encode("utf-8")
+            content_bytes = json.dumps(row, default=str).encode("utf-8")
 
             try:
                 supabase.storage.from_(BUCKET).upload(
@@ -95,56 +99,53 @@ def archive_old_articles():
                     file=content_bytes,
                     file_options={
                         "content-type": "application/json",
-                        "upsert": "true"
-                    }
+                        "upsert": "true",
+                    },
                 )
                 archived_count += 1
                 archived_ids.append(str(article_id))
-            except Exception as e:
-                print(f"Failed to archive article {article_id}: {e}")
+            except Exception as exc:
+                print(f"Failed to archive article {article_id}: {exc}")
 
         offset += len(rows)
 
-        # Stop if we've processed all expected articles
         if archived_count >= total:
             print(f"Reached expected total of {total} articles")
             break
 
     print(f"Archived {archived_count}/{total} articles to storage")
 
-    # Step 4: Delete archived articles from database
-    if archived_ids:
-        print(
-            f"Deleting {len(archived_ids)} successfully archived "
-            f"articles from database..."
-        )
+    # Step 4: Delete successfully archived articles from DB
+    if not archived_ids:
+        print("No articles successfully archived — skipping deletion")
+        return
 
-        deleted_total = 0
+    print(
+        f"Deleting {len(archived_ids)} successfully archived "
+        "articles from database..."
+    )
 
-        # Delete in smaller batches of 100
-        for i in range(0, len(archived_ids), 100):
-            batch = archived_ids[i:i + 100]
-            batch_num = i // 100 + 1
+    deleted_total = 0
 
-            try:
-                # Delete each article individually for reliability
-                for article_id in batch:
-                    supabase.table("articles").delete().eq(
-                        "id", article_id
-                    ).execute()
+    for i in range(0, len(archived_ids), 100):
+        batch = archived_ids[i:i + 100]
+        batch_num = i // 100 + 1
 
-                deleted_total += len(batch)
-                print(
-                    f"Deleted batch {batch_num}: {len(batch)} "
-                    f"articles (total: {deleted_total}/"
-                    f"{len(archived_ids)})"
-                )
-            except Exception as e:
-                print(f"Failed to delete batch {batch_num}: {e}")
+        try:
+            for article_id in batch:
+                supabase.table("articles").delete().eq(
+                    "id", article_id
+                ).execute()
 
-        print(
-            f"Cleanup complete! "
-            f"Archived: {archived_count}, Deleted: {deleted_total}"
-        )
-    else:
-        print("ℹNo articles successfully archived, skipping deletion")
+            deleted_total += len(batch)
+            print(
+                f"Deleted batch {batch_num}: {len(batch)} articles "
+                f"(total: {deleted_total}/{len(archived_ids)})"
+            )
+        except Exception as exc:
+            print(f"Failed to delete batch {batch_num}: {exc}")
+
+    print(
+        f"Cleanup complete — "
+        f"archived: {archived_count}, deleted: {deleted_total}"
+    )

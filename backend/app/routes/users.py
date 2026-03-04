@@ -14,14 +14,17 @@ router = APIRouter()
 @router.post("/users")
 def add_user(user: UserCreate) -> dict:
     """
-    Create a new user record in Supabase.
+    Upsert a user record in Supabase.
 
-    Called after successful Firebase authentication to
-    store additional profile data on the backend.
+    Called after every Firebase login — not just registration —
+    so the users row is guaranteed present before any reading
+    history is written. upsert on conflict id is idempotent.
     """
-    response = supabase.table("users").insert(
-        user.model_dump()
-    ).execute()
+    response = (
+        supabase.table("users")
+        .upsert(user.model_dump(), on_conflict="id")
+        .execute()
+    )
     if not response.data:
         raise HTTPException(status_code=500, detail="User creation failed")
     return response.data[0]
