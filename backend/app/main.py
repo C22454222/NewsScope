@@ -6,6 +6,10 @@ and a single startup ingestion run. Analysis is deliberately delayed
 60 seconds after startup ingestion to prevent simultaneous memory
 pressure from both jobs on Render free tier (512MB limit).
 
+Redeploy guard in _run_startup_sequence checks DB for recent ingestion
+(< 10 minutes ago) and skips startup ingestion on zero-downtime redeploys
+where the old instance already ran it — prevents double-ingestion OOM.
+
 Flake8: 0 errors/warnings.
 """
 
@@ -14,7 +18,7 @@ import json
 import asyncio
 from contextlib import asynccontextmanager
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List
 
 from fastapi import FastAPI, BackgroundTasks, HTTPException, Header, Depends
@@ -25,6 +29,8 @@ from firebase_admin import credentials, auth
 
 from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.triggers.cron import CronTrigger
+
+from dateutil import parser as dtparser
 
 from app.routes import articles, users, sources
 from app.jobs.ingestion import run_ingestion_cycle, set_main_event_loop
@@ -47,10 +53,12 @@ _main_loop: Optional[asyncio.AbstractEventLoop] = None
 
 # ── Job guards — prevent concurrent overlap ───────────────────────────────────
 _ingestion_running = False
-_analysis_running = False
 
 # ── Startup analysis delay — lets ingestion RAM clear before analysis runs ────
 _ANALYSIS_STARTUP_DELAY_SECONDS = 60
+
+# ── Redeploy guard — skip startup ingestion if run within this window ─────────
+_REDEPLOY_GUARD_MINUTES = 10
 
 
 def init_firebase() -> None:
@@ -133,9 +141,9 @@ async def lifespan(app: FastAPI):
       1. Capture main event loop for sync bridges
       2. Start APScheduler with ingestion, analysis, archiving jobs
       3. Start keep-alive pinger (production only)
-      4. Run startup ingestion in background
-      5. Delay 60s then run first analysis — prevents simultaneous
-         ingestion + analysis memory pressure on Render free tier
+      4. Run startup sequence in background task:
+         a. Check DB — skip ingestion if run < 10 min ago (redeploy guard)
+         b. Otherwise run ingestion, wait 60s, then run analysis
 
     Shutdown:
       - Logs shutdown message (scheduler stops automatically)
@@ -194,6 +202,48 @@ async def lifespan(app: FastAPI):
 # ── Startup helpers ───────────────────────────────────────────────────────────
 
 
+def _ingestion_ran_recently() -> bool:
+    """
+    Check whether ingestion ran within _REDEPLOY_GUARD_MINUTES.
+
+    Queries the most recently updated article. If it was inserted
+    or updated less than _REDEPLOY_GUARD_MINUTES ago, the old instance
+    already ran ingestion during a zero-downtime redeploy — skip it.
+    Returns True if ingestion should be skipped, False otherwise.
+    """
+    try:
+        data = (
+            supabase.table("articles")
+            .select("updated_at")
+            .order("updated_at", desc=True)
+            .limit(1)
+            .execute()
+            .data
+        )
+        if not data:
+            return False
+
+        last_update = dtparser.parse(data[0]["updated_at"])
+        if last_update.tzinfo is None:
+            last_update = last_update.replace(tzinfo=timezone.utc)
+
+        age_minutes = (
+            datetime.now(timezone.utc) - last_update
+        ).total_seconds() / 60
+
+        if age_minutes < _REDEPLOY_GUARD_MINUTES:
+            print(
+                f"Redeploy guard: last ingestion {age_minutes:.1f} min ago "
+                f"— skipping startup ingestion to prevent double-OOM."
+            )
+            return True
+
+    except Exception as exc:
+        print(f"Redeploy guard check failed: {exc} — proceeding with ingestion.")
+
+    return False
+
+
 async def _scheduled_ingestion() -> None:
     """Async ingestion wrapper with overlap guard."""
     global _ingestion_running
@@ -212,10 +262,23 @@ async def _scheduled_ingestion() -> None:
 async def _run_startup_sequence() -> None:
     """
     Run ingestion on startup, then wait for RAM to clear before
-    triggering the first analysis run. Prevents simultaneous memory
-    pressure from both jobs crashing the Render free tier instance.
+    triggering the first analysis run.
+
+    Redeploy guard: if the DB shows articles updated within
+    _REDEPLOY_GUARD_MINUTES, the old instance already ran ingestion
+    during a zero-downtime redeploy. Skip ingestion entirely and go
+    straight to a short wait + analysis to avoid double-ingestion OOM.
     """
     global _ingestion_running
+
+    if _ingestion_ran_recently():
+        print(
+            "Startup ingestion skipped (redeploy guard). "
+            "Waiting 30s then running analysis..."
+        )
+        await asyncio.sleep(30)
+        await analyze_unscored_articles()
+        return
 
     print("Server startup: Running ingestion...")
     _ingestion_running = True
