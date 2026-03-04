@@ -1,15 +1,15 @@
 """
 NewsScope Ingestion Pipeline.
 
-Flake8: 0 errors/warnings.
 Daily volume: ~7,104 articles fetched, ~4,262 new after dedup.
-Week 4: credibility_score, fact_checks fields added to insert payload.
-Fact-checking runs async post-insert via safe loop wrapper.
+Credibility fields seeded as defaults on insert; fact-checking
+runs async post-insert via safe loop wrapper.
+
+Flake8: 0 errors/warnings.
 """
 
 import asyncio
 import gc
-import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -23,16 +23,11 @@ from dateutil import parser as dtparser
 from newspaper import Article
 
 from app.core.categorisation import infer_category
+from app.core.config import settings
 from app.db.supabase import supabase
 
 
-NEWSAPI_KEY = os.getenv("NEWSAPI_KEY")
-
-RSS_FEEDS = [
-    s.strip()
-    for s in os.getenv("RSS_FEEDS", "").split(",")
-    if s.strip()
-]
+# ── Constants ─────────────────────────────────────────────────────────────────
 
 NEWSAPI_SOURCES = [
     "cnn",
@@ -52,23 +47,34 @@ FEED_NAME_MAP = {
     "https://www.euronews.com/rss": "Euronews",
 }
 
-# Reduced from 6 — each worker holds a full HTML parse tree in RAM.
-# 3 workers = ~150-200MB peak vs 6 workers = ~300-400MB peak on Render.
+# Workers capped at 3 — each holds a full HTML parse tree in RAM.
+# 3 workers ≈ 150-200MB peak vs 6 workers ≈ 300-400MB peak on Render.
 _SCRAPE_WORKERS = 3
 
 # Main event loop — captured at startup by set_main_event_loop()
 _main_event_loop: Optional[asyncio.AbstractEventLoop] = None
 
 
-def set_main_event_loop(
-    loop: asyncio.AbstractEventLoop,
-) -> None:
+# ── Event loop bridge ─────────────────────────────────────────────────────────
+
+
+def set_main_event_loop(loop: asyncio.AbstractEventLoop) -> None:
     """
     Store the main event loop so thread workers can schedule coroutines.
     Called once from lifespan in main.py before any jobs run.
     """
     global _main_event_loop
     _main_event_loop = loop
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+def _get_rss_feeds() -> List[str]:
+    """Return configured RSS feed URLs from settings/env."""
+    import os
+    raw = os.getenv("RSS_FEEDS", "")
+    return [s.strip() for s in raw.split(",") if s.strip()]
 
 
 def normalize_article(
@@ -108,7 +114,7 @@ def normalize_article(
 
 
 def upsert_source(name: str) -> Optional[str]:
-    """Get or create source by name, return source ID."""
+    """Get or create a source record by name, return its ID."""
     existing = (
         supabase.table("sources")
         .select("id")
@@ -133,13 +139,11 @@ def sanitize_for_postgres(text: str) -> str:
     """Remove characters that PostgreSQL cannot handle."""
     if not text:
         return ""
-    text = text.replace("\x00", "")
-    text = text.replace("\u0000", "")
+    text = text.replace("\x00", "").replace("\u0000", "")
     text = re.sub(r"[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f]", "", text)
-    text = text.encode("utf-8", errors="ignore").decode(
+    return text.encode("utf-8", errors="ignore").decode(
         "utf-8", errors="ignore"
     )
-    return text
 
 
 def clean_text(text: str) -> str:
@@ -172,6 +176,9 @@ def clean_text(text: str) -> str:
     return text.strip()
 
 
+# ── Scraping tiers ────────────────────────────────────────────────────────────
+
+
 def fetch_content_newspaper(url: str) -> Optional[str]:
     """Tier 1: newspaper3k — fast, reliable for ~80% of news sites."""
     try:
@@ -190,8 +197,8 @@ def fetch_content_newspaper(url: str) -> Optional[str]:
 def fetch_content_beautifulsoup(url: str) -> Optional[str]:
     """
     Tier 2: BeautifulSoup smart extraction — handles ~95% of sites.
-    Uses html.parser (pure Python) instead of lxml to reduce RAM usage.
-    Response content is deleted immediately after parsing.
+    Uses html.parser (pure Python) instead of lxml to reduce RAM.
+    Response content deleted immediately after parsing.
     """
     try:
         headers = {
@@ -215,7 +222,6 @@ def fetch_content_beautifulsoup(url: str) -> Optional[str]:
         )
         response.raise_for_status()
 
-        # Parse then immediately free the raw response bytes
         soup = BeautifulSoup(response.content, "html.parser")
         del response
 
@@ -267,9 +273,7 @@ def fetch_content_beautifulsoup(url: str) -> Optional[str]:
             try:
                 elements = soup.select(selector)
                 if elements:
-                    text = elements[0].get_text(
-                        separator="\n", strip=True
-                    )
+                    text = elements[0].get_text(separator="\n", strip=True)
                     if len(text) > 150:
                         content = text
                         break
@@ -298,7 +302,6 @@ def fetch_content_beautifulsoup(url: str) -> Optional[str]:
             if long_paragraphs:
                 content = "\n\n".join(long_paragraphs)
 
-        # Free the soup tree before returning
         soup.decompose()
         del soup
 
@@ -353,11 +356,12 @@ def fetch_content_aggressive(url: str) -> Optional[str]:
 
 
 def fetch_content_with_retry(
-    url: str, max_retries: int = 2
+    url: str,
+    max_retries: int = 2,
 ) -> Optional[str]:
     """
     Tier 4: Retry with exponential backoff.
-    Max retries reduced from 3 to 2 to cap memory dwell time.
+    Max retries capped at 2 to limit memory dwell time.
     Uses html.parser throughout — lxml removed to reduce RAM.
     """
     for attempt in range(max_retries):
@@ -387,7 +391,6 @@ def fetch_content_with_retry(
 
             response.raise_for_status()
 
-            # html.parser instead of lxml — lower RAM, no C extension
             soup = BeautifulSoup(response.content, "html.parser")
             del response
 
@@ -401,14 +404,14 @@ def fetch_content_with_retry(
             del soup
 
             sentences = re.split(r"[.!?]+", text)
-            meaningful_sentences = [
+            meaningful = [
                 s.strip()
                 for s in sentences
                 if len(s.strip()) > 30 and s.strip().count(" ") > 3
             ]
 
-            if len(meaningful_sentences) > 5:
-                content = ". ".join(meaningful_sentences) + "."
+            if len(meaningful) > 5:
+                content = ". ".join(meaningful) + "."
                 cleaned = clean_text(content)
                 if len(cleaned) > 150:
                     return cleaned
@@ -476,11 +479,14 @@ def fetch_content(url: str, title: str = "", source: str = "") -> str:
     return fetch_content_title_fallback(title, source)
 
 
+# ── Worker ────────────────────────────────────────────────────────────────────
+
+
 def _scrape_one(article: Dict[str, Any]) -> Dict[str, Any]:
     """
     Scrape a single article and return it enriched with content.
-    Designed to run inside a ThreadPoolExecutor worker.
-    Calls gc.collect() before returning to free parse tree RAM promptly.
+    Runs inside a ThreadPoolExecutor worker.
+    gc.collect() called before returning to free parse tree RAM promptly.
     """
     source_name_val = article.get("source")
     content = fetch_content(
@@ -501,7 +507,6 @@ def _scrape_one(article: Dict[str, Any]) -> Dict[str, Any]:
     url = sanitize_for_postgres(article["url"])
     content = sanitize_for_postgres(content)
     source_id = upsert_source(source_name_val) if source_name_val else None
-
     is_fallback = "could not be retrieved" in content
 
     result = {
@@ -528,10 +533,14 @@ def _scrape_one(article: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
+# ── Fact-check bridge ─────────────────────────────────────────────────────────
+
+
 async def factcheck_batch(article_ids: List[str]) -> None:
     """
     Background async task: compute and persist credibility scores.
-    Imported by routes/articles.py for the /recent-factchecks endpoint.
+    Scheduled onto the main event loop after insert via
+    _schedule_factcheck() — never blocks ingestion.
     """
     from app.jobs.fact_checking import compute_credibility_score
     from app.schemas import ArticleResponse
@@ -568,8 +577,7 @@ def _schedule_factcheck(article_ids: List[str]) -> None:
     Schedule factcheck_batch onto the main event loop from any thread.
 
     Uses the loop captured at startup via set_main_event_loop() —
-    safe to call from inside ThreadPoolExecutor workers where
-    asyncio.get_event_loop() has no running loop.
+    safe to call from inside ThreadPoolExecutor workers.
     """
     if _main_event_loop is None or not _main_event_loop.is_running():
         print("Fact-check skipped — no running event loop captured.")
@@ -577,6 +585,9 @@ def _schedule_factcheck(article_ids: List[str]) -> None:
     asyncio.run_coroutine_threadsafe(
         factcheck_batch(article_ids), _main_event_loop
     )
+
+
+# ── Batch insert ──────────────────────────────────────────────────────────────
 
 
 def insert_articles_batch(articles: List[Dict[str, Any]]) -> List[str]:
@@ -637,22 +648,26 @@ def insert_articles_batch(articles: List[Dict[str, Any]]) -> List[str]:
             finally:
                 gc.collect()
 
-    if payloads:
-        res = supabase.table("articles").insert(payloads).execute().data
-        new_ids = [r["id"] for r in res]
+    if not payloads:
+        print("No new articles to insert")
+        return []
 
-        print(f"Inserted {len(res)} new articles")
-        print(
-            f"   Scraped content: {scrape_success} full scrape, "
-            f"{scrape_fallback} title fallback "
-            f"({scrape_success / max(len(res), 1) * 100:.1f}% success rate)"
-        )
+    res = supabase.table("articles").insert(payloads).execute().data
+    new_ids = [r["id"] for r in res]
 
-        _schedule_factcheck(new_ids)
-        return new_ids
+    total = max(len(res), 1)
+    print(f"Inserted {len(res)} new articles")
+    print(
+        f"   Scraped content: {scrape_success} full scrape, "
+        f"{scrape_fallback} title fallback "
+        f"({scrape_success / total * 100:.1f}% success rate)"
+    )
 
-    print("No new articles to insert")
-    return []
+    _schedule_factcheck(new_ids)
+    return new_ids
+
+
+# ── Fetchers ──────────────────────────────────────────────────────────────────
 
 
 def fetch_newsapi() -> List[Dict[str, Any]]:
@@ -662,14 +677,13 @@ def fetch_newsapi() -> List[Dict[str, Any]]:
     Strategy:
     - 4 sources x 1 request = 4 requests/cycle
     - 24 cycles/day x 4 = 96 requests/day (96% of 100 free limit)
-    - 50 articles/source x 4 x 24 = 4,800 articles/day
     """
-    if not NEWSAPI_KEY:
+    if not settings.NEWSAPI_KEY:
         print("NEWSAPI_KEY not set, skipping NewsAPI")
         return []
 
     url = "https://newsapi.org/v2/top-headlines"
-    headers = {"X-Api-Key": NEWSAPI_KEY}
+    headers = {"X-Api-Key": settings.NEWSAPI_KEY}
     normalized: List[Dict[str, Any]] = []
 
     source_map = {
@@ -729,9 +743,10 @@ def fetch_rss() -> List[Dict[str, Any]]:
     - 8 feeds x 12 articles = 96 articles/cycle
     - 24 cycles/day = 2,304 articles/day
     """
+    rss_feeds = _get_rss_feeds()
     normalized: List[Dict[str, Any]] = []
 
-    for feed in RSS_FEEDS:
+    for feed in rss_feeds:
         try:
             parsed = feedparser.parse(feed)
             source_name = FEED_NAME_MAP.get(feed)
@@ -766,9 +781,12 @@ def fetch_rss() -> List[Dict[str, Any]]:
 
     print(
         f"RSS total: {len(normalized)} articles "
-        f"from {len(RSS_FEEDS)} feeds"
+        f"from {len(rss_feeds)} feeds"
     )
     return normalized
+
+
+# ── Main job ──────────────────────────────────────────────────────────────────
 
 
 def run_ingestion_cycle() -> None:
@@ -778,12 +796,8 @@ def run_ingestion_cycle() -> None:
     Daily volume:
     - NewsAPI: 4,800 articles (4 sources x 50 x 24 cycles)
     - RSS:     2,304 articles (8 feeds  x 12 x 24 cycles)
-    - Total fetched:            7,104/day
-    - New after dedup (~60%):  ~4,262/day
-
-    Week 4 additions:
-    - credibility_score / fact_checks seeded as defaults on insert
-    - _schedule_factcheck() enriches asynchronously (non-blocking)
+    - Total fetched:           7,104/day
+    - New after dedup (~60%): ~4,262/day
     """
     print("\n" + "=" * 70)
     print("INGESTION CYCLE STARTED")

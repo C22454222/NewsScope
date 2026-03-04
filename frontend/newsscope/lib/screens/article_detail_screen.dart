@@ -1,8 +1,10 @@
-// lib/screens/article_detail_screen.dart
 import 'dart:async';
 import 'dart:developer' as developer;
+
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
+
+import '../models/article.dart';
 import '../services/api_service.dart';
 
 class ArticleDetailScreen extends StatefulWidget {
@@ -14,6 +16,11 @@ class ArticleDetailScreen extends StatefulWidget {
   final double? biasScore;
   final double? biasIntensity;
   final double? sentimentScore;
+  final double? credibilityScore;
+  final Map<String, dynamic>? factChecks;
+  final int? claimsChecked;
+  final String? credibilityReason;
+  final String? generalBias;
 
   const ArticleDetailScreen({
     super.key,
@@ -25,7 +32,31 @@ class ArticleDetailScreen extends StatefulWidget {
     this.biasScore,
     this.biasIntensity,
     this.sentimentScore,
+    this.credibilityScore,
+    this.factChecks,
+    this.claimsChecked,
+    this.credibilityReason,
+    this.generalBias,
   });
+
+  /// Convenience constructor — build from an Article model directly.
+  factory ArticleDetailScreen.fromArticle(Article article) {
+    return ArticleDetailScreen(
+      id: article.id,
+      title: article.title,
+      sourceName: article.source,
+      content: article.content,
+      url: article.url,
+      biasScore: article.biasScore,
+      biasIntensity: article.biasIntensity,
+      sentimentScore: article.sentimentScore,
+      credibilityScore: article.credibilityScore,
+      factChecks: article.factChecks,
+      claimsChecked: article.claimsChecked,
+      credibilityReason: article.credibilityReason,
+      generalBias: article.generalBias,
+    );
+  }
 
   @override
   State<ArticleDetailScreen> createState() => _ArticleDetailScreenState();
@@ -37,16 +68,19 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
   int _secondsSpent = 0;
   bool _hasTracked = false;
 
+  // Fact-check state — loaded lazily on expand
+  bool _factCheckExpanded = false;
+  bool _factCheckLoading = false;
+  Map<String, dynamic>? _loadedFactChecks;
+
   @override
   void initState() {
     super.initState();
+    _loadedFactChecks = widget.factChecks;
 
-    // Track time every 5 seconds
     _trackingTimer = Timer.periodic(
       const Duration(seconds: 5),
-      (_) {
-        _secondsSpent += 5;
-      },
+      (_) => _secondsSpent += 5,
     );
   }
 
@@ -57,11 +91,11 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
     super.dispose();
   }
 
+  // ── Reading tracking ────────────────────────────────────────────────────────
+
   Future<void> _trackReadingTime() async {
     if (_secondsSpent < 3 || _hasTracked) return;
-
     _hasTracked = true;
-
     try {
       await _api.trackReading(
         articleId: widget.id,
@@ -79,6 +113,33 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
       );
     }
   }
+
+  // ── Fact-check loading ──────────────────────────────────────────────────────
+
+  Future<void> _loadFactChecks() async {
+    if (_loadedFactChecks != null && _loadedFactChecks!.isNotEmpty) return;
+
+    setState(() => _factCheckLoading = true);
+    try {
+      final result = await _api.triggerFactCheck(widget.id);
+      if (result != null && mounted) {
+        setState(() {
+          _loadedFactChecks =
+              result['fact_checks'] as Map<String, dynamic>?;
+        });
+      }
+    } catch (e) {
+      developer.log(
+        'Failed to load fact-checks: $e',
+        name: 'ArticleDetailScreen',
+        error: e,
+      );
+    } finally {
+      if (mounted) setState(() => _factCheckLoading = false);
+    }
+  }
+
+  // ── Colour/label helpers ────────────────────────────────────────────────────
 
   Color _getBiasColor(double? score) {
     if (score == null) return Colors.grey;
@@ -110,6 +171,32 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
     return 'Neutral';
   }
 
+  Color _getCredibilityColor(double? score) {
+    if (score == null) return Colors.grey;
+    if (score >= 75) return Colors.green[700]!;
+    if (score >= 50) return Colors.orange[700]!;
+    return Colors.red[700]!;
+  }
+
+  String _getCredibilityLabel(double? score) {
+    if (score == null) return 'Unverified';
+    if (score >= 75) return 'Credible';
+    if (score >= 50) return 'Mixed';
+    return 'Questionable';
+  }
+
+  String _getRulingEmoji(String ruling) {
+    final r = ruling.toLowerCase();
+    if (r.contains('true') && !r.contains('mostly')) return '✅';
+    if (r.contains('mostly true')) return '🟢';
+    if (r.contains('half')) return '🟡';
+    if (r.contains('mostly false')) return '🟠';
+    if (r.contains('false') || r.contains('pants')) return '❌';
+    return '❓';
+  }
+
+  // ── URL launcher ────────────────────────────────────────────────────────────
+
   Future<void> _launchURL() async {
     final uri = Uri.parse(widget.url);
     if (await canLaunchUrl(uri)) {
@@ -117,29 +204,199 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
     }
   }
 
+  Future<void> _launchFactCheckURL(String url) async {
+    final uri = Uri.parse(url);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    }
+  }
+
+  // ── Widgets ─────────────────────────────────────────────────────────────────
+
+  Widget _buildCredibilityCard() {
+    final score = widget.credibilityScore;
+    final color = _getCredibilityColor(score);
+    final label = _getCredibilityLabel(score);
+
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          children: [
+            CircleAvatar(
+              radius: 28,
+              backgroundColor: color.withAlpha((255 * 0.15).round()),
+              child: Text(
+                score != null ? '${score.round()}' : '?',
+                style: TextStyle(
+                  color: color,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 18,
+                ),
+              ),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Credibility: $label',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: color,
+                      fontSize: 16,
+                    ),
+                  ),
+                  if (widget.claimsChecked != null &&
+                      widget.claimsChecked! > 0)
+                    Text(
+                      '${widget.claimsChecked} claim(s) verified',
+                      style: TextStyle(
+                        color: Colors.grey[600],
+                        fontSize: 13,
+                      ),
+                    ),
+                  if (widget.credibilityReason != null)
+                    Text(
+                      widget.credibilityReason!,
+                      style: TextStyle(
+                        color: Colors.grey[500],
+                        fontSize: 12,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFactCheckSection() {
+    return ExpansionTile(
+      leading: const Icon(Icons.fact_check_outlined),
+      title: const Text(
+        'Fact Checks',
+        style: TextStyle(fontWeight: FontWeight.w600),
+      ),
+      subtitle: Text(
+        _loadedFactChecks != null && _loadedFactChecks!.isNotEmpty
+            ? '${_loadedFactChecks!.length} claim(s) checked'
+            : 'Tap to load',
+        style: TextStyle(color: Colors.grey[600], fontSize: 12),
+      ),
+      initiallyExpanded: _factCheckExpanded,
+      onExpansionChanged: (expanded) {
+        setState(() => _factCheckExpanded = expanded);
+        if (expanded) _loadFactChecks();
+      },
+      children: [
+        if (_factCheckLoading)
+          const Padding(
+            padding: EdgeInsets.all(16),
+            child: Center(child: CircularProgressIndicator()),
+          )
+        else if (_loadedFactChecks == null || _loadedFactChecks!.isEmpty)
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text(
+              'No fact-check data available for this article.',
+              style: TextStyle(color: Colors.grey[600]),
+            ),
+          )
+        else
+          ..._loadedFactChecks!.entries.map(
+            (entry) => _buildFactCheckTile(entry.key, entry.value),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildFactCheckTile(String claim, dynamic data) {
+    final ruling = data is Map ? (data['ruling'] ?? 'Unknown') : 'Unknown';
+    final url = data is Map ? data['url'] as String? : null;
+    final speaker = data is Map ? data['speaker'] as String? : null;
+    final emoji = _getRulingEmoji(ruling.toString());
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            claim,
+            style: const TextStyle(
+              fontStyle: FontStyle.italic,
+              fontSize: 13,
+            ),
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
+          ),
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              Text(
+                '$emoji $ruling',
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+              if (speaker != null && speaker != 'N/A') ...[
+                const SizedBox(width: 8),
+                Text(
+                  '— $speaker',
+                  style: TextStyle(
+                    color: Colors.grey[600],
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+              if (url != null) ...[
+                const Spacer(),
+                GestureDetector(
+                  onTap: () => _launchFactCheckURL(url),
+                  child: Text(
+                    'Source',
+                    style: TextStyle(
+                      color: Colors.blue[700],
+                      fontSize: 12,
+                      decoration: TextDecoration.underline,
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+          const Divider(),
+        ],
+      ),
+    );
+  }
+
+  // ── Build ───────────────────────────────────────────────────────────────────
+
   @override
   Widget build(BuildContext context) {
     return PopScope(
       canPop: true,
       onPopInvokedWithResult: (didPop, result) async {
-        if (didPop && !_hasTracked) {
-          await _trackReadingTime();
-        }
+        if (didPop && !_hasTracked) await _trackReadingTime();
       },
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Article'),
           actions: [
             IconButton(
-              icon: const Icon(Icons.share),
-              onPressed: () {
-                // Share functionality to be implemented
-              },
+              icon: const Icon(Icons.open_in_browser),
+              tooltip: 'Open in browser',
+              onPressed: _launchURL,
             ),
           ],
         ),
         body: SingleChildScrollView(
-          padding: const EdgeInsets.all(16.0),
+          padding: const EdgeInsets.all(16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -166,9 +423,10 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
               // Title
               Text(
                 widget.title,
-                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                      fontWeight: FontWeight.bold,
-                    ),
+                style: Theme.of(context)
+                    .textTheme
+                    .headlineSmall
+                    ?.copyWith(fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 16),
 
@@ -177,7 +435,6 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
                 spacing: 8,
                 runSpacing: 8,
                 children: [
-                  // Bias chip
                   Chip(
                     avatar: Icon(
                       Icons.balance,
@@ -188,8 +445,6 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
                     backgroundColor: _getBiasColor(widget.biasScore)
                         .withAlpha((255 * 0.2).round()),
                   ),
-
-                  // Sentiment chip
                   if (widget.sentimentScore != null)
                     Chip(
                       avatar: Icon(
@@ -206,17 +461,41 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
                           _getSentimentColor(widget.sentimentScore)
                               .withAlpha((255 * 0.2).round()),
                     ),
-
-                  // Intensity chip
                   if (widget.biasIntensity != null)
                     Chip(
                       label: Text(
-                        '${(widget.biasIntensity! * 100).round()}% Biased',
+                        '${(widget.biasIntensity! * 100).round()}% Intensity',
                       ),
                       backgroundColor: Colors.grey.shade200,
                     ),
+                  if (widget.generalBias != null)
+                    Chip(
+                      avatar: Icon(
+                        widget.generalBias == 'BIASED'
+                            ? Icons.warning_amber
+                            : Icons.check_circle_outline,
+                        size: 16,
+                        color: widget.generalBias == 'BIASED'
+                            ? Colors.orange[700]
+                            : Colors.green[700],
+                      ),
+                      label: Text(widget.generalBias!),
+                      backgroundColor: widget.generalBias == 'BIASED'
+                          ? Colors.orange.withAlpha(40)
+                          : Colors.green.withAlpha(40),
+                    ),
                 ],
               ),
+
+              const SizedBox(height: 16),
+
+              // Credibility card
+              _buildCredibilityCard(),
+
+              const SizedBox(height: 8),
+
+              // Fact-check expandable section
+              _buildFactCheckSection(),
 
               const Divider(height: 32),
 

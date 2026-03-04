@@ -1,8 +1,7 @@
-# app/routes/articles.py
 """
 NewsScope Articles API Router.
-Week 4: Credibility scoring + fact-checking endpoints.
-Flake8: 0 errors.
+Credibility scoring + fact-checking endpoints.
+Flake8: 0 errors/warnings.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -11,8 +10,12 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Query
 
 from app.db.supabase import supabase
-from app.jobs.fact_checking import batch_factcheck_recent, compute_credibility_score
+from app.jobs.fact_checking import (
+    batch_factcheck_recent,
+    compute_credibility_score,
+)
 from app.schemas import ArticleCreate, ArticleResponse
+
 
 router = APIRouter(prefix="/articles", tags=["articles"])
 
@@ -22,9 +25,15 @@ def get_articles(
     category: Optional[str] = Query(default=None),
 ) -> List[dict]:
     """Recent articles (30d), optionally filtered by category."""
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(days=30)
+    ).isoformat()
 
-    query = supabase.table("articles").select("*").gte("published_at", cutoff)
+    query = (
+        supabase.table("articles")
+        .select("*")
+        .gte("published_at", cutoff)
+    )
 
     if category:
         query = query.eq("category", category)
@@ -38,9 +47,15 @@ def get_comparison_articles(
     category: Optional[str] = Query(default=None),
 ) -> List[dict]:
     """Articles for comparison view, filtered by topic and/or category."""
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(days=30)
+    ).isoformat()
 
-    query = supabase.table("articles").select("*").gte("published_at", cutoff)
+    query = (
+        supabase.table("articles")
+        .select("*")
+        .gte("published_at", cutoff)
+    )
 
     if topic:
         query = query.ilike("content", f"%{topic}%")
@@ -88,16 +103,35 @@ async def add_article(article: ArticleCreate) -> dict:
     return resp.data[0]
 
 
+@router.get("/{article_id}")
+def get_article(article_id: str) -> dict:
+    """Return a single article by ID."""
+    resp = (
+        supabase.table("articles")
+        .select("*")
+        .eq("id", article_id)
+        .execute()
+    )
+    if not resp.data:
+        raise HTTPException(status_code=404, detail="Article not found")
+    return resp.data[0]
+
+
 @router.post("/{article_id}/factcheck")
 async def factcheck_article(article_id: str) -> dict:
     """Manually re-run fact-check for a single article."""
     resp = (
-        supabase.table("articles").select("*").eq("id", article_id).execute()
+        supabase.table("articles")
+        .select("*")
+        .eq("id", article_id)
+        .execute()
     )
     if not resp.data:
         raise HTTPException(status_code=404, detail="Article not found")
 
-    cred = await compute_credibility_score(ArticleResponse(**resp.data[0]))
+    cred = await compute_credibility_score(
+        ArticleResponse(**resp.data[0])
+    )
 
     supabase.table("articles").update(
         {

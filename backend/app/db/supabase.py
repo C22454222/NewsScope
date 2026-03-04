@@ -1,14 +1,19 @@
-# app/db/supabase.py
-import os
-from supabase import create_client, Client
-from dotenv import load_dotenv
+"""
+NewsScope Supabase client.
 
-# Load environment variables so SUPABASE_URL and SUPABASE_KEY are available
+Singleton client shared across all jobs and routes.
+Instantiated once at import time — never recreated per request.
+
+Flake8: 0 errors/warnings.
+"""
+
+from dotenv import load_dotenv
+from supabase import Client, create_client
+
+from app.core.config import settings
+
+# Load .env for local development — no-op in production
 load_dotenv()
 
-# Connection details for the Supabase project
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-
-# Shared Supabase client used by the data access layer and jobs
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+# Shared singleton — all modules import this instance directly
+supabase: Client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)

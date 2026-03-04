@@ -1,7 +1,6 @@
-# app/schemas.py
 """
 NewsScope Pydantic schemas.
-Flake8: 0 errors.
+Flake8: 0 errors/warnings.
 """
 
 from datetime import datetime
@@ -53,9 +52,9 @@ class ArticleResponse(ArticleBase):
     Full article response model returned by the API and used
     internally by fact_checking.py and ingestion.py.
 
-    Extends ArticleBase with DB-generated fields and Week 4
-    credibility/fact-check columns. extra='ignore' silently drops
-    unknown Supabase columns so ArticleResponse(**row) is always safe.
+    Extends ArticleBase with DB-generated fields and credibility/
+    fact-check columns. extra='ignore' silently drops unknown
+    Supabase columns so ArticleResponse(**row) is always safe.
     """
 
     id: Optional[str] = None
@@ -64,7 +63,7 @@ class ArticleResponse(ArticleBase):
     created_at: Optional[datetime] = None
     updated_at: Optional[str] = None
 
-    # Week 4 — credibility + fact-checking
+    # Credibility + fact-checking fields
     credibility_score: Optional[float] = 80.0
     fact_checks: Optional[Dict[str, Any]] = Field(default_factory=dict)
     claims_checked: Optional[int] = 0

@@ -138,14 +138,14 @@ async def compute_credibility_score(
     article: ArticleResponse,
 ) -> Dict[str, Any]:
     """
-    Compute a credibility score (0–100) for a given article.
+    Compute a credibility score (0-100) for a given article.
     Uses claim extraction + PolitiFact verification as primary signal.
     Falls back to a default of 85.0 for short articles or when no
     verifiable claims are found.
     """
-    text = (
-        f"{article.title} {article.description} {article.content}".strip()
-    )
+    text = " ".join(
+        filter(None, [article.title, article.description, article.content])
+    ).strip()
 
     if len(text) < 100:
         return {

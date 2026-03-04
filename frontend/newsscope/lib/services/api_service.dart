@@ -1,11 +1,15 @@
 import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:firebase_auth/firebase_auth.dart';
+
 import '../models/article.dart';
 
 class ApiService {
   static const String baseUrl = 'https://newsscope-backend.onrender.com';
+
+  // ── Auth ────────────────────────────────────────────────────────────────────
 
   Future<String?> _getToken() async {
     try {
@@ -23,6 +27,8 @@ class ApiService {
     }
   }
 
+  // ── Articles ────────────────────────────────────────────────────────────────
+
   Future<List<Article>> getArticles({String? category}) async {
     try {
       final uri = Uri.parse(
@@ -38,7 +44,7 @@ class ApiService {
 
       if (response.statusCode == 200) {
         final List<dynamic> data = json.decode(response.body);
-        return data.map((json) => Article.fromJson(json)).toList();
+        return data.map((j) => Article.fromJson(j)).toList();
       } else {
         throw Exception('Failed to load articles: ${response.statusCode}');
       }
@@ -47,13 +53,32 @@ class ApiService {
     }
   }
 
+  Future<Article?> getArticle(String articleId) async {
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/articles/$articleId'),
+        headers: {'Content-Type': 'application/json'},
+      );
+
+      if (response.statusCode == 200) {
+        return Article.fromJson(jsonDecode(response.body));
+      } else {
+        debugPrint('Failed to load article: ${response.statusCode}');
+      }
+    } catch (e) {
+      debugPrint('Error fetching article: $e');
+    }
+    return null;
+  }
+
+  // ── Reading history ─────────────────────────────────────────────────────────
+
   Future<void> trackReading({
     required String articleId,
     required int timeSpentSeconds,
   }) async {
     final token = await _getToken();
 
-    debugPrint('Token: ${token?.substring(0, 20)}...');
     debugPrint('Tracking: $articleId for ${timeSpentSeconds}s');
 
     if (token == null) {
@@ -74,18 +99,17 @@ class ApiService {
         }),
       );
 
-      debugPrint('Response: ${response.statusCode}');
-      debugPrint('Body: ${response.body}');
-
       if (response.statusCode != 200) {
         debugPrint('Failed to track reading: ${response.statusCode}');
       } else {
-        debugPrint('Reading tracked successfully!');
+        debugPrint('Reading tracked successfully');
       }
     } catch (e) {
       debugPrint('Error tracking reading: $e');
     }
   }
+
+  // ── Bias profile ────────────────────────────────────────────────────────────
 
   Future<Map<String, dynamic>?> getBiasProfile() async {
     final token = await _getToken();
@@ -95,30 +119,27 @@ class ApiService {
     }
 
     try {
-      debugPrint('Fetching bias profile...');
-
       final response = await http.get(
         Uri.parse('$baseUrl/api/bias-profile'),
-        headers: {
-          'Authorization': 'Bearer $token',
-        },
+        headers: {'Authorization': 'Bearer $token'},
       );
-
-      debugPrint('📡 Profile response: ${response.statusCode}');
 
       if (response.statusCode == 200) {
         final profile = jsonDecode(response.body);
-        debugPrint('Profile loaded: ${profile['total_articles_read']} articles');
+        debugPrint(
+          'Profile loaded: ${profile['total_articles_read']} articles',
+        );
         return profile;
       } else {
         debugPrint('Failed to load bias profile: ${response.statusCode}');
-        debugPrint('Response: ${response.body}');
       }
     } catch (e) {
       debugPrint('Error fetching bias profile: $e');
     }
     return null;
   }
+
+  // ── Article comparison ──────────────────────────────────────────────────────
 
   Future<Map<String, dynamic>?> compareArticles(
     String topic, {
@@ -150,6 +171,8 @@ class ApiService {
     return null;
   }
 
+  // ── Fact-checks ─────────────────────────────────────────────────────────────
+
   Future<List<dynamic>?> getFactChecks(String articleId) async {
     try {
       final response = await http.get(
@@ -158,9 +181,31 @@ class ApiService {
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
+      } else {
+        debugPrint('Failed to load fact-checks: ${response.statusCode}');
       }
     } catch (e) {
       debugPrint('Error fetching fact-checks: $e');
+    }
+    return null;
+  }
+
+  /// Manually trigger a fact-check re-run for a single article.
+  /// Returns the updated credibility data or null on failure.
+  Future<Map<String, dynamic>?> triggerFactCheck(String articleId) async {
+    try {
+      final response = await http.post(
+        Uri.parse('$baseUrl/articles/$articleId/factcheck'),
+        headers: {'Content-Type': 'application/json'},
+      );
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body);
+      } else {
+        debugPrint('Fact-check trigger failed: ${response.statusCode}');
+      }
+    } catch (e) {
+      debugPrint('Error triggering fact-check: $e');
     }
     return null;
   }
