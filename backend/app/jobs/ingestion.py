@@ -655,7 +655,9 @@ def insert_articles_batch(articles: List[Dict[str, Any]]) -> List[str]:
     res = supabase.table("articles").insert(payloads).execute().data
     new_ids = [r["id"] for r in res]
 
-    total = max(len(res), 1)
+    # Use len(new_articles) as denominator — accurate even if Supabase
+    # returns fewer rows than payloads due to partial insert failures.
+    total = max(len(new_articles), 1)
     print(f"Inserted {len(res)} new articles")
     print(
         f"   Scraped content: {scrape_success} full scrape, "
@@ -719,8 +721,9 @@ def fetch_newsapi() -> List[Dict[str, Any]]:
                 if n["url"]:
                     normalized.append(n)
 
+            # Fix: label each source correctly instead of hardcoded "cnn"
             print(
-                f"  cnn {source_id}: "
+                f"  {source_id}: "
                 f"{len(data.get('articles', []))} articles"
             )
 

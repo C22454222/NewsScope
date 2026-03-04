@@ -111,8 +111,8 @@ def _sync_ingestion() -> None:
 
 def _sync_analysis() -> None:
     """
-    Sync bridge — runs analyze_unscored_articles on the main event loop.
-    Fires every 5 minutes. Skips if ingestion or analysis is running.
+    Sync bridge — runs _guarded_analysis on the main event loop.
+    Fires every 5 minutes. Skips if any heavy job is running.
     """
     if _heavy_job_running:
         print("Heavy job in progress — skipping scheduled analysis.")
@@ -121,7 +121,7 @@ def _sync_analysis() -> None:
         print("Analysis bridge: no running loop, skipping.")
         return
     future = asyncio.run_coroutine_threadsafe(
-        analyze_unscored_articles(), _main_loop
+        _guarded_analysis(), _main_loop
     )
     try:
         future.result(timeout=600)
@@ -144,6 +144,30 @@ def _sync_archive() -> None:
         future.result(timeout=1800)
     except Exception as exc:
         print(f"Scheduled archiving error: {exc}")
+
+
+# ── Guarded analysis wrapper ──────────────────────────────────────────────────
+
+
+async def _guarded_analysis() -> None:
+    """
+    Sets _heavy_job_running around analyze_unscored_articles so that
+    ingestion bridges and keep-alive triggers cannot fire concurrently.
+    All analysis calls must go through this — never call
+    analyze_unscored_articles() directly from scheduled or keep-alive
+    paths.
+    """
+    global _heavy_job_running
+
+    if _heavy_job_running:
+        print("Heavy job already running — skipping analysis trigger.")
+        return
+
+    _heavy_job_running = True
+    try:
+        await analyze_unscored_articles()
+    finally:
+        _heavy_job_running = False
 
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
@@ -291,8 +315,9 @@ async def _run_startup_sequence() -> None:
     triggering the first analysis run.
 
     Redeploy guard: if the DB shows articles updated within
-    _REDEPLOY_GUARD_MINUTES, skip ingestion and go straight to
-    analysis to avoid double-ingestion OOM on redeploy.
+    _REDEPLOY_GUARD_MINUTES, skip ingestion and wait the full
+    _ANALYSIS_STARTUP_DELAY_SECONDS before analysis — same delay
+    as the normal path to avoid immediate post-redeploy OOM.
 
     Heavy job lock: _heavy_job_running is held during ingestion so
     the APScheduler analysis bridge cannot fire simultaneously.
@@ -302,10 +327,11 @@ async def _run_startup_sequence() -> None:
     if _ingestion_ran_recently():
         print(
             "Startup ingestion skipped (redeploy guard). "
-            "Waiting 30s then running analysis..."
+            f"Waiting {_ANALYSIS_STARTUP_DELAY_SECONDS}s "
+            "then running analysis..."
         )
-        await asyncio.sleep(30)
-        await analyze_unscored_articles()
+        await asyncio.sleep(_ANALYSIS_STARTUP_DELAY_SECONDS)
+        await _guarded_analysis()
         return
 
     print("Server startup: Running ingestion...")
@@ -326,7 +352,7 @@ async def _run_startup_sequence() -> None:
     )
     await asyncio.sleep(_ANALYSIS_STARTUP_DELAY_SECONDS)
     print("Starting post-startup analysis run...")
-    await analyze_unscored_articles()
+    await _guarded_analysis()
 
 
 # ── App ───────────────────────────────────────────────────────────────────────
@@ -399,11 +425,12 @@ def health():
 async def internal_analyze_batch():
     """
     Additional analysis trigger called by keep-alive every 14 minutes.
-    Skips silently if any heavy job is already running.
+    Routes through _guarded_analysis so _heavy_job_running is always
+    respected — prevents keep-alive from firing during ingestion.
     """
     if _heavy_job_running:
         return {"status": "skipped — heavy job in progress"}
-    asyncio.create_task(analyze_unscored_articles())
+    asyncio.create_task(_guarded_analysis())
     return {"status": "ok"}
 
 
@@ -417,7 +444,7 @@ async def debug_ingest(background_tasks: BackgroundTasks):
 @app.post("/debug/analyze")
 async def debug_analyze(background_tasks: BackgroundTasks):
     """Manually trigger an analysis cycle."""
-    background_tasks.add_task(analyze_unscored_articles)
+    background_tasks.add_task(_guarded_analysis)
     return {"status": "analysis triggered in background"}
 
 

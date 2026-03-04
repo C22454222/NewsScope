@@ -29,11 +29,10 @@ GENERAL_BIAS_MODEL = settings.HF_GENERAL_BIAS_MODEL.strip()
 
 _HF_API_BASE = "https://router.huggingface.co/hf-inference/models"
 
-_BATCH_SIZE = 10
-_TEXT_LIMIT = 1024
-
-# Increased from 30s — gives bart-large-mnli sufficient time to respond
-# on cold starts without triggering fallback on the first attempt.
+# Reduced from 10 — each article holds 3 concurrent HF responses in RAM.
+# 3 articles × ~40MB response overhead stays well under 512MB free tier.
+_BATCH_SIZE = 3
+_TEXT_LIMIT = 512
 _REQUEST_TIMEOUT = 60
 
 _analysis_running = False
@@ -53,6 +52,18 @@ _SOURCE_BIAS_MAP = {
     "GB News": 1.0,
 }
 
+# Module-level session — created once, reused across all calls,
+# avoids opening two sessions simultaneously per article.
+_session: Optional[requests.Session] = None
+
+
+def _get_session() -> requests.Session:
+    """Return the module-level requests session, creating it if needed."""
+    global _session
+    if _session is None:
+        _session = requests.Session()
+    return _session
+
 
 # ── Inference API helper ──────────────────────────────────────────────────────
 
@@ -65,7 +76,7 @@ def _inference_api_call(
     """
     POST to HuggingFace Serverless Inference with retry + warm-up handling.
     Returns raw list of label/score dicts, or None on failure.
-    Uses an explicit session closed in a finally block to prevent leaks.
+    Uses the module-level session to avoid per-call session overhead.
     """
     if not HF_API_TOKEN:
         print("HF_API_TOKEN not set — skipping Inference API call.")
@@ -73,43 +84,40 @@ def _inference_api_call(
 
     url = f"{_HF_API_BASE}/{model}"
     headers = {"Authorization": f"Bearer {HF_API_TOKEN}"}
-    payload = {"inputs": text[:512]}
-    session = requests.Session()
+    payload = {"inputs": text[:_TEXT_LIMIT]}
+    session = _get_session()
 
-    try:
-        for attempt in range(retries):
-            try:
-                response = session.post(
-                    url,
-                    headers=headers,
-                    json=payload,
-                    timeout=_REQUEST_TIMEOUT,
-                )
+    for attempt in range(retries):
+        try:
+            response = session.post(
+                url,
+                headers=headers,
+                json=payload,
+                timeout=_REQUEST_TIMEOUT,
+            )
 
-                if response.status_code == 503:
-                    wait = 10 + (attempt * 5)
-                    print(
-                        f"Model {model} loading, "
-                        f"waiting {wait}s (attempt {attempt + 1})..."
-                    )
-                    time.sleep(wait)
-                    continue
-
-                response.raise_for_status()
-                result = response.json()
-
-                if isinstance(result, list) and result:
-                    return result[0] if isinstance(result[0], list) else result
-
-            except Exception as exc:
+            if response.status_code == 503:
+                wait = 10 + (attempt * 5)
                 print(
-                    f"Inference API error [{model}] "
-                    f"attempt {attempt + 1}: {exc}"
+                    f"Model {model} loading, "
+                    f"waiting {wait}s (attempt {attempt + 1})..."
                 )
-                if attempt < retries - 1:
-                    time.sleep(2 ** attempt)
-    finally:
-        session.close()
+                time.sleep(wait)
+                continue
+
+            response.raise_for_status()
+            result = response.json()
+
+            if isinstance(result, list) and result:
+                return result[0] if isinstance(result[0], list) else result
+
+        except Exception as exc:
+            print(
+                f"Inference API error [{model}] "
+                f"attempt {attempt + 1}: {exc}"
+            )
+            if attempt < retries - 1:
+                time.sleep(2**attempt)
 
     return None
 
@@ -185,7 +193,7 @@ def _detect_political_bias_ai(
     """
     Zero-shot political bias via facebook/bart-large-mnli.
     Returns (bias_score, confidence): -1.0=Left, 0.0=Center, 1.0=Right.
-    bias_score derived from (right-wing probability - left-wing probability).
+    Uses module-level session — no per-call Session() creation.
     """
     if not HF_API_TOKEN:
         print("Political bias: HF_API_TOKEN not set — skipping.")
@@ -194,85 +202,80 @@ def _detect_political_bias_ai(
     url = f"{_HF_API_BASE}/{BIAS_MODEL}"
     headers = {"Authorization": f"Bearer {HF_API_TOKEN}"}
     payload = {
-        "inputs": text[:512],
+        "inputs": text[:_TEXT_LIMIT],
         "parameters": {
             "candidate_labels": ["left-wing", "centrist", "right-wing"]
         },
     }
-    session = requests.Session()
+    session = _get_session()
 
-    try:
-        for attempt in range(2):
-            try:
-                response = session.post(
-                    url,
-                    headers=headers,
-                    json=payload,
-                    timeout=_REQUEST_TIMEOUT,
-                )
+    for attempt in range(2):
+        try:
+            response = session.post(
+                url,
+                headers=headers,
+                json=payload,
+                timeout=_REQUEST_TIMEOUT,
+            )
 
+            print(
+                f"  Political bias HTTP {response.status_code} "
+                f"(attempt {attempt + 1})"
+            )
+
+            if response.status_code == 503:
+                wait = 10 + (attempt * 5)
                 print(
-                    f"  Political bias HTTP {response.status_code} "
-                    f"(attempt {attempt + 1})"
+                    f"  Political bias model loading, "
+                    f"waiting {wait}s..."
                 )
+                time.sleep(wait)
+                continue
 
-                if response.status_code == 503:
-                    wait = 10 + (attempt * 5)
-                    print(
-                        f"  Political bias model loading, "
-                        f"waiting {wait}s..."
-                    )
-                    time.sleep(wait)
-                    continue
+            response.raise_for_status()
+            result = response.json()
 
-                response.raise_for_status()
-                result = response.json()
-
-                if not isinstance(result, list) or not result:
-                    print(
-                        "  Political bias: unexpected response shape "
-                        "— returning None"
-                    )
-                    return None, None
-
-                label_score_map = {
-                    item["label"]: item["score"] for item in result
-                }
-                left = label_score_map.get("left-wing", 0.0)
-                center = label_score_map.get("centrist", 0.0)
-                right = label_score_map.get("right-wing", 0.0)
-
+            if not isinstance(result, list) or not result:
                 print(
-                    f"  Political bias scores — "
-                    f"left={left:.3f}, center={center:.3f}, "
-                    f"right={right:.3f}"
+                    "  Political bias: unexpected response shape "
+                    "— returning None"
                 )
+                return None, None
 
-                bias_score = round(right - left, 4)
-                confidence = round(max(left, center, right), 4)
+            label_score_map = {
+                item["label"]: item["score"] for item in result
+            }
+            left = label_score_map.get("left-wing", 0.0)
+            center = label_score_map.get("centrist", 0.0)
+            right = label_score_map.get("right-wing", 0.0)
 
-                if bias_score < -0.3:
-                    label_str = "LEFT"
-                elif bias_score > 0.3:
-                    label_str = "RIGHT"
-                else:
-                    label_str = "CENTER"
+            print(
+                f"  Political bias scores — "
+                f"left={left:.3f}, center={center:.3f}, "
+                f"right={right:.3f}"
+            )
 
-                print(
-                    f"Political bias: {label_str} "
-                    f"(score={bias_score:.2f}, "
-                    f"confidence={confidence:.2%})"
-                )
-                return bias_score, confidence
+            bias_score = round(right - left, 4)
+            confidence = round(max(left, center, right), 4)
 
-            except Exception as exc:
-                print(
-                    f"Political bias error attempt {attempt + 1}: {exc}"
-                )
-                if attempt < 1:
-                    time.sleep(5)
-    finally:
-        session.close()
+            if bias_score < -0.3:
+                label_str = "LEFT"
+            elif bias_score > 0.3:
+                label_str = "RIGHT"
+            else:
+                label_str = "CENTER"
+
+            print(
+                f"Political bias: {label_str} "
+                f"(score={bias_score:.2f}, "
+                f"confidence={confidence:.2%})"
+            )
+            return bias_score, confidence
+
+        except Exception as exc:
+            print(f"Political bias error attempt {attempt + 1}: {exc}")
+            if attempt < 1:
+                time.sleep(5)
 
     print("Political bias API call failed — will retry next cycle.")
     return None, None
