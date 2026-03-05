@@ -6,9 +6,10 @@ RAM footprint. No transformers/torch loaded on Render.
 
 Sentiment      : distilbert/distilbert-base-uncased-finetuned-sst-2-english
                  Confirmed on HF Inference API. 3.63M downloads.
-Political bias : FacebookAI/roberta-large-mnli
-                 Zero-shot NLI — confirmed on HF Inference API. 365k downloads.
-                 candidate_labels: ["left-wing", "centrist", "right-wing"].
+Political bias : facebook/bart-large-mnli
+                 Zero-shot NLI — confirmed on HF Inference API. 10M+ downloads.
+                 Payload: inputs + parameters.candidate_labels.
+                 Response: {labels: [...], scores: [...]} dict (not a list).
                  Runs on HF servers — zero RAM cost on Render free tier.
 General bias   : valurank/distilroberta-bias
                  Confirmed on HF Inference API. 3.79k downloads.
@@ -82,6 +83,7 @@ def _inference_api_call(
     POST to HuggingFace Serverless Inference with retry + warm-up handling.
     Returns raw list of label/score dicts, or None on failure.
     Uses the module-level session to avoid per-call session overhead.
+    NOTE: Not used for political bias — that model returns a dict, not list.
     """
     if not HF_API_TOKEN:
         print("HF_API_TOKEN not set — skipping Inference API call.")
@@ -196,13 +198,18 @@ def _detect_political_bias_ai(
     text: str,
 ) -> Tuple[Optional[float], Optional[float]]:
     """
-    Political bias via FacebookAI/roberta-large-mnli (zero-shot NLI).
+    Political bias via facebook/bart-large-mnli (zero-shot NLI).
 
-    Confirmed on HF Inference API — 365k downloads, 0.4B params.
+    Confirmed on HF Inference API — 10M+ downloads.
     Runs entirely on HF servers — zero RAM cost on Render free tier.
 
-    Payload requires candidate_labels for zero-shot classification.
-    Response shape: [{label, score}, ...] sorted by score descending.
+    Payload: inputs (str) + parameters.candidate_labels (list).
+    Response shape: {
+        "sequence": "...",
+        "labels": ["left-wing", "right-wing", "centrist"],
+        "scores": [0.6, 0.3, 0.1]
+    }
+    Labels are sorted by score descending in the response.
 
     Returns (bias_score, confidence): -1.0=Left, 0.0=Center, 1.0=Right.
     """
@@ -246,28 +253,26 @@ def _detect_political_bias_ai(
             response.raise_for_status()
             result = response.json()
 
-            # Zero-shot NLI returns {labels: [...], scores: [...]}
-            # or [{label, score}, ...] depending on API version.
-            if isinstance(result, dict):
-                labels = result.get("labels", [])
-                scores = result.get("scores", [])
-                label_score_map = dict(zip(labels, scores))
-            elif isinstance(result, list):
-                items = (
-                    result[0]
-                    if isinstance(result[0], list)
-                    else result
-                )
-                label_score_map = {
-                    item["label"]: item["score"] for item in items
-                }
-            else:
+            # bart-large-mnli zero-shot returns a dict:
+            # {"sequence": "...", "labels": [...], "scores": [...]}
+            if not isinstance(result, dict):
                 print(
-                    "  Political bias: unexpected response shape "
+                    "  Political bias: unexpected response type "
+                    f"({type(result).__name__}) — returning None"
+                )
+                return None, None
+
+            labels = result.get("labels", [])
+            scores = result.get("scores", [])
+
+            if not labels or not scores:
+                print(
+                    "  Political bias: empty labels/scores "
                     "— returning None"
                 )
                 return None, None
 
+            label_score_map = dict(zip(labels, scores))
             left = label_score_map.get("left-wing", 0.0)
             center = label_score_map.get("centrist", 0.0)
             right = label_score_map.get("right-wing", 0.0)

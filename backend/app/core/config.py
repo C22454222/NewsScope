@@ -38,16 +38,15 @@ class Settings:
     )
     HF_BIAS_MODEL: str = os.getenv(
         "HF_BIAS_MODEL",
-        # FacebookAI/roberta-large-mnli — confirmed on HF Inference API.
-        # Zero-shot NLI: candidate_labels=["left-wing","centrist","right-wing"].
-        # 0.4B params — runs on HF servers, zero RAM cost on Render.
-        # Confirmed in exhaustive inference provider list (365k downloads).
-        "FacebookAI/roberta-large-mnli",
+        # facebook/bart-large-mnli — confirmed zero-shot NLI.
+        # Requires candidate_labels payload — runs on HF servers.
+        # 10M+ downloads. Zero RAM cost on Render free tier.
+        "facebook/bart-large-mnli",
     )
     HF_GENERAL_BIAS_MODEL: str = os.getenv(
         "HF_GENERAL_BIAS_MODEL",
         # valurank/distilroberta-bias — confirmed on HF Inference API.
-        # Returns BIASED / UNBIASED label. (3.79k downloads, confirmed).
+        # Returns BIASED / UNBIASED. 3.79k downloads.
         "valurank/distilroberta-bias",
     )
 
