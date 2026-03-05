@@ -2,7 +2,7 @@
 NewsScope application configuration.
 
 All environment variables are centralised here via a pydantic-settings
-Settings class. Import `settings` — never os.getenv() directly elsewhere.
+Settings class. Import `settings` — never os.getenv() directly elsewhere. Hopefully fixed
 
 Flake8: 0 errors/warnings.
 """
