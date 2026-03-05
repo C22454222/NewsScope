@@ -9,7 +9,8 @@ Sentiment      : distilbert/distilbert-base-uncased-finetuned-sst-2-english
 Political bias : facebook/bart-large-mnli
                  Zero-shot NLI — confirmed on HF Inference API. 10M+ downloads.
                  Payload: inputs + parameters.candidate_labels.
-                 Response: list-wrapped dict {labels: [...], scores: [...]}.
+                 Response: {"label": "left-wing", "score": 0.86}
+                 Single top-prediction dict after list unwrap.
                  Runs on HF servers — zero RAM cost on Render free tier.
 General bias   : valurank/distilroberta-bias
                  Confirmed on HF Inference API. 3.79k downloads.
@@ -204,9 +205,8 @@ def _detect_political_bias_ai(
     Runs entirely on HF servers — zero RAM cost on Render free tier.
 
     Payload: inputs (str) + parameters.candidate_labels (list).
-    Response: HF router wraps the dict in a list —
-        [{"sequence": "...", "labels": [...], "scores": [...]}]
-    Unwrapped to dict before parsing labels and scores.
+    Response after list unwrap: {"label": "left-wing", "score": 0.86}
+    Single top-prediction dict — label mapped to bias_score float.
 
     Returns (bias_score, confidence): -1.0=Left, 0.0=Center, 1.0=Right.
     """
@@ -250,12 +250,9 @@ def _detect_political_bias_ai(
             response.raise_for_status()
             result = response.json()
 
-            # HF router wraps zero-shot NLI response in a list — unwrap.
+            # HF router wraps response in a list — unwrap to single dict.
             if isinstance(result, list) and result:
                 result = result[0]
-
-            # Temp debug — log raw result to confirm response shape.
-            print(f"  Political bias raw result: {result}")
 
             if not isinstance(result, dict):
                 print(
@@ -264,29 +261,25 @@ def _detect_political_bias_ai(
                 )
                 return None, None
 
-            labels = result.get("labels", [])
-            scores = result.get("scores", [])
+            # Response shape: {"label": "left-wing", "score": 0.86}
+            label_raw = result.get("label", "")
+            score_raw = result.get("score", 0.0)
 
-            if not labels or not scores:
+            if not label_raw:
                 print(
-                    "  Political bias: empty labels/scores "
-                    "— returning None"
+                    "  Political bias: empty label — returning None"
                 )
                 return None, None
 
-            label_score_map = dict(zip(labels, scores))
-            left = label_score_map.get("left-wing", 0.0)
-            center = label_score_map.get("centrist", 0.0)
-            right = label_score_map.get("right-wing", 0.0)
+            label_lower = label_raw.lower()
+            if "left" in label_lower:
+                bias_score = round(-score_raw, 4)
+            elif "right" in label_lower:
+                bias_score = round(score_raw, 4)
+            else:
+                bias_score = 0.0
 
-            print(
-                f"  Political bias scores — "
-                f"left={left:.3f}, center={center:.3f}, "
-                f"right={right:.3f}"
-            )
-
-            bias_score = round(right - left, 4)
-            confidence = round(max(left, center, right), 4)
+            confidence = round(score_raw, 4)
 
             if bias_score < -0.3:
                 label_str = "LEFT"
