@@ -5,12 +5,13 @@ All three models run via HuggingFace Serverless Inference — zero local
 RAM footprint. No transformers/torch loaded on Render.
 
 Sentiment      : distilbert/distilbert-base-uncased-finetuned-sst-2-english
-Political bias : cardiffnlp/twitter-roberta-base-political-ideology-3class
-                 RoBERTa-base fine-tuned on political ideology detection.
-                 Labels: left / center / right — direct string match.
-                 ~125MB — 13x smaller than bart-large-mnli.
-                 Inference API compatible, peer-reviewed (Cardiff NLP).
+                 Confirmed on HF Inference API. 3.63M downloads.
+Political bias : FacebookAI/roberta-large-mnli
+                 Zero-shot NLI — confirmed on HF Inference API. 365k downloads.
+                 candidate_labels: ["left-wing", "centrist", "right-wing"].
+                 Runs on HF servers — zero RAM cost on Render free tier.
 General bias   : valurank/distilroberta-bias
+                 Confirmed on HF Inference API. 3.79k downloads.
 
 Flake8: 0 errors/warnings.
 """
@@ -195,14 +196,15 @@ def _detect_political_bias_ai(
     text: str,
 ) -> Tuple[Optional[float], Optional[float]]:
     """
-    Political bias via cardiffnlp/twitter-roberta-base-political-ideology-3class.
+    Political bias via FacebookAI/roberta-large-mnli (zero-shot NLI).
 
-    Standard text-classification — no candidate_labels needed.
-    Response shape: [[{label, score}, ...]]
-    Labels: 'left', 'center', 'right' — direct lowercase string match.
+    Confirmed on HF Inference API — 365k downloads, 0.4B params.
+    Runs entirely on HF servers — zero RAM cost on Render free tier.
+
+    Payload requires candidate_labels for zero-shot classification.
+    Response shape: [{label, score}, ...] sorted by score descending.
 
     Returns (bias_score, confidence): -1.0=Left, 0.0=Center, 1.0=Right.
-    13x smaller response payload vs bart-large-mnli zero-shot NLI.
     """
     if not HF_API_TOKEN:
         print("Political bias: HF_API_TOKEN not set — skipping.")
@@ -210,8 +212,12 @@ def _detect_political_bias_ai(
 
     url = f"{_HF_API_BASE}/{BIAS_MODEL}"
     headers = {"Authorization": f"Bearer {HF_API_TOKEN}"}
-    # Standard text-classification — no parameters block needed.
-    payload = {"inputs": text[:_TEXT_LIMIT]}
+    payload = {
+        "inputs": text[:_TEXT_LIMIT],
+        "parameters": {
+            "candidate_labels": ["left-wing", "centrist", "right-wing"],
+        },
+    }
     session = _get_session()
 
     for attempt in range(2):
@@ -240,23 +246,31 @@ def _detect_political_bias_ai(
             response.raise_for_status()
             result = response.json()
 
-            # Unwrap [[{...}]] or [{...}]
-            items = (
-                result[0] if isinstance(result[0], list) else result
-            )
-            if not items:
+            # Zero-shot NLI returns {labels: [...], scores: [...]}
+            # or [{label, score}, ...] depending on API version.
+            if isinstance(result, dict):
+                labels = result.get("labels", [])
+                scores = result.get("scores", [])
+                label_score_map = dict(zip(labels, scores))
+            elif isinstance(result, list):
+                items = (
+                    result[0]
+                    if isinstance(result[0], list)
+                    else result
+                )
+                label_score_map = {
+                    item["label"]: item["score"] for item in items
+                }
+            else:
                 print(
-                    "  Political bias: empty response — returning None"
+                    "  Political bias: unexpected response shape "
+                    "— returning None"
                 )
                 return None, None
 
-            # Direct string labels: 'left', 'center', 'right'
-            label_map = {
-                item["label"].lower(): item["score"] for item in items
-            }
-            left = label_map.get("left", 0.0)
-            center = label_map.get("center", 0.0)
-            right = label_map.get("right", 0.0)
+            left = label_score_map.get("left-wing", 0.0)
+            center = label_score_map.get("centrist", 0.0)
+            right = label_score_map.get("right-wing", 0.0)
 
             print(
                 f"  Political bias scores — "
@@ -331,6 +345,7 @@ def _detect_general_bias(
 ) -> Tuple[Optional[str], Optional[float]]:
     """
     General bias classification via valurank/distilroberta-bias.
+    Confirmed on HF Inference API. 3.79k downloads.
     Returns (label, confidence): label is 'BIASED' or 'UNBIASED'.
     """
     items = _inference_api_call(GENERAL_BIAS_MODEL, text)

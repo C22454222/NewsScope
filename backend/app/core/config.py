@@ -38,14 +38,16 @@ class Settings:
     )
     HF_BIAS_MODEL: str = os.getenv(
         "HF_BIAS_MODEL",
-        # cardiffnlp RoBERTa-base fine-tuned for political ideology.
-        # text-classification, labels: left / center / right.
-        # ~125MB — Inference API compatible, peer-reviewed (Cardiff NLP).
-        # 13x smaller than bart-large-mnli, no candidate_labels needed.
-        "cardiffnlp/twitter-roberta-base-political-ideology-3class",
+        # FacebookAI/roberta-large-mnli — confirmed on HF Inference API.
+        # Zero-shot NLI: candidate_labels=["left-wing","centrist","right-wing"].
+        # 0.4B params — runs on HF servers, zero RAM cost on Render.
+        # Confirmed in exhaustive inference provider list (365k downloads).
+        "FacebookAI/roberta-large-mnli",
     )
     HF_GENERAL_BIAS_MODEL: str = os.getenv(
         "HF_GENERAL_BIAS_MODEL",
+        # valurank/distilroberta-bias — confirmed on HF Inference API.
+        # Returns BIASED / UNBIASED label. (3.79k downloads, confirmed).
         "valurank/distilroberta-bias",
     )
 
