@@ -254,7 +254,9 @@ def _detect_political_bias_ai(
             if isinstance(result, list) and result:
                 result = result[0]
 
-            # Unwrapped shape: {"sequence": "...", "labels": [...], "scores": [...]}
+            # Temp debug — log raw result to confirm response shape.
+            print(f"  Political bias raw result: {result}")
+
             if not isinstance(result, dict):
                 print(
                     "  Political bias: unexpected response type "
