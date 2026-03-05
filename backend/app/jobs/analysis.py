@@ -9,7 +9,7 @@ Sentiment      : distilbert/distilbert-base-uncased-finetuned-sst-2-english
 Political bias : facebook/bart-large-mnli
                  Zero-shot NLI — confirmed on HF Inference API. 10M+ downloads.
                  Payload: inputs + parameters.candidate_labels.
-                 Response: {labels: [...], scores: [...]} dict (not a list).
+                 Response: list-wrapped dict {labels: [...], scores: [...]}.
                  Runs on HF servers — zero RAM cost on Render free tier.
 General bias   : valurank/distilroberta-bias
                  Confirmed on HF Inference API. 3.79k downloads.
@@ -204,12 +204,9 @@ def _detect_political_bias_ai(
     Runs entirely on HF servers — zero RAM cost on Render free tier.
 
     Payload: inputs (str) + parameters.candidate_labels (list).
-    Response shape: {
-        "sequence": "...",
-        "labels": ["left-wing", "right-wing", "centrist"],
-        "scores": [0.6, 0.3, 0.1]
-    }
-    Labels are sorted by score descending in the response.
+    Response: HF router wraps the dict in a list —
+        [{"sequence": "...", "labels": [...], "scores": [...]}]
+    Unwrapped to dict before parsing labels and scores.
 
     Returns (bias_score, confidence): -1.0=Left, 0.0=Center, 1.0=Right.
     """
@@ -253,8 +250,11 @@ def _detect_political_bias_ai(
             response.raise_for_status()
             result = response.json()
 
-            # bart-large-mnli zero-shot returns a dict:
-            # {"sequence": "...", "labels": [...], "scores": [...]}
+            # HF router wraps zero-shot NLI response in a list — unwrap.
+            if isinstance(result, list) and result:
+                result = result[0]
+
+            # Unwrapped shape: {"sequence": "...", "labels": [...], "scores": [...]}
             if not isinstance(result, dict):
                 print(
                     "  Political bias: unexpected response type "
