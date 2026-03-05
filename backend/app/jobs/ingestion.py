@@ -3,7 +3,7 @@ NewsScope Ingestion Pipeline.
 
 Daily volume: ~7,104 articles fetched, ~4,262 new after dedup.
 Credibility fields seeded as defaults on insert; fact-checking
-runs async post-insert via safe loop wrapper.
+runs async post-insert via safe loop wrapper with concurrency cap.
 
 Flake8: 0 errors/warnings.
 """
@@ -50,6 +50,10 @@ FEED_NAME_MAP = {
 # Workers capped at 3 — each holds a full HTML parse tree in RAM.
 # 3 workers ≈ 150-200MB peak vs 6 workers ≈ 300-400MB peak on Render.
 _SCRAPE_WORKERS = 3
+
+# Fact-check concurrency cap — prevents 91 simultaneous coroutines
+# from spiking RAM after a large ingestion cycle on the free tier.
+_FACTCHECK_CONCURRENCY = 3
 
 # Main event loop — captured at startup by set_main_event_loop()
 _main_event_loop: Optional[asyncio.AbstractEventLoop] = None
@@ -539,37 +543,47 @@ def _scrape_one(article: Dict[str, Any]) -> Dict[str, Any]:
 async def factcheck_batch(article_ids: List[str]) -> None:
     """
     Background async task: compute and persist credibility scores.
-    Scheduled onto the main event loop after insert via
-    _schedule_factcheck() — never blocks ingestion.
+
+    Semaphore caps concurrency at _FACTCHECK_CONCURRENCY=3 — prevents
+    91 simultaneous coroutines from spiking RAM after a large ingestion
+    cycle on Render free tier (512MB). Each coroutine fetches a full
+    article row from Supabase so uncapped parallelism causes OOM.
     """
     from app.jobs.fact_checking import compute_credibility_score
     from app.schemas import ArticleResponse
 
-    for article_id in article_ids:
-        try:
-            data = (
-                supabase.table("articles")
-                .select("*")
-                .eq("id", article_id)
-                .execute()
-                .data
-            )
-            if not data:
-                continue
-            cred = await compute_credibility_score(
-                ArticleResponse(**data[0])
-            )
-            supabase.table("articles").update(
-                {
-                    "credibility_score": cred["score"],
-                    "fact_checks": cred["fact_checks"],
-                    "claims_checked": cred["claims_checked"],
-                    "credibility_reason": cred["reason"],
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                }
-            ).eq("id", article_id).execute()
-        except Exception as exc:
-            print(f"  Fact-check failed [{article_id}]: {exc}")
+    semaphore = asyncio.Semaphore(_FACTCHECK_CONCURRENCY)
+
+    async def _check_one(article_id: str) -> None:
+        async with semaphore:
+            try:
+                data = (
+                    supabase.table("articles")
+                    .select("*")
+                    .eq("id", article_id)
+                    .execute()
+                    .data
+                )
+                if not data:
+                    return
+                cred = await compute_credibility_score(
+                    ArticleResponse(**data[0])
+                )
+                supabase.table("articles").update(
+                    {
+                        "credibility_score": cred["score"],
+                        "fact_checks": cred["fact_checks"],
+                        "claims_checked": cred["claims_checked"],
+                        "credibility_reason": cred["reason"],
+                        "updated_at": datetime.now(
+                            timezone.utc
+                        ).isoformat(),
+                    }
+                ).eq("id", article_id).execute()
+            except Exception as exc:
+                print(f"  Fact-check failed [{article_id}]: {exc}")
+
+    await asyncio.gather(*[_check_one(aid) for aid in article_ids])
 
 
 def _schedule_factcheck(article_ids: List[str]) -> None:
@@ -721,7 +735,6 @@ def fetch_newsapi() -> List[Dict[str, Any]]:
                 if n["url"]:
                     normalized.append(n)
 
-            # Fix: label each source correctly instead of hardcoded "cnn"
             print(
                 f"  {source_id}: "
                 f"{len(data.get('articles', []))} articles"

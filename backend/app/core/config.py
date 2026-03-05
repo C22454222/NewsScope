@@ -38,7 +38,11 @@ class Settings:
     )
     HF_BIAS_MODEL: str = os.getenv(
         "HF_BIAS_MODEL",
-        "facebook/bart-large-mnli",
+        # cardiffnlp RoBERTa-base fine-tuned for political ideology.
+        # text-classification, labels: left / center / right.
+        # ~125MB — Inference API compatible, peer-reviewed (Cardiff NLP).
+        # 13x smaller than bart-large-mnli, no candidate_labels needed.
+        "cardiffnlp/twitter-roberta-base-political-ideology-3class",
     )
     HF_GENERAL_BIAS_MODEL: str = os.getenv(
         "HF_GENERAL_BIAS_MODEL",

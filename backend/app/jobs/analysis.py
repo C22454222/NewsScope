@@ -5,15 +5,19 @@ All three models run via HuggingFace Serverless Inference — zero local
 RAM footprint. No transformers/torch loaded on Render.
 
 Sentiment      : distilbert/distilbert-base-uncased-finetuned-sst-2-english
-Political bias : facebook/bart-large-mnli (zero-shot classification)
+Political bias : cardiffnlp/twitter-roberta-base-political-ideology-3class
+                 RoBERTa-base fine-tuned on political ideology detection.
+                 Labels: left / center / right — direct string match.
+                 ~125MB — 13x smaller than bart-large-mnli.
+                 Inference API compatible, peer-reviewed (Cardiff NLP).
 General bias   : valurank/distilroberta-bias
 
 Flake8: 0 errors/warnings.
 """
 
+import asyncio
 import gc
 import time
-import asyncio
 from typing import Optional, Tuple
 
 import requests
@@ -117,7 +121,7 @@ def _inference_api_call(
                 f"attempt {attempt + 1}: {exc}"
             )
             if attempt < retries - 1:
-                time.sleep(2**attempt)
+                time.sleep(2 ** attempt)
 
     return None
 
@@ -191,9 +195,14 @@ def _detect_political_bias_ai(
     text: str,
 ) -> Tuple[Optional[float], Optional[float]]:
     """
-    Zero-shot political bias via facebook/bart-large-mnli.
+    Political bias via cardiffnlp/twitter-roberta-base-political-ideology-3class.
+
+    Standard text-classification — no candidate_labels needed.
+    Response shape: [[{label, score}, ...]]
+    Labels: 'left', 'center', 'right' — direct lowercase string match.
+
     Returns (bias_score, confidence): -1.0=Left, 0.0=Center, 1.0=Right.
-    Uses module-level session — no per-call Session() creation.
+    13x smaller response payload vs bart-large-mnli zero-shot NLI.
     """
     if not HF_API_TOKEN:
         print("Political bias: HF_API_TOKEN not set — skipping.")
@@ -201,12 +210,8 @@ def _detect_political_bias_ai(
 
     url = f"{_HF_API_BASE}/{BIAS_MODEL}"
     headers = {"Authorization": f"Bearer {HF_API_TOKEN}"}
-    payload = {
-        "inputs": text[:_TEXT_LIMIT],
-        "parameters": {
-            "candidate_labels": ["left-wing", "centrist", "right-wing"]
-        },
-    }
+    # Standard text-classification — no parameters block needed.
+    payload = {"inputs": text[:_TEXT_LIMIT]}
     session = _get_session()
 
     for attempt in range(2):
@@ -235,19 +240,23 @@ def _detect_political_bias_ai(
             response.raise_for_status()
             result = response.json()
 
-            if not isinstance(result, list) or not result:
+            # Unwrap [[{...}]] or [{...}]
+            items = (
+                result[0] if isinstance(result[0], list) else result
+            )
+            if not items:
                 print(
-                    "  Political bias: unexpected response shape "
-                    "— returning None"
+                    "  Political bias: empty response — returning None"
                 )
                 return None, None
 
-            label_score_map = {
-                item["label"]: item["score"] for item in result
+            # Direct string labels: 'left', 'center', 'right'
+            label_map = {
+                item["label"].lower(): item["score"] for item in items
             }
-            left = label_score_map.get("left-wing", 0.0)
-            center = label_score_map.get("centrist", 0.0)
-            right = label_score_map.get("right-wing", 0.0)
+            left = label_map.get("left", 0.0)
+            center = label_map.get("center", 0.0)
+            right = label_map.get("right", 0.0)
 
             print(
                 f"  Political bias scores — "
