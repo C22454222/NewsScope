@@ -10,6 +10,7 @@ Flake8: 0 errors/warnings.
 
 import asyncio
 import gc
+import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -55,6 +56,10 @@ _SCRAPE_WORKERS = 3
 # from spiking RAM after a large ingestion cycle on the free tier.
 _FACTCHECK_CONCURRENCY = 3
 
+# Insert in chunks — prevents holding all scraped payloads in RAM
+# simultaneously before the Supabase call.
+_INSERT_CHUNK_SIZE = 10
+
 # Main event loop — captured at startup by set_main_event_loop()
 _main_event_loop: Optional[asyncio.AbstractEventLoop] = None
 
@@ -76,7 +81,6 @@ def set_main_event_loop(loop: asyncio.AbstractEventLoop) -> None:
 
 def _get_rss_feeds() -> List[str]:
     """Return configured RSS feed URLs from settings/env."""
-    import os
     raw = os.getenv("RSS_FEEDS", "")
     return [s.strip() for s in raw.split(",") if s.strip()]
 
@@ -227,6 +231,7 @@ def fetch_content_beautifulsoup(url: str) -> Optional[str]:
         response.raise_for_status()
 
         soup = BeautifulSoup(response.content, "html.parser")
+        response.close()
         del response
 
         for element in soup(
@@ -334,6 +339,7 @@ def fetch_content_aggressive(url: str) -> Optional[str]:
         response.raise_for_status()
 
         soup = BeautifulSoup(response.content, "html.parser")
+        response.close()
         del response
 
         for element in soup(
@@ -390,12 +396,14 @@ def fetch_content_with_retry(
             )
 
             if response.status_code == 429:
+                response.close()
                 time.sleep((2 ** attempt) * 2)
                 continue
 
             response.raise_for_status()
 
             soup = BeautifulSoup(response.content, "html.parser")
+            response.close()
             del response
 
             for unwanted in soup(
@@ -606,9 +614,11 @@ def _schedule_factcheck(article_ids: List[str]) -> None:
 
 def insert_articles_batch(articles: List[Dict[str, Any]]) -> List[str]:
     """
-    Deduplicate by URL, scrape all new articles concurrently with a
-    bounded thread pool, then bulk-insert into Supabase.
+    Deduplicate by URL, scrape new articles in a bounded thread pool,
+    then insert into Supabase in chunks of _INSERT_CHUNK_SIZE.
 
+    Chunked insert prevents holding all scraped payloads in RAM at
+    once — each chunk is written and released before the next is built.
     Workers capped at _SCRAPE_WORKERS=3 to prevent simultaneous
     BeautifulSoup parse trees from exhausting Render free tier RAM.
     gc.collect() runs after each completed future for prompt cleanup.
@@ -631,56 +641,70 @@ def insert_articles_batch(articles: List[Dict[str, Any]]) -> List[str]:
         if a.get("url") and a["url"] not in existing_urls
     ]
 
+    # Release the full fetched list — only new_articles needed from here.
+    del articles
+    gc.collect()
+
     if not new_articles:
         print("No new articles to insert")
         return []
 
-    payloads: List[Dict[str, Any]] = []
     scrape_success = 0
     scrape_fallback = 0
+    all_new_ids: List[str] = []
 
-    with ThreadPoolExecutor(max_workers=_SCRAPE_WORKERS) as executor:
-        futures = {
-            executor.submit(_scrape_one, article): article
-            for article in new_articles
-        }
-        for future in as_completed(futures):
-            try:
-                result = future.result()
-                if result["_is_fallback"]:
-                    scrape_fallback += 1
-                else:
-                    scrape_success += 1
-                result.pop("_is_fallback", None)
-                payloads.append(result)
-            except Exception as exc:
-                article = futures[future]
-                print(
-                    f"  Scrape error "
-                    f"[{article.get('url', '?')}]: {exc}"
-                )
-            finally:
-                gc.collect()
+    # Scrape and insert in chunks to cap peak RAM.
+    for chunk_start in range(0, len(new_articles), _INSERT_CHUNK_SIZE):
+        chunk = new_articles[chunk_start:chunk_start + _INSERT_CHUNK_SIZE]
+        payloads: List[Dict[str, Any]] = []
 
-    if not payloads:
-        print("No new articles to insert")
-        return []
+        with ThreadPoolExecutor(max_workers=_SCRAPE_WORKERS) as executor:
+            futures = {
+                executor.submit(_scrape_one, article): article
+                for article in chunk
+            }
+            for future in as_completed(futures):
+                try:
+                    result = future.result()
+                    if result["_is_fallback"]:
+                        scrape_fallback += 1
+                    else:
+                        scrape_success += 1
+                    result.pop("_is_fallback", None)
+                    payloads.append(result)
+                except Exception as exc:
+                    article = futures[future]
+                    print(
+                        f"  Scrape error "
+                        f"[{article.get('url', '?')}]: {exc}"
+                    )
+                finally:
+                    gc.collect()
 
-    res = supabase.table("articles").insert(payloads).execute().data
-    new_ids = [r["id"] for r in res]
+        if payloads:
+            res = (
+                supabase.table("articles").insert(payloads).execute().data
+            )
+            all_new_ids.extend(r["id"] for r in res)
 
-    # Use len(new_articles) as denominator — accurate even if Supabase
-    # returns fewer rows than payloads due to partial insert failures.
+        # Explicitly release chunk payloads before next iteration.
+        del payloads
+        del chunk
+        gc.collect()
+
     total = max(len(new_articles), 1)
-    print(f"Inserted {len(res)} new articles")
+    print(f"Inserted {len(all_new_ids)} new articles")
     print(
         f"   Scraped content: {scrape_success} full scrape, "
         f"{scrape_fallback} title fallback "
         f"({scrape_success / total * 100:.1f}% success rate)"
     )
 
-    _schedule_factcheck(new_ids)
-    return new_ids
+    del new_articles
+    gc.collect()
+
+    _schedule_factcheck(all_new_ids)
+    return all_new_ids
 
 
 # ── Fetchers ──────────────────────────────────────────────────────────────────
@@ -721,6 +745,7 @@ def fetch_newsapi() -> List[Dict[str, Any]]:
             )
             r.raise_for_status()
             data = r.json()
+            r.close()
 
             for a in data.get("articles", []):
                 source_name = (a.get("source") or {}).get("name")
@@ -837,9 +862,13 @@ def run_ingestion_cycle() -> None:
     try:
         print(f"Total fetched: {len(articles)} articles")
         insert_articles_batch(articles)
+        # insert_articles_batch owns and deletes articles internally.
+        articles = []
     except Exception as exc:
         print(f"Batch insert failed: {exc}")
+    finally:
+        del articles
+        gc.collect()
 
-    gc.collect()
     print("\nIngestion cycle complete")
     print("=" * 70 + "\n")

@@ -3,11 +3,11 @@ NewsScope FastAPI application entry point.
 
 Lifespan manages scheduler startup, job registration, keep-alive,
 and a single startup ingestion run. Analysis is deliberately delayed
-60 seconds after startup ingestion to prevent simultaneous memory
+180 seconds after startup ingestion to prevent simultaneous memory
 pressure from both jobs on Render free tier (512MB limit).
 
 Redeploy guard in _run_startup_sequence checks DB for recent ingestion
-(< 10 minutes ago) and skips startup ingestion on zero-downtime redeploys
+(< 15 minutes ago) and skips startup ingestion on zero-downtime redeploys
 where the old instance already ran it — prevents double-ingestion OOM.
 
 Heavy job lock (_heavy_job_running) prevents ingestion and analysis
@@ -60,10 +60,13 @@ _ingestion_running = False
 _heavy_job_running = False
 
 # ── Startup analysis delay ────────────────────────────────────────────────────
-_ANALYSIS_STARTUP_DELAY_SECONDS = 60
+# Increased from 60 → 180 — chunked ingestion takes longer to fully
+# flush RAM; 60s was insufficient clearance before analysis fired.
+_ANALYSIS_STARTUP_DELAY_SECONDS = 180
 
 # ── Redeploy guard ────────────────────────────────────────────────────────────
-_REDEPLOY_GUARD_MINUTES = 10
+# Increased from 10 → 15 to cover slower chunked ingestion cycles.
+_REDEPLOY_GUARD_MINUTES = 15
 
 
 def init_firebase() -> None:
@@ -183,9 +186,9 @@ async def lifespan(app: FastAPI):
       2. Start APScheduler with ingestion, analysis, archiving jobs
       3. Start keep-alive pinger (production only)
       4. Run startup sequence in background task:
-         a. Check DB — skip ingestion if run < 10 min ago (redeploy guard)
+         a. Check DB — skip ingestion if run < 15 min ago (redeploy guard)
          b. Set _heavy_job_running during ingestion to block analysis
-         c. Wait 60s after ingestion, then run first analysis
+         c. Wait 180s after ingestion, then run first analysis
 
     Shutdown:
       - Logs shutdown message (scheduler stops automatically)
@@ -455,7 +458,7 @@ async def debug_archive(background_tasks: BackgroundTasks):
     return {"status": "archiving triggered in background"}
 
 
-# ── User API ──────────────────────────────────────────────────────────────────
+# ── User API ──────────────────────────────────────────────────────────────!!!
 
 
 @app.post("/api/reading-history")
