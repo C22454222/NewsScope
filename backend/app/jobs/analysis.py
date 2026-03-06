@@ -42,6 +42,10 @@ _BATCH_SIZE = 3
 _TEXT_LIMIT = 512
 _REQUEST_TIMEOUT = 60
 
+# Minimum AI confidence to trust the model over source fallback.
+# Below this threshold the prediction is too uncertain to be reliable.
+_MIN_AI_CONFIDENCE = 0.60
+
 _analysis_running = False
 
 _SOURCE_BIAS_MAP = {
@@ -110,11 +114,13 @@ def _inference_api_call(
                     f"Model {model} loading, "
                     f"waiting {wait}s (attempt {attempt + 1})..."
                 )
+                response.close()
                 time.sleep(wait)
                 continue
 
             response.raise_for_status()
             result = response.json()
+            response.close()
 
             if isinstance(result, list) and result:
                 return result[0] if isinstance(result[0], list) else result
@@ -244,11 +250,13 @@ def _detect_political_bias_ai(
                     f"  Political bias model loading, "
                     f"waiting {wait}s..."
                 )
+                response.close()
                 time.sleep(wait)
                 continue
 
             response.raise_for_status()
             result = response.json()
+            response.close()
 
             # HF router wraps response in a list — unwrap to single dict.
             if isinstance(result, list) and result:
@@ -266,9 +274,7 @@ def _detect_political_bias_ai(
             score_raw = result.get("score", 0.0)
 
             if not label_raw:
-                print(
-                    "  Political bias: empty label — returning None"
-                )
+                print("  Political bias: empty label — returning None")
                 return None, None
 
             label_lower = label_raw.lower()
@@ -310,24 +316,36 @@ def _hybrid_bias_analysis(
 ) -> Tuple[float, float]:
     """
     Political bias with graceful source fallback.
+
+    AI result is only used when confidence >= _MIN_AI_CONFIDENCE.
+    Below that threshold the prediction is unreliable and source
+    bias is used instead.
+
     Returns (bias_score, bias_intensity).
     """
     ai_bias, ai_confidence = _detect_political_bias_ai(text)
 
     if ai_bias is not None and ai_confidence is not None:
-        if ai_bias < -0.3:
-            label = "LEFT"
-        elif ai_bias > 0.3:
-            label = "RIGHT"
+        if ai_confidence < _MIN_AI_CONFIDENCE:
+            print(
+                f"  AI confidence too low ({ai_confidence:.2%}) "
+                f"— falling back to source bias."
+            )
         else:
-            label = "CENTER"
+            if ai_bias < -0.3:
+                label = "LEFT"
+            elif ai_bias > 0.3:
+                label = "RIGHT"
+            else:
+                label = "CENTER"
 
-        print(
-            f"Article AI result: {label} "
-            f"(score={ai_bias:.2f}, confidence={ai_confidence:.2%}, "
-            f"intensity={ai_confidence:.2f})"
-        )
-        return ai_bias, ai_confidence
+            print(
+                f"Article AI result: {label} "
+                f"(score={ai_bias:.2f}, "
+                f"confidence={ai_confidence:.2%}, "
+                f"intensity={ai_confidence:.2f})"
+            )
+            return ai_bias, ai_confidence
 
     source_bias = _get_source_political_leaning(source_name)
     print(
@@ -483,6 +501,8 @@ def _run_analysis_sync() -> None:
             ).eq("id", result["id"]).execute()
         gc.collect()
 
+    del articles
+    gc.collect()
     print("Analysis job complete.")
 
 
