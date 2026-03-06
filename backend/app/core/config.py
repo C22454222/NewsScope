@@ -2,7 +2,7 @@
 NewsScope application configuration.
 
 All environment variables are centralised here via a pydantic-settings
-Settings class. Import `settings` — never os.getenv() directly elsewhere. Hopefully fixed
+Settings class. Import `settings` — never os.getenv() directly elsewhere.
 
 Flake8: 0 errors/warnings.
 """
@@ -38,10 +38,14 @@ class Settings:
     )
     HF_BIAS_MODEL: str = os.getenv(
         "HF_BIAS_MODEL",
-        # facebook/bart-large-mnli — confirmed zero-shot NLI.
-        # Requires candidate_labels payload — runs on HF servers.
-        # 10M+ downloads. Zero RAM cost on Render free tier.
-        "facebook/bart-large-mnli",
+        # MoritzLaurer/mDeBERTa-v3-base-mnli-xnli — confirmed on HF
+        # Inference API. Zero-shot NLI, 0.3B params. Replaces
+        # facebook/bart-large-mnli (0.4B) which caused OOM via 90s
+        # socket stalls on cold start. Same candidate_labels payload
+        # shape and response format. DeBERTa-v3 outperforms BART on
+        # NLI benchmarks. Multilingual — handles RTÉ, Irish Times,
+        # Euronews content better than English-only BART.
+        "MoritzLaurer/mDeBERTa-v3-base-mnli-xnli",
     )
     HF_GENERAL_BIAS_MODEL: str = os.getenv(
         "HF_GENERAL_BIAS_MODEL",

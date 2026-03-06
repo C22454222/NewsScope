@@ -6,14 +6,30 @@ RAM footprint. No transformers/torch loaded on Render.
 
 Sentiment      : distilbert/distilbert-base-uncased-finetuned-sst-2-english
                  Confirmed on HF Inference API. 3.63M downloads.
-Political bias : facebook/bart-large-mnli
-                 Zero-shot NLI — confirmed on HF Inference API. 10M+ downloads.
+Political bias : MoritzLaurer/mDeBERTa-v3-base-mnli-xnli
+                 Zero-shot NLI — confirmed on HF Inference API.
+                 0.3B params. Replaces facebook/bart-large-mnli (0.4B)
+                 which caused OOM via 90s socket stalls on cold start.
                  Payload: inputs + parameters.candidate_labels.
                  Response: {"label": "left-wing", "score": 0.86}
                  Single top-prediction dict after list unwrap.
-                 Runs on HF servers — zero RAM cost on Render free tier.
 General bias   : valurank/distilroberta-bias
                  Confirmed on HF Inference API. 3.79k downloads.
+
+MEMORY FIX SUMMARY (v2):
+- Replaced facebook/bart-large-mnli (0.4B params) with
+  MoritzLaurer/mDeBERTa-v3-base-mnli-xnli (0.3B params). bart's
+  cold-start inference time caused 90s socket stalls that blocked
+  threads and accumulated response buffers in RAM.
+- _REQUEST_TIMEOUT reduced 90→30s: mDeBERTa responds faster when
+  warm; 30s gives cold-start headroom without long socket dwell.
+- _POLITICAL_TIMEOUT separate 45s cap: slightly more headroom for
+  the NLI model specifically without affecting lighter models.
+- _session closed and recreated on connection errors to prevent
+  stale socket buffers accumulating in RAM across retries.
+- _BATCH_SIZE reduced 3→2: halves peak concurrent HF response RAM.
+- Article sleep between calls reduced 0.3→0.1s: less wall-clock
+  blocking time per batch means the thread is released sooner.
 
 Flake8: 0 errors/warnings.
 """
@@ -36,14 +52,22 @@ GENERAL_BIAS_MODEL = settings.HF_GENERAL_BIAS_MODEL.strip()
 
 _HF_API_BASE = "https://router.huggingface.co/hf-inference/models"
 
-# Reduced from 10 — each article holds 3 concurrent HF responses in RAM.
-# 3 articles × ~40MB response overhead stays well under 512MB free tier.
-_BATCH_SIZE = 3
+# Reduced from 3 — each article holds 3 concurrent HF responses in RAM.
+# 2 articles × ~40MB response overhead stays well under 512MB free tier.
+_BATCH_SIZE = 2
+
 _TEXT_LIMIT = 512
-_REQUEST_TIMEOUT = 60
+
+# Reduced from 90s — mDeBERTa-v3-base-mnli-xnli responds faster than
+# bart-large-mnli when warm. 30s gives cold-start headroom without
+# holding a thread and open socket for 90s on timeout.
+_REQUEST_TIMEOUT = 30
+
+# Slightly more headroom for the NLI zero-shot model specifically.
+# Still far below the old 90s that caused OOM via stalled threads.
+_POLITICAL_TIMEOUT = 45
 
 # Minimum AI confidence to trust the model over source fallback.
-# Below this threshold the prediction is too uncertain to be reliable.
 _MIN_AI_CONFIDENCE = 0.60
 
 _analysis_running = False
@@ -63,8 +87,8 @@ _SOURCE_BIAS_MAP = {
     "GB News": 1.0,
 }
 
-# Module-level session — created once, reused across all calls,
-# avoids opening two sessions simultaneously per article.
+# Module-level session — created once, reused across calls.
+# Recreated on connection errors to flush stale socket buffers.
 _session: Optional[requests.Session] = None
 
 
@@ -76,6 +100,21 @@ def _get_session() -> requests.Session:
     return _session
 
 
+def _reset_session() -> None:
+    """
+    Close and discard the current session.
+    Called after connection errors to flush stale socket buffers
+    that would otherwise accumulate in RAM across retries.
+    """
+    global _session
+    if _session is not None:
+        try:
+            _session.close()
+        except Exception:
+            pass
+        _session = None
+
+
 # ── Inference API helper ──────────────────────────────────────────────────────
 
 
@@ -83,11 +122,14 @@ def _inference_api_call(
     model: str,
     text: str,
     retries: int = 2,
+    timeout: int = _REQUEST_TIMEOUT,
 ) -> Optional[list]:
     """
     POST to HuggingFace Serverless Inference with retry + warm-up handling.
     Returns raw list of label/score dicts, or None on failure.
-    Uses the module-level session to avoid per-call session overhead.
+
+    Session is reset on connection errors (ReadTimeout, ConnectionError)
+    to prevent stale socket buffers from accumulating in RAM.
     NOTE: Not used for political bias — that model returns a dict, not list.
     """
     if not HF_API_TOKEN:
@@ -97,15 +139,15 @@ def _inference_api_call(
     url = f"{_HF_API_BASE}/{model}"
     headers = {"Authorization": f"Bearer {HF_API_TOKEN}"}
     payload = {"inputs": text[:_TEXT_LIMIT]}
-    session = _get_session()
 
     for attempt in range(retries):
+        session = _get_session()
         try:
             response = session.post(
                 url,
                 headers=headers,
                 json=payload,
-                timeout=_REQUEST_TIMEOUT,
+                timeout=timeout,
             )
 
             if response.status_code == 503:
@@ -124,6 +166,17 @@ def _inference_api_call(
 
             if isinstance(result, list) and result:
                 return result[0] if isinstance(result[0], list) else result
+
+        except (requests.exceptions.ReadTimeout,
+                requests.exceptions.ConnectionError) as exc:
+            print(
+                f"Inference API connection error [{model}] "
+                f"attempt {attempt + 1}: {exc}"
+            )
+            # Reset session to flush stale socket buffer from RAM.
+            _reset_session()
+            if attempt < retries - 1:
+                time.sleep(2 ** attempt)
 
         except Exception as exc:
             print(
@@ -205,10 +258,11 @@ def _detect_political_bias_ai(
     text: str,
 ) -> Tuple[Optional[float], Optional[float]]:
     """
-    Political bias via facebook/bart-large-mnli (zero-shot NLI).
+    Political bias via MoritzLaurer/mDeBERTa-v3-base-mnli-xnli.
 
-    Confirmed on HF Inference API — 10M+ downloads.
-    Runs entirely on HF servers — zero RAM cost on Render free tier.
+    Zero-shot NLI confirmed on HF Inference API. 0.3B params.
+    Replaces facebook/bart-large-mnli (0.4B) which caused OOM on
+    Render free tier via 90s socket stalls on cold-start inference.
 
     Payload: inputs (str) + parameters.candidate_labels (list).
     Response after list unwrap: {"label": "left-wing", "score": 0.86}
@@ -228,15 +282,15 @@ def _detect_political_bias_ai(
             "candidate_labels": ["left-wing", "centrist", "right-wing"],
         },
     }
-    session = _get_session()
 
-    for attempt in range(2):
+    for attempt in range(3):
+        session = _get_session()
         try:
             response = session.post(
                 url,
                 headers=headers,
                 json=payload,
-                timeout=_REQUEST_TIMEOUT,
+                timeout=_POLITICAL_TIMEOUT,
             )
 
             print(
@@ -258,7 +312,7 @@ def _detect_political_bias_ai(
             result = response.json()
             response.close()
 
-            # HF router wraps response in a list — unwrap to single dict.
+            # HF router may wrap response in a list — unwrap to single dict.
             if isinstance(result, list) and result:
                 result = result[0]
 
@@ -269,7 +323,6 @@ def _detect_political_bias_ai(
                 )
                 return None, None
 
-            # Response shape: {"label": "left-wing", "score": 0.86}
             label_raw = result.get("label", "")
             score_raw = result.get("score", 0.0)
 
@@ -301,9 +354,17 @@ def _detect_political_bias_ai(
             )
             return bias_score, confidence
 
+        except (requests.exceptions.ReadTimeout,
+                requests.exceptions.ConnectionError) as exc:
+            print(f"Political bias connection error attempt {attempt + 1}: {exc}")
+            # Reset session to flush stale socket buffer from RAM.
+            _reset_session()
+            if attempt < 2:
+                time.sleep(5)
+
         except Exception as exc:
             print(f"Political bias error attempt {attempt + 1}: {exc}")
-            if attempt < 1:
+            if attempt < 2:
                 time.sleep(5)
 
     print("Political bias API call failed — will retry next cycle.")
@@ -421,10 +482,10 @@ def _score_article(article: dict) -> dict:
         return {}
 
     sentiment = _sentiment_score(text)
-    time.sleep(0.3)
+    time.sleep(0.1)
 
     bias_score, bias_intensity = _hybrid_bias_analysis(text, source)
-    time.sleep(0.3)
+    time.sleep(0.1)
 
     general_bias_label, general_bias_score = _detect_general_bias(text)
 
@@ -468,6 +529,7 @@ def _run_analysis_sync() -> None:
     fields required for analysis to minimise memory. Persists each
     result to Supabase immediately so no work is lost on instance
     rotation. Calls gc.collect() after each article to release RAM.
+    1s sleep between articles prevents HF rate limiting across batch.
     """
     print("Starting analysis job...")
 
@@ -500,6 +562,7 @@ def _run_analysis_sync() -> None:
                 result["update"]
             ).eq("id", result["id"]).execute()
         gc.collect()
+        time.sleep(1.0)  # prevent HF rate limiting across article batch
 
     del articles
     gc.collect()

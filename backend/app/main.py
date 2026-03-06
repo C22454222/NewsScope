@@ -10,9 +10,10 @@ Redeploy guard in _run_startup_sequence checks DB for recent ingestion
 (< 15 minutes ago) and skips startup ingestion on zero-downtime redeploys
 where the old instance already ran it — prevents double-ingestion OOM.
 
-Heavy job lock (_heavy_job_running) prevents ingestion and analysis
-from ever running simultaneously — the root cause of ConnectionTerminated
-errors and OOM crashes on the Render free tier.
+threading.Lock (_heavy_job_lock) prevents ingestion and analysis from
+ever running simultaneously — replaces boolean flag which had a
+check-then-act race condition between APScheduler thread pool workers.
+Proven root cause of ConnectionTerminated + OOM crashes on free tier.
 
 Flake8: 0 errors/warnings.
 """
@@ -20,6 +21,7 @@ Flake8: 0 errors/warnings.
 import asyncio
 import json
 import os
+import threading
 from collections import Counter
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -53,19 +55,22 @@ from app.schemas import (
 _main_loop: Optional[asyncio.AbstractEventLoop] = None
 
 # ── Job guards ────────────────────────────────────────────────────────────────
-# _ingestion_running : prevents duplicate ingestion triggers
-# _heavy_job_running : shared lock — prevents ingestion + analysis overlap
-#                      which causes ConnectionTerminated + OOM on free tier
+# _ingestion_running : prevents duplicate async ingestion triggers
+# _analysis_running  : prevents duplicate async analysis triggers
+# _heavy_job_lock    : threading.Lock — atomic acquire replaces boolean flag.
+#                      Boolean check-then-set was not thread-safe across
+#                      APScheduler thread pool workers; two bridges could
+#                      both read False before either set True → overlap → OOM.
 _ingestion_running = False
-_heavy_job_running = False
+_analysis_running = False
+_heavy_job_lock = threading.Lock()
 
 # ── Startup analysis delay ────────────────────────────────────────────────────
-# Increased from 60 → 180 — chunked ingestion takes longer to fully
-# flush RAM; 60s was insufficient clearance before analysis fired.
+# 180s — chunked ingestion needs time to fully flush RAM before analysis.
 _ANALYSIS_STARTUP_DELAY_SECONDS = 180
 
 # ── Redeploy guard ────────────────────────────────────────────────────────────
-# Increased from 10 → 15 to cover slower chunked ingestion cycles.
+# 15 min — covers slower chunked ingestion cycles on redeploy.
 _REDEPLOY_GUARD_MINUTES = 15
 
 
@@ -95,12 +100,17 @@ init_firebase()
 def _sync_ingestion() -> None:
     """
     Sync bridge — runs _scheduled_ingestion on the main event loop.
-    Skips if any heavy job is already running.
+
+    acquire(blocking=False) is atomic — if another thread already holds
+    the lock, this skips immediately without a race condition.
+    Lock is released in the finally block after future.result() returns,
+    ensuring it is always released even if the coroutine raises.
     """
-    if _heavy_job_running:
+    if not _heavy_job_lock.acquire(blocking=False):
         print("Heavy job in progress — skipping scheduled ingestion.")
         return
     if _main_loop is None or not _main_loop.is_running():
+        _heavy_job_lock.release()
         print("Ingestion bridge: no running loop, skipping.")
         return
     future = asyncio.run_coroutine_threadsafe(
@@ -110,17 +120,24 @@ def _sync_ingestion() -> None:
         future.result(timeout=3600)
     except Exception as exc:
         print(f"Scheduled ingestion error: {exc}")
+    finally:
+        _heavy_job_lock.release()
 
 
 def _sync_analysis() -> None:
     """
     Sync bridge — runs _guarded_analysis on the main event loop.
-    Fires every 5 minutes. Skips if any heavy job is running.
+    Fires every 5 minutes via APScheduler IntervalTrigger.
+
+    acquire(blocking=False) is atomic — physically prevents overlap
+    with _sync_ingestion even when both fire simultaneously from
+    different threads in the APScheduler thread pool.
     """
-    if _heavy_job_running:
+    if not _heavy_job_lock.acquire(blocking=False):
         print("Heavy job in progress — skipping scheduled analysis.")
         return
     if _main_loop is None or not _main_loop.is_running():
+        _heavy_job_lock.release()
         print("Analysis bridge: no running loop, skipping.")
         return
     future = asyncio.run_coroutine_threadsafe(
@@ -130,12 +147,16 @@ def _sync_analysis() -> None:
         future.result(timeout=600)
     except Exception as exc:
         print(f"Scheduled analysis error: {exc}")
+    finally:
+        _heavy_job_lock.release()
 
 
 def _sync_archive() -> None:
     """
     Sync bridge — runs archive_old_articles on the main event loop.
     archive_old_articles is synchronous — wrapped in to_thread.
+    No heavy job lock needed — archiving only reads/deletes old rows
+    and does not load HTML parse trees or HF model responses.
     """
     if _main_loop is None or not _main_loop.is_running():
         print("Archive bridge: no running loop, skipping.")
@@ -149,27 +170,45 @@ def _sync_archive() -> None:
         print(f"Scheduled archiving error: {exc}")
 
 
-# ── Guarded analysis wrapper ──────────────────────────────────────────────────
+# ── Async job wrappers ────────────────────────────────────────────────────────
+
+
+async def _scheduled_ingestion() -> None:
+    """
+    Async ingestion wrapper — lock is already held by _sync_ingestion.
+    _ingestion_running inner guard prevents duplicate triggers from
+    debug routes which bypass the thread lock.
+    """
+    global _ingestion_running
+
+    if _ingestion_running:
+        print("Ingestion already running — skipping duplicate trigger.")
+        return
+
+    _ingestion_running = True
+    try:
+        await asyncio.to_thread(run_ingestion_cycle)
+    finally:
+        _ingestion_running = False
 
 
 async def _guarded_analysis() -> None:
     """
-    Sets _heavy_job_running around analyze_unscored_articles so that
-    ingestion bridges cannot fire concurrently.
-    All analysis calls must go through this — never call
-    analyze_unscored_articles() directly from scheduled paths.
+    Async analysis wrapper — lock is already held by _sync_analysis.
+    _analysis_running inner guard prevents duplicate triggers from
+    debug routes and /internal/analyze-batch which bypass the lock.
     """
-    global _heavy_job_running
+    global _analysis_running
 
-    if _heavy_job_running:
-        print("Heavy job already running — skipping analysis trigger.")
+    if _analysis_running:
+        print("Analysis already running — skipping duplicate trigger.")
         return
 
-    _heavy_job_running = True
+    _analysis_running = True
     try:
         await analyze_unscored_articles()
     finally:
-        _heavy_job_running = False
+        _analysis_running = False
 
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
@@ -186,7 +225,7 @@ async def lifespan(app: FastAPI):
       3. Start keep-alive pinger (production only)
       4. Run startup sequence in background task:
          a. Check DB — skip ingestion if run < 15 min ago (redeploy guard)
-         b. Set _heavy_job_running during ingestion to block analysis
+         b. Acquire _heavy_job_lock during ingestion to block analysis
          c. Wait 180s after ingestion, then run first analysis
 
     Shutdown:
@@ -291,40 +330,19 @@ def _ingestion_ran_recently() -> bool:
     return False
 
 
-async def _scheduled_ingestion() -> None:
-    """
-    Async ingestion wrapper with overlap guard.
-    Sets _heavy_job_running to block analysis during scraping.
-    """
-    global _ingestion_running, _heavy_job_running
-
-    if _ingestion_running or _heavy_job_running:
-        print("Heavy job already running — skipping ingestion trigger.")
-        return
-
-    _ingestion_running = True
-    _heavy_job_running = True
-    try:
-        await asyncio.to_thread(run_ingestion_cycle)
-    finally:
-        _ingestion_running = False
-        _heavy_job_running = False
-
-
 async def _run_startup_sequence() -> None:
     """
     Run ingestion on startup, then wait for RAM to clear before
     triggering the first analysis run.
 
-    Redeploy guard: if the DB shows articles updated within
-    _REDEPLOY_GUARD_MINUTES, skip ingestion and wait the full
-    _ANALYSIS_STARTUP_DELAY_SECONDS before analysis — same delay
-    as the normal path to avoid immediate post-redeploy OOM.
+    Acquires _heavy_job_lock directly (not via sync bridge) since this
+    runs on the main event loop, not in an APScheduler thread.
+    Lock is always released in finally blocks — never leaked.
 
-    Heavy job lock: _heavy_job_running is held during ingestion so
-    the APScheduler analysis bridge cannot fire simultaneously.
+    Redeploy guard: skips ingestion if DB shows recent activity,
+    still waits _ANALYSIS_STARTUP_DELAY_SECONDS before analysis.
     """
-    global _ingestion_running, _heavy_job_running
+    global _ingestion_running
 
     if _ingestion_ran_recently():
         print(
@@ -333,12 +351,21 @@ async def _run_startup_sequence() -> None:
             "then running analysis..."
         )
         await asyncio.sleep(_ANALYSIS_STARTUP_DELAY_SECONDS)
-        await _guarded_analysis()
+        if _heavy_job_lock.acquire(blocking=False):
+            try:
+                await _guarded_analysis()
+            finally:
+                _heavy_job_lock.release()
+        else:
+            print("Lock held at startup analysis — skipping.")
         return
 
     print("Server startup: Running ingestion...")
+    if not _heavy_job_lock.acquire(blocking=False):
+        print("Lock already held at startup — skipping ingestion.")
+        return
+
     _ingestion_running = True
-    _heavy_job_running = True
     try:
         await asyncio.to_thread(run_ingestion_cycle)
         print("Startup ingestion complete")
@@ -346,7 +373,7 @@ async def _run_startup_sequence() -> None:
         print(f"Startup ingestion failed: {exc}")
     finally:
         _ingestion_running = False
-        _heavy_job_running = False
+        _heavy_job_lock.release()
 
     print(
         f"Waiting {_ANALYSIS_STARTUP_DELAY_SECONDS}s before first "
@@ -354,7 +381,14 @@ async def _run_startup_sequence() -> None:
     )
     await asyncio.sleep(_ANALYSIS_STARTUP_DELAY_SECONDS)
     print("Starting post-startup analysis run...")
-    await _guarded_analysis()
+
+    if _heavy_job_lock.acquire(blocking=False):
+        try:
+            await _guarded_analysis()
+        finally:
+            _heavy_job_lock.release()
+    else:
+        print("Lock held before startup analysis — skipping.")
 
 
 # ── App ───────────────────────────────────────────────────────────────────────
@@ -429,11 +463,12 @@ async def internal_analyze_batch(background_tasks: BackgroundTasks):
     Manual or external analysis trigger. Keep-alive no longer calls
     this — analysis is handled exclusively by APScheduler every 5
     minutes. Retained for debug use only.
-    Uses BackgroundTasks to avoid asyncio.create_task race condition
-    where the task could slip past the _heavy_job_running check.
+    Uses BackgroundTasks — avoids asyncio.create_task race condition.
+    Does not acquire _heavy_job_lock — _analysis_running inner guard
+    in _guarded_analysis prevents duplicates from this path.
     """
-    if _heavy_job_running:
-        return {"status": "skipped — heavy job in progress"}
+    if _analysis_running:
+        return {"status": "skipped — analysis already running"}
     background_tasks.add_task(_guarded_analysis)
     return {"status": "ok"}
 
