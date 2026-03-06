@@ -2,8 +2,9 @@
 NewsScope keep-alive pinger.
 
 Pings /health every 14 minutes to prevent Render free tier spin-down.
-Also triggers a mini analysis batch to keep scoring resumable across
-instance rotations.
+Analysis is handled exclusively by APScheduler (every 5 minutes) —
+keep-alive no longer triggers analysis batches to avoid race conditions
+with the _heavy_job_running lock during ingestion.
 
 Flake8: 0 errors/warnings.
 """
@@ -18,9 +19,10 @@ BACKEND_URL = settings.RENDER_EXTERNAL_URL
 
 def keep_alive() -> None:
     """
-    Ping health endpoint to prevent spin-down, then trigger a
-    small analysis batch (3 articles) so analysis is resumable
-    across instance rotations.
+    Ping health endpoint to prevent spin-down.
+    Response closed immediately to release socket memory.
+    Analysis scheduling is handled by APScheduler — not triggered
+    here to prevent race conditions with ingestion memory lock.
     """
     try:
         response = requests.get(f"{BACKEND_URL}/health", timeout=10)
@@ -28,20 +30,9 @@ def keep_alive() -> None:
             print("Keep-alive ping successful")
         else:
             print(f"Keep-alive ping failed: {response.status_code}")
+        response.close()
     except Exception as exc:
         print(f"Keep-alive ping error: {exc}")
-        return
-
-    # Trigger a mini analysis batch — fire-and-forget, 5s timeout
-    # If instance was rotated mid-analysis, this resumes from DB state
-    try:
-        requests.post(
-            f"{BACKEND_URL}/internal/analyze-batch",
-            timeout=5,
-        )
-        print("Keep-alive: analysis batch triggered")
-    except Exception as exc:
-        print(f"Keep-alive: analysis batch trigger failed: {exc}")
 
 
 def start_keep_alive() -> None:

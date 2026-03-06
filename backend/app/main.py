@@ -155,10 +155,9 @@ def _sync_archive() -> None:
 async def _guarded_analysis() -> None:
     """
     Sets _heavy_job_running around analyze_unscored_articles so that
-    ingestion bridges and keep-alive triggers cannot fire concurrently.
+    ingestion bridges cannot fire concurrently.
     All analysis calls must go through this — never call
-    analyze_unscored_articles() directly from scheduled or keep-alive
-    paths.
+    analyze_unscored_articles() directly from scheduled paths.
     """
     global _heavy_job_running
 
@@ -425,15 +424,17 @@ def health():
 
 
 @app.post("/internal/analyze-batch")
-async def internal_analyze_batch():
+async def internal_analyze_batch(background_tasks: BackgroundTasks):
     """
-    Additional analysis trigger called by keep-alive every 14 minutes.
-    Routes through _guarded_analysis so _heavy_job_running is always
-    respected — prevents keep-alive from firing during ingestion.
+    Manual or external analysis trigger. Keep-alive no longer calls
+    this — analysis is handled exclusively by APScheduler every 5
+    minutes. Retained for debug use only.
+    Uses BackgroundTasks to avoid asyncio.create_task race condition
+    where the task could slip past the _heavy_job_running check.
     """
     if _heavy_job_running:
         return {"status": "skipped — heavy job in progress"}
-    asyncio.create_task(_guarded_analysis())
+    background_tasks.add_task(_guarded_analysis)
     return {"status": "ok"}
 
 
@@ -458,7 +459,7 @@ async def debug_archive(background_tasks: BackgroundTasks):
     return {"status": "archiving triggered in background"}
 
 
-# ── User API ──────────────────────────────────────────────────────────────!!!
+# ── User API ──────────────────────────────────────────────────────────────────
 
 
 @app.post("/api/reading-history")
