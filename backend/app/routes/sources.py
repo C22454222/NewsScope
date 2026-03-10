@@ -8,10 +8,11 @@ from fastapi import APIRouter
 from app.db.supabase import supabase
 from app.schemas import SourceBase
 
+
 router = APIRouter()
 
 
-@router.get("/sources")
+@router.get("")
 def get_sources() -> list:
     """
     Return the list of configured news sources.
@@ -21,7 +22,7 @@ def get_sources() -> list:
     return supabase.table("sources").select("*").execute().data
 
 
-@router.post("/sources")
+@router.post("")
 def add_source(source: SourceBase) -> list:
     """
     Add a new news source record.

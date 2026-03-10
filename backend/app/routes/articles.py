@@ -17,7 +17,7 @@ from app.jobs.fact_checking import (
 from app.schemas import ArticleCreate, ArticleResponse
 
 
-router = APIRouter(prefix="/articles", tags=["articles"])
+router = APIRouter(tags=["articles"])
 
 
 @router.get("")
@@ -103,6 +103,12 @@ async def add_article(article: ArticleCreate) -> dict:
     return resp.data[0]
 
 
+@router.get("/recent-factchecks")
+async def recent_factchecks(hours: int = 24) -> List[dict]:
+    """Return recently fact-checked articles for Flutter dashboard."""
+    return await batch_factcheck_recent(hours)
+
+
 @router.get("/{article_id}")
 def get_article(article_id: str) -> dict:
     """Return a single article by ID."""
@@ -144,9 +150,3 @@ async def factcheck_article(article_id: str) -> dict:
     ).eq("id", article_id).execute()
 
     return cred
-
-
-@router.get("/recent-factchecks")
-async def recent_factchecks(hours: int = 24) -> List[dict]:
-    """Return recently fact-checked articles for Flutter dashboard."""
-    return await batch_factcheck_recent(hours)

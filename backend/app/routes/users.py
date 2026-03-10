@@ -8,10 +8,11 @@ from fastapi import APIRouter, HTTPException
 from app.db.supabase import supabase
 from app.schemas import UserCreate
 
+
 router = APIRouter()
 
 
-@router.post("/users")
+@router.post("")
 def add_user(user: UserCreate) -> dict:
     """
     Upsert a user record in Supabase.
@@ -30,7 +31,7 @@ def add_user(user: UserCreate) -> dict:
     return response.data[0]
 
 
-@router.get("/users/{uid}")
+@router.get("/{uid}")
 def get_user(uid: str) -> dict:
     """Fetch a single user record by Firebase UID."""
     response = (
@@ -44,7 +45,7 @@ def get_user(uid: str) -> dict:
     return response.data[0]
 
 
-@router.put("/users/{uid}/preferences")
+@router.put("/{uid}/preferences")
 def update_preferences(uid: str, prefs: dict) -> dict:
     """Update the user's saved preferences (e.g. region, topics)."""
     response = (
@@ -60,7 +61,7 @@ def update_preferences(uid: str, prefs: dict) -> dict:
     return response.data[0]
 
 
-@router.put("/users/{uid}/bias_profile")
+@router.put("/{uid}/bias_profile")
 def update_bias_profile(uid: str, profile: dict) -> dict:
     """Update the user's computed bias profile."""
     response = (
