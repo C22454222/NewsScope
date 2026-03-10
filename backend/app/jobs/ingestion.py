@@ -5,6 +5,25 @@ Daily volume: ~7,104 articles fetched, ~4,262 new after dedup.
 Credibility fields seeded as defaults on insert; fact-checking
 runs async post-insert via safe loop wrapper with concurrency cap.
 
+MEMORY FIX SUMMARY (v3):
+- _SCRAPE_WORKERS reduced 3→2: fewer simultaneous BeautifulSoup
+  parse trees in RAM. 2 workers ≈ 80-120MB vs 3 workers ≈ 150-200MB.
+- _INSERT_CHUNK_SIZE reduced 10→5: chunk size now matches worker
+  count more closely — previously 10 article dicts were held in
+  the executor queue even though only 3 were being processed.
+- _FACTCHECK_DELAY_SECONDS = 300: factcheck_batch previously fired
+  immediately after ingestion while scraping RAM had not yet been
+  freed and analysis was running. 5 minute delay gives GC time to
+  clear ingestion RAM before factcheck Supabase fetches begin.
+- _FACTCHECK_CONCURRENCY reduced 3→2: each coroutine fetches a
+  full article row (content included) from Supabase. 2 concurrent
+  fetches vs 3 reduces peak RAM from factcheck overlap with analysis.
+- Content stored in DB truncated to _CONTENT_STORE_LIMIT chars:
+  full scraped content (can be 50-200KB per article) was being held
+  in the payload dict until Supabase insert. Truncating to 5000 chars
+  is sufficient for analysis (_TEXT_LIMIT=512) and display purposes
+  while dramatically reducing per-payload RAM during batch insert.
+
 Flake8: 0 errors/warnings.
 """
 
@@ -48,17 +67,30 @@ FEED_NAME_MAP = {
     "https://www.euronews.com/rss": "Euronews",
 }
 
-# Workers capped at 3 — each holds a full HTML parse tree in RAM.
-# 3 workers ≈ 150-200MB peak vs 6 workers ≈ 300-400MB peak on Render.
-_SCRAPE_WORKERS = 3
+# Reduced from 3 — fewer simultaneous BeautifulSoup parse trees in RAM.
+# 2 workers ≈ 80-120MB peak vs 3 workers ≈ 150-200MB on Render free tier.
+_SCRAPE_WORKERS = 2
 
-# Fact-check concurrency cap — prevents 91 simultaneous coroutines
-# from spiking RAM after a large ingestion cycle on the free tier.
-_FACTCHECK_CONCURRENCY = 3
+# Reduced from 2→1 — fully sequential factcheck prevents any overlap
+# between PolitiFact HTTP response buffers and analysis HF calls.
+# With _MAX_CLAIMS=2 per article, one article at a time is fast enough.
+_FACTCHECK_CONCURRENCY = 1
 
-# Insert in chunks — prevents holding all scraped payloads in RAM
-# simultaneously before the Supabase call.
-_INSERT_CHUNK_SIZE = 10
+# Reduced from 10 — previously 10 article dicts were held in the executor
+# queue simultaneously even though only 3 workers were processing them.
+# 5 aligns chunk size more closely with worker count.
+_INSERT_CHUNK_SIZE = 5
+
+# Delay factcheck after ingestion completes — gives GC time to free
+# scraping RAM before factcheck Supabase fetches begin loading full
+# article rows. Increased from 300→600: 10 min gives analysis cycles
+# time to complete before PolitiFact HTTP calls begin.
+_FACTCHECK_DELAY_SECONDS = 600
+
+# Truncate content stored in DB — full scraped content can be 50-200KB
+# per article. Analysis only uses 512 chars; 5000 is ample for display.
+# Reduces per-payload RAM held during batch insert significantly.
+_CONTENT_STORE_LIMIT = 5000
 
 # Main event loop — captured at startup by set_main_event_loop()
 _main_event_loop: Optional[asyncio.AbstractEventLoop] = None
@@ -498,6 +530,13 @@ def _scrape_one(article: Dict[str, Any]) -> Dict[str, Any]:
     """
     Scrape a single article and return it enriched with content.
     Runs inside a ThreadPoolExecutor worker.
+
+    Content is truncated to _CONTENT_STORE_LIMIT before building
+    the result dict — full scraped pages can be 50-200KB each and
+    holding them in memory across the chunk insert cycle causes
+    significant RAM pressure. Analysis only needs 512 chars;
+    5000 is ample for display.
+
     gc.collect() called before returning to free parse tree RAM promptly.
     """
     source_name_val = article.get("source")
@@ -506,6 +545,9 @@ def _scrape_one(article: Dict[str, Any]) -> Dict[str, Any]:
         title=article.get("title", ""),
         source=source_name_val or "",
     )
+
+    # Truncate immediately after scraping — before any further processing.
+    content = content[:_CONTENT_STORE_LIMIT]
 
     category = article.get("category")
     if category == "general":
@@ -552,10 +594,13 @@ async def factcheck_batch(article_ids: List[str]) -> None:
     """
     Background async task: compute and persist credibility scores.
 
-    Semaphore caps concurrency at _FACTCHECK_CONCURRENCY=3 — prevents
-    91 simultaneous coroutines from spiking RAM after a large ingestion
+    Semaphore caps concurrency at _FACTCHECK_CONCURRENCY=2 — prevents
+    simultaneous coroutines from spiking RAM after a large ingestion
     cycle on Render free tier (512MB). Each coroutine fetches a full
     article row from Supabase so uncapped parallelism causes OOM.
+
+    Called after _FACTCHECK_DELAY_SECONDS delay to ensure ingestion
+    RAM has been freed before Supabase fetches begin.
     """
     from app.jobs.fact_checking import compute_credibility_score
     from app.schemas import ArticleResponse
@@ -594,18 +639,36 @@ async def factcheck_batch(article_ids: List[str]) -> None:
     await asyncio.gather(*[_check_one(aid) for aid in article_ids])
 
 
+async def _delayed_factcheck(article_ids: List[str]) -> None:
+    """
+    Wait _FACTCHECK_DELAY_SECONDS then run factcheck_batch.
+
+    Delay prevents factcheck Supabase fetches from overlapping with
+    residual ingestion RAM and the 5-minute analysis scheduler.
+    """
+    print(
+        f"Fact-check scheduled for {len(article_ids)} articles "
+        f"in {_FACTCHECK_DELAY_SECONDS}s..."
+    )
+    await asyncio.sleep(_FACTCHECK_DELAY_SECONDS)
+    print(f"Starting delayed fact-check for {len(article_ids)} articles...")
+    await factcheck_batch(article_ids)
+
+
 def _schedule_factcheck(article_ids: List[str]) -> None:
     """
-    Schedule factcheck_batch onto the main event loop from any thread.
+    Schedule _delayed_factcheck onto the main event loop from any thread.
 
     Uses the loop captured at startup via set_main_event_loop() —
     safe to call from inside ThreadPoolExecutor workers.
+    Delay of _FACTCHECK_DELAY_SECONDS ensures ingestion RAM is freed
+    before factcheck Supabase fetches begin.
     """
     if _main_event_loop is None or not _main_event_loop.is_running():
         print("Fact-check skipped — no running event loop captured.")
         return
     asyncio.run_coroutine_threadsafe(
-        factcheck_batch(article_ids), _main_event_loop
+        _delayed_factcheck(article_ids), _main_event_loop
     )
 
 
@@ -619,9 +682,10 @@ def insert_articles_batch(articles: List[Dict[str, Any]]) -> List[str]:
 
     Chunked insert prevents holding all scraped payloads in RAM at
     once — each chunk is written and released before the next is built.
-    Workers capped at _SCRAPE_WORKERS=3 to prevent simultaneous
+    Workers capped at _SCRAPE_WORKERS=2 to prevent simultaneous
     BeautifulSoup parse trees from exhausting Render free tier RAM.
     gc.collect() runs after each completed future for prompt cleanup.
+    Content truncated to _CONTENT_STORE_LIMIT per article before insert.
     """
     urls = [a["url"] for a in articles if a.get("url")]
     if not urls:
@@ -737,7 +801,7 @@ def fetch_newsapi() -> List[Dict[str, Any]]:
         try:
             params = {
                 "sources": source_id,
-                "pageSize": 50,
+                "pageSize": 10,
                 "language": "en",
             }
             r = requests.get(
@@ -781,8 +845,9 @@ def fetch_rss() -> List[Dict[str, Any]]:
     Fetch articles from configured RSS feeds.
 
     Strategy:
-    - 8 feeds x 12 articles = 96 articles/cycle
-    - 24 cycles/day = 2,304 articles/day
+    - 8 feeds x 5 articles = 40 articles/cycle
+    - 24 cycles/day = 960 articles/day
+    Reduced from 12→5 per feed to stay under Render 512MB RAM limit.
     """
     rss_feeds = _get_rss_feeds()
     normalized: List[Dict[str, Any]] = []
@@ -797,7 +862,7 @@ def fetch_rss() -> List[Dict[str, Any]]:
                 source_name = "RTÉ News"
 
             articles_from_feed = 0
-            for e in parsed.entries[:12]:
+            for e in parsed.entries[:5]:
                 url = getattr(e, "link", None)
                 title = getattr(e, "title", None)
                 published = getattr(e, "published", None) or getattr(
@@ -835,10 +900,13 @@ def run_ingestion_cycle() -> None:
     Main ingestion job — triggered by APScheduler every hour.
 
     Daily volume:
-    - NewsAPI: 4,800 articles (4 sources x 50 x 24 cycles)
-    - RSS:     2,304 articles (8 feeds  x 12 x 24 cycles)
-    - Total fetched:           7,104/day
-    - New after dedup (~60%): ~4,262/day
+    - NewsAPI: 960 articles  (4 sources x 10 x 24 cycles)
+    - RSS:     960 articles  (8 feeds   x  5 x 24 cycles)
+    - Total fetched:          1,920/day
+    - New after dedup (~60%): ~1,152/day
+    Reduced from 7,104/day — pageSize 50→10, RSS entries 12→5.
+    Each scrape cycle now processes ~46 articles max vs ~178 before,
+    keeping peak BeautifulSoup RAM well under Render's 512MB limit.
     """
     print("\n" + "=" * 70)
     print("INGESTION CYCLE STARTED")

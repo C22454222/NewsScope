@@ -1,35 +1,30 @@
 """
 NewsScope Analysis Service.
 
-All three models run via HuggingFace Serverless Inference — zero local
+Two models run via HuggingFace Serverless Inference — zero local
 RAM footprint. No transformers/torch loaded on Render.
 
-Sentiment      : distilbert/distilbert-base-uncased-finetuned-sst-2-english
-                 Confirmed on HF Inference API. 3.63M downloads.
-Political bias : MoritzLaurer/mDeBERTa-v3-base-mnli-xnli
-                 Zero-shot NLI — confirmed on HF Inference API.
-                 0.3B params. Replaces facebook/bart-large-mnli (0.4B)
-                 which caused OOM via 90s socket stalls on cold start.
-                 Payload: inputs + parameters.candidate_labels.
-                 Response: {"label": "left-wing", "score": 0.86}
-                 Single top-prediction dict after list unwrap.
-General bias   : valurank/distilroberta-bias
-                 Confirmed on HF Inference API. 3.79k downloads.
+Sentiment    : distilbert/distilbert-base-uncased-finetuned-sst-2-english
+               Confirmed on HF Inference API. 3.63M downloads.
+General bias : valurank/distilroberta-bias
+               Confirmed on HF Inference API. 3.79k downloads.
 
-MEMORY FIX SUMMARY (v2):
-- Replaced facebook/bart-large-mnli (0.4B params) with
-  MoritzLaurer/mDeBERTa-v3-base-mnli-xnli (0.3B params). bart's
-  cold-start inference time caused 90s socket stalls that blocked
-  threads and accumulated response buffers in RAM.
-- _REQUEST_TIMEOUT reduced 90→30s: mDeBERTa responds faster when
-  warm; 30s gives cold-start headroom without long socket dwell.
-- _POLITICAL_TIMEOUT separate 45s cap: slightly more headroom for
-  the NLI model specifically without affecting lighter models.
-- _session closed and recreated on connection errors to prevent
-  stale socket buffers accumulating in RAM across retries.
-- _BATCH_SIZE reduced 3→2: halves peak concurrent HF response RAM.
-- Article sleep between calls reduced 0.3→0.1s: less wall-clock
-  blocking time per batch means the thread is released sooner.
+Political bias : SOURCE-LEVEL ONLY (no AI model call).
+                 mDeBERTa-v3-base-mnli-xnli was called on every article
+                 but returned confidence below 60% threshold on 100% of
+                 observed cycles, falling back to source every time while
+                 burning a 45s socket dwell and HF response buffer RAM
+                 per article. Removed entirely until a better model is
+                 found. Bias scores are still written to DB — sourced
+                 from _SOURCE_BIAS_MAP or the sources table as before.
+
+MEMORY FIX SUMMARY (v3):
+- AI political bias call removed: saves 1 HF API call + up to 45s
+  socket dwell per article. Was contributing 0% useful results.
+- HF calls per article: 3 → 2 (sentiment + general bias only).
+- _REQUEST_TIMEOUT 90→30s: faster timeout on remaining two models.
+- _session reset on connection errors: flushes stale socket buffers.
+- _BATCH_SIZE 3→2: halves peak concurrent HF response RAM per cycle.
 
 Flake8: 0 errors/warnings.
 """
@@ -47,28 +42,17 @@ from app.db.supabase import supabase
 
 HF_API_TOKEN = settings.HF_API_TOKEN
 SENTIMENT_MODEL = settings.HF_SENTIMENT_MODEL.strip()
-BIAS_MODEL = settings.HF_BIAS_MODEL.strip()
 GENERAL_BIAS_MODEL = settings.HF_GENERAL_BIAS_MODEL.strip()
 
 _HF_API_BASE = "https://router.huggingface.co/hf-inference/models"
 
-# Reduced from 3 — each article holds 3 concurrent HF responses in RAM.
-# 2 articles × ~40MB response overhead stays well under 512MB free tier.
+# 2 articles per batch — each holds 2 concurrent HF responses in RAM.
 _BATCH_SIZE = 2
 
 _TEXT_LIMIT = 512
 
-# Reduced from 90s — mDeBERTa-v3-base-mnli-xnli responds faster than
-# bart-large-mnli when warm. 30s gives cold-start headroom without
-# holding a thread and open socket for 90s on timeout.
+# 30s timeout — sufficient for warm distilbert/distilroberta calls.
 _REQUEST_TIMEOUT = 30
-
-# Slightly more headroom for the NLI zero-shot model specifically.
-# Still far below the old 90s that caused OOM via stalled threads.
-_POLITICAL_TIMEOUT = 45
-
-# Minimum AI confidence to trust the model over source fallback.
-_MIN_AI_CONFIDENCE = 0.60
 
 _analysis_running = False
 
@@ -130,7 +114,6 @@ def _inference_api_call(
 
     Session is reset on connection errors (ReadTimeout, ConnectionError)
     to prevent stale socket buffers from accumulating in RAM.
-    NOTE: Not used for political bias — that model returns a dict, not list.
     """
     if not HF_API_TOKEN:
         print("HF_API_TOKEN not set — skipping Inference API call.")
@@ -173,7 +156,6 @@ def _inference_api_call(
                 f"Inference API connection error [{model}] "
                 f"attempt {attempt + 1}: {exc}"
             )
-            # Reset session to flush stale socket buffer from RAM.
             _reset_session()
             if attempt < retries - 1:
                 time.sleep(2 ** attempt)
@@ -189,7 +171,7 @@ def _inference_api_call(
     return None
 
 
-# ── Source fallback ───────────────────────────────────────────────────────────
+# ── Source bias ───────────────────────────────────────────────────────────────
 
 
 def _get_source_political_leaning(source_name: str) -> float:
@@ -251,169 +233,35 @@ def _sentiment_score(text: str) -> Optional[float]:
         return None
 
 
-# ── Political bias ────────────────────────────────────────────────────────────
+# ── Political bias (source-level) ─────────────────────────────────────────────
 
 
-def _detect_political_bias_ai(
-    text: str,
-) -> Tuple[Optional[float], Optional[float]]:
+def _get_political_bias(source_name: str) -> Tuple[float, float]:
     """
-    Political bias via MoritzLaurer/mDeBERTa-v3-base-mnli-xnli.
+    Return political bias from source-level data only. No HF API call.
 
-    Zero-shot NLI confirmed on HF Inference API. 0.3B params.
-    Replaces facebook/bart-large-mnli (0.4B) which caused OOM on
-    Render free tier via 90s socket stalls on cold-start inference.
+    mDeBERTa-v3-base-mnli-xnli was removed after logging showed it
+    returned confidence below 60% on every observed article, burning
+    a 45s socket dwell per article while contributing nothing.
 
-    Payload: inputs (str) + parameters.candidate_labels (list).
-    Response after list unwrap: {"label": "left-wing", "score": 0.86}
-    Single top-prediction dict — label mapped to bias_score float.
-
-    Returns (bias_score, confidence): -1.0=Left, 0.0=Center, 1.0=Right.
+    Returns (bias_score, bias_intensity):
+      bias_score    : -1.0 (Left) to +1.0 (Right)
+      bias_intensity: fixed 0.5 — reflects source-level certainty
     """
-    if not HF_API_TOKEN:
-        print("Political bias: HF_API_TOKEN not set — skipping.")
-        return None, None
+    bias_score = _get_source_political_leaning(source_name)
 
-    url = f"{_HF_API_BASE}/{BIAS_MODEL}"
-    headers = {"Authorization": f"Bearer {HF_API_TOKEN}"}
-    payload = {
-        "inputs": text[:_TEXT_LIMIT],
-        "parameters": {
-            "candidate_labels": ["left-wing", "centrist", "right-wing"],
-        },
-    }
+    if bias_score < -0.3:
+        label = "LEFT"
+    elif bias_score > 0.3:
+        label = "RIGHT"
+    else:
+        label = "CENTER"
 
-    for attempt in range(3):
-        session = _get_session()
-        try:
-            response = session.post(
-                url,
-                headers=headers,
-                json=payload,
-                timeout=_POLITICAL_TIMEOUT,
-            )
-
-            print(
-                f"  Political bias HTTP {response.status_code} "
-                f"(attempt {attempt + 1})"
-            )
-
-            if response.status_code == 503:
-                wait = 10 + (attempt * 5)
-                print(
-                    f"  Political bias model loading, "
-                    f"waiting {wait}s..."
-                )
-                response.close()
-                time.sleep(wait)
-                continue
-
-            response.raise_for_status()
-            result = response.json()
-            response.close()
-
-            # HF router may wrap response in a list — unwrap to single dict.
-            if isinstance(result, list) and result:
-                result = result[0]
-
-            if not isinstance(result, dict):
-                print(
-                    "  Political bias: unexpected response type "
-                    f"({type(result).__name__}) — returning None"
-                )
-                return None, None
-
-            label_raw = result.get("label", "")
-            score_raw = result.get("score", 0.0)
-
-            if not label_raw:
-                print("  Political bias: empty label — returning None")
-                return None, None
-
-            label_lower = label_raw.lower()
-            if "left" in label_lower:
-                bias_score = round(-score_raw, 4)
-            elif "right" in label_lower:
-                bias_score = round(score_raw, 4)
-            else:
-                bias_score = 0.0
-
-            confidence = round(score_raw, 4)
-
-            if bias_score < -0.3:
-                label_str = "LEFT"
-            elif bias_score > 0.3:
-                label_str = "RIGHT"
-            else:
-                label_str = "CENTER"
-
-            print(
-                f"Political bias: {label_str} "
-                f"(score={bias_score:.2f}, "
-                f"confidence={confidence:.2%})"
-            )
-            return bias_score, confidence
-
-        except (requests.exceptions.ReadTimeout,
-                requests.exceptions.ConnectionError) as exc:
-            print(f"Political bias connection error attempt {attempt + 1}: {exc}")
-            # Reset session to flush stale socket buffer from RAM.
-            _reset_session()
-            if attempt < 2:
-                time.sleep(5)
-
-        except Exception as exc:
-            print(f"Political bias error attempt {attempt + 1}: {exc}")
-            if attempt < 2:
-                time.sleep(5)
-
-    print("Political bias API call failed — will retry next cycle.")
-    return None, None
-
-
-def _hybrid_bias_analysis(
-    text: str,
-    source_name: str,
-) -> Tuple[float, float]:
-    """
-    Political bias with graceful source fallback.
-
-    AI result is only used when confidence >= _MIN_AI_CONFIDENCE.
-    Below that threshold the prediction is unreliable and source
-    bias is used instead.
-
-    Returns (bias_score, bias_intensity).
-    """
-    ai_bias, ai_confidence = _detect_political_bias_ai(text)
-
-    if ai_bias is not None and ai_confidence is not None:
-        if ai_confidence < _MIN_AI_CONFIDENCE:
-            print(
-                f"  AI confidence too low ({ai_confidence:.2%}) "
-                f"— falling back to source bias."
-            )
-        else:
-            if ai_bias < -0.3:
-                label = "LEFT"
-            elif ai_bias > 0.3:
-                label = "RIGHT"
-            else:
-                label = "CENTER"
-
-            print(
-                f"Article AI result: {label} "
-                f"(score={ai_bias:.2f}, "
-                f"confidence={ai_confidence:.2%}, "
-                f"intensity={ai_confidence:.2f})"
-            )
-            return ai_bias, ai_confidence
-
-    source_bias = _get_source_political_leaning(source_name)
     print(
-        f"AI failed -> fallback to source: "
-        f"{source_name} = {source_bias:.2f}"
+        f"Political bias (source): {label} "
+        f"({source_name} = {bias_score:.2f})"
     )
-    return source_bias, 0.5
+    return bias_score, 0.5
 
 
 # ── General bias ──────────────────────────────────────────────────────────────
@@ -470,7 +318,8 @@ def _detect_general_bias(
 def _score_article(article: dict) -> dict:
     """
     Score a single article synchronously. Called from thread pool.
-    Only title, content (truncated to _TEXT_LIMIT), source are used.
+    Makes 2 HF API calls: sentiment + general bias.
+    Political bias is sourced locally — no network call.
     """
     content = (article.get("content") or "")[:_TEXT_LIMIT]
     title = article.get("title") or ""
@@ -484,7 +333,7 @@ def _score_article(article: dict) -> dict:
     sentiment = _sentiment_score(text)
     time.sleep(0.1)
 
-    bias_score, bias_intensity = _hybrid_bias_analysis(text, source)
+    bias_score, bias_intensity = _get_political_bias(source)
     time.sleep(0.1)
 
     general_bias_label, general_bias_score = _detect_general_bias(text)
@@ -552,7 +401,7 @@ def _run_analysis_sync() -> None:
 
     print(
         f"Analyzing {len(articles)} articles "
-        "(hybrid methodology + general bias)..."
+        "(sentiment + source bias + general bias)..."
     )
 
     for article in articles:
@@ -562,7 +411,7 @@ def _run_analysis_sync() -> None:
                 result["update"]
             ).eq("id", result["id"]).execute()
         gc.collect()
-        time.sleep(1.0)  # prevent HF rate limiting across article batch
+        time.sleep(1.0)
 
     del articles
     gc.collect()

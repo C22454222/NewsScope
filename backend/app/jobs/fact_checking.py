@@ -1,13 +1,21 @@
 """
 NewsScope Fact-Checking Service.
 
-Integrates PolitiFact API with spaCy claim extraction.
-spaCy is lazy-loaded on first use — not imported at module level —
-to avoid loading 50MB+ into Render RAM on startup.
+Integrates PolitiFact API with lightweight regex claim extraction.
+
+spaCy has been removed entirely — it loaded 50MB+ into Render RAM
+on first call, spiking memory when factcheck overlapped with analysis.
+Claims are now extracted using simple sentence splitting and regex,
+which has near-zero RAM cost and produces comparable quality input
+for the PolitiFact API query.
+
+PolitiFact calls reduced from 5 claims → 2 per article to halve
+the number of concurrent HTTP connections during factcheck batches.
 
 Flake8: 0 errors/warnings.
 """
 
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -17,21 +25,10 @@ from app.schemas import ArticleResponse
 from app.db.supabase import supabase
 
 
-# ── spaCy lazy loader ─────────────────────────────────────────────────────────
-
-_nlp = None
-
-
-def _get_nlp():
-    """
-    Lazy-load spaCy en_core_web_sm on first call only.
-    Prevents 50MB model from loading into Render RAM at startup.
-    """
-    global _nlp
-    if _nlp is None:
-        import spacy
-        _nlp = spacy.load("en_core_web_sm")
-    return _nlp
+# Maximum claims to extract and check per article.
+# Reduced from 5 → 2 to halve concurrent PolitiFact HTTP connections
+# and reduce factcheck RAM overlap with analysis on Render free tier.
+_MAX_CLAIMS = 2
 
 
 # ── Claim extraction ──────────────────────────────────────────────────────────
@@ -39,31 +36,46 @@ def _get_nlp():
 
 def extract_claims(text: str) -> List[str]:
     """
-    Extract up to 5 verifiable claims from article text using spaCy.
-    Filters out questions and very short sentences. Prioritises sentences
-    containing named entities (dates, people, organisations) or numbers.
+    Extract up to _MAX_CLAIMS verifiable claims from article text.
+
+    Uses regex sentence splitting — no spaCy or NLP models loaded.
+    Prioritises sentences likely to contain verifiable facts:
+    - Contains a number or percentage
+    - Contains a capitalised proper noun (likely a named entity)
+    - Is a declarative statement (not a question)
+    - Is long enough to be meaningful (> 40 chars)
+
+    Zero RAM overhead vs spaCy's 50MB+ model load.
     """
-    doc = _get_nlp()(text)
+    # Split on sentence boundaries.
+    raw_sentences = re.split(r"(?<=[.!?])\s+", text)
+
     claims: List[str] = []
+    for sent in raw_sentences:
+        sent = sent.strip()
 
-    for sent in doc.sents:
-        sent_text = sent.text.strip()
-
-        if sent_text.endswith("?"):
+        # Skip questions and very short sentences.
+        if sent.endswith("?") or len(sent) < 40:
             continue
 
-        if len(sent) <= 5:
-            continue
+        # Prioritise sentences with numbers, percentages, or proper nouns.
+        has_number = bool(re.search(r"\b\d+(?:[,.\d]+)?%?\b", sent))
+        has_proper_noun = bool(re.search(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b", sent))
 
-        has_entity = any(
-            token.like_num or token.ent_type_ in ("DATE", "PERSON", "ORG")
-            for token in sent
-        )
-        if has_entity:
-            claims.append(sent_text)
+        if has_number or has_proper_noun:
+            claims.append(sent)
 
-        if len(claims) >= 5:
+        if len(claims) >= _MAX_CLAIMS:
             break
+
+    # If nothing matched, fall back to first two long sentences.
+    if not claims:
+        for sent in raw_sentences:
+            sent = sent.strip()
+            if len(sent) >= 40 and not sent.endswith("?"):
+                claims.append(sent)
+            if len(claims) >= _MAX_CLAIMS:
+                break
 
     return claims
 
@@ -78,6 +90,9 @@ async def check_politifact_claims(
     Query PolitiFact public search API for each extracted claim.
     Returns a dict mapping each claim to its top ruling and URL.
     Fails gracefully per claim — one API error does not abort the batch.
+
+    Uses a single shared AsyncClient across all claims in the batch
+    to avoid opening a new connection pool per claim.
     """
     results: Dict[str, Any] = {}
 

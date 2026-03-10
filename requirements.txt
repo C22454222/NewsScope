@@ -30,15 +30,10 @@ lxml_html_clean
 # Testing
 pytest
 
-# ML/NLP
-numpy>=1.24,<2.0
-spacy>=3.7.0
-en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
-
 # Authentication
 firebase-admin==6.5.0
 
-# Evaluation (optional)
+# Evaluation (local only — not used on Render)
 datasets==3.2.0
 scikit-learn==1.6.1
 pandas
