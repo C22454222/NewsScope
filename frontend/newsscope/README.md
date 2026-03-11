@@ -5,6 +5,7 @@ NewsScope is the **Flutter frontend** for a cross‑platform news aggregation an
 ---
 
 ## 🚀 Features
+
 - **Firebase Authentication**  
   - Email/Password and Google OAuth login/signup  
   - Secure session management with JWT tokens  
@@ -28,6 +29,7 @@ NewsScope is the **Flutter frontend** for a cross‑platform news aggregation an
 ---
 
 ## 🛠️ Tech Stack
+
 - **Framework:** Flutter (Dart)  
 - **State Management:** Provider / Riverpod (planned)  
 - **Backend:** FastAPI (Python) hosted on Render  
@@ -38,7 +40,8 @@ NewsScope is the **Flutter frontend** for a cross‑platform news aggregation an
 ---
 
 ## 📂 Project Structure
-```
+
+```structure
 frontend/newsscope/
 ├── lib/
 │   ├── main.dart          # Entry point, Firebase init
@@ -54,13 +57,16 @@ frontend/newsscope/
 ---
 
 ## ⚙️ Setup & Installation
+
 1. **Clone the repo**
+
    ```bash
    git clone https://github.com/yourusername/newsscope.git
    cd newsscope/frontend/newsscope
    ```
 
-2. **Install dependencies**
+2. **Install dependencies**#
+
    ```bash
    flutter pub get
    ```
@@ -71,6 +77,7 @@ frontend/newsscope/
    - Download `google-services.json` and place it in `android/app/`.
 
 4. **Run the app**
+
    ```bash
    flutter run
    ```
@@ -78,12 +85,14 @@ frontend/newsscope/
 ---
 
 ## 🧪 Testing
+
 - Unit tests for UI widgets and auth flows in `/test`.
 - Integration tests planned for API calls and bias visualisation.
 
 ---
 
 ## 📌 Roadmap
+
 - [ ] Connect frontend to FastAPI endpoints (articles, fact‑checks).  
 - [ ] Implement bias spectrum visualisation widget.  
 - [ ] Add personalised bias profile dashboard.  
@@ -92,4 +101,5 @@ frontend/newsscope/
 ---
 
 ## 📖 License
+
 This project is licensed under the MIT License. See [LICENSE](../LICENSE) for details.

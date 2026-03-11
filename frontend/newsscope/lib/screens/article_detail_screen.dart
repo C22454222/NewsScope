@@ -1,3 +1,4 @@
+// lib/screens/article_detail_screen.dart
 import 'dart:async';
 import 'dart:developer' as developer;
 
@@ -6,6 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../models/article.dart';
 import '../services/api_service.dart';
+import '../utils/score_helpers.dart';
 
 class ArticleDetailScreen extends StatefulWidget {
   final String id;
@@ -39,7 +41,6 @@ class ArticleDetailScreen extends StatefulWidget {
     this.generalBias,
   });
 
-  /// Convenience constructor — build from an Article model directly.
   factory ArticleDetailScreen.fromArticle(Article article) {
     return ArticleDetailScreen(
       id: article.id,
@@ -68,7 +69,6 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
   int _secondsSpent = 0;
   bool _hasTracked = false;
 
-  // Fact-check state — loaded lazily on expand
   bool _factCheckExpanded = false;
   bool _factCheckLoading = false;
   Map<String, dynamic>? _loadedFactChecks;
@@ -77,7 +77,6 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
   void initState() {
     super.initState();
     _loadedFactChecks = widget.factChecks;
-
     _trackingTimer = Timer.periodic(
       const Duration(seconds: 5),
       (_) => _secondsSpent += 5,
@@ -91,7 +90,7 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
     super.dispose();
   }
 
-  // ── Reading tracking ────────────────────────────────────────────────────────
+  // ── Reading tracking ──────────────────────────────────────────────────────
 
   Future<void> _trackReadingTime() async {
     if (_secondsSpent < 3 || _hasTracked) return;
@@ -114,18 +113,16 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
     }
   }
 
-  // ── Fact-check loading ──────────────────────────────────────────────────────
+  // ── Fact-check loading ────────────────────────────────────────────────────
 
   Future<void> _loadFactChecks() async {
     if (_loadedFactChecks != null && _loadedFactChecks!.isNotEmpty) return;
-
     setState(() => _factCheckLoading = true);
     try {
       final result = await _api.triggerFactCheck(widget.id);
       if (result != null && mounted) {
         setState(() {
-          _loadedFactChecks =
-              result['fact_checks'] as Map<String, dynamic>?;
+          _loadedFactChecks = result['fact_checks'] as Map<String, dynamic>?;
         });
       }
     } catch (e) {
@@ -139,63 +136,7 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
     }
   }
 
-  // ── Colour/label helpers ────────────────────────────────────────────────────
-
-  Color _getBiasColor(double? score) {
-    if (score == null) return Colors.grey;
-    if (score < -0.3) return Colors.blue[700]!;
-    if (score > 0.3) return Colors.red[700]!;
-    return Colors.purple[400]!;
-  }
-
-  String _getBiasLabel(double? score) {
-    if (score == null) return 'Pending';
-    if (score < -0.5) return 'Left';
-    if (score < -0.2) return 'Center-Left';
-    if (score < 0.2) return 'Center';
-    if (score < 0.5) return 'Center-Right';
-    return 'Right';
-  }
-
-  Color _getSentimentColor(double? score) {
-    if (score == null) return Colors.grey;
-    if (score > 0.1) return Colors.green[700]!;
-    if (score < -0.1) return Colors.orange[700]!;
-    return Colors.grey[600]!;
-  }
-
-  String _getSentimentLabel(double? score) {
-    if (score == null) return 'Pending';
-    if (score > 0.3) return 'Positive';
-    if (score < -0.3) return 'Negative';
-    return 'Neutral';
-  }
-
-  Color _getCredibilityColor(double? score) {
-    if (score == null) return Colors.grey;
-    if (score >= 75) return Colors.green[700]!;
-    if (score >= 50) return Colors.orange[700]!;
-    return Colors.red[700]!;
-  }
-
-  String _getCredibilityLabel(double? score) {
-    if (score == null) return 'Unverified';
-    if (score >= 75) return 'Credible';
-    if (score >= 50) return 'Mixed';
-    return 'Questionable';
-  }
-
-  String _getRulingEmoji(String ruling) {
-    final r = ruling.toLowerCase();
-    if (r.contains('true') && !r.contains('mostly')) return '✅';
-    if (r.contains('mostly true')) return '🟢';
-    if (r.contains('half')) return '🟡';
-    if (r.contains('mostly false')) return '🟠';
-    if (r.contains('false') || r.contains('pants')) return '❌';
-    return '❓';
-  }
-
-  // ── URL launcher ────────────────────────────────────────────────────────────
+  // ── URL helpers ───────────────────────────────────────────────────────────
 
   Future<void> _launchURL() async {
     final uri = Uri.parse(widget.url);
@@ -211,12 +152,12 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
     }
   }
 
-  // ── Widgets ─────────────────────────────────────────────────────────────────
+  // ── Widgets ───────────────────────────────────────────────────────────────
 
   Widget _buildCredibilityCard() {
     final score = widget.credibilityScore;
-    final color = _getCredibilityColor(score);
-    final label = _getCredibilityLabel(score);
+    final color = getCredibilityColor(score);
+    final label = getCredibilityLabel(score);
 
     return Card(
       elevation: 2,
@@ -254,18 +195,12 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
                       widget.claimsChecked! > 0)
                     Text(
                       '${widget.claimsChecked} claim(s) verified',
-                      style: TextStyle(
-                        color: Colors.grey[600],
-                        fontSize: 13,
-                      ),
+                      style: TextStyle(color: Colors.grey[600], fontSize: 13),
                     ),
                   if (widget.credibilityReason != null)
                     Text(
                       widget.credibilityReason!,
-                      style: TextStyle(
-                        color: Colors.grey[500],
-                        fontSize: 12,
-                      ),
+                      style: TextStyle(color: Colors.grey[500], fontSize: 12),
                     ),
                 ],
               ),
@@ -320,7 +255,7 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
     final ruling = data is Map ? (data['ruling'] ?? 'Unknown') : 'Unknown';
     final url = data is Map ? data['url'] as String? : null;
     final speaker = data is Map ? data['speaker'] as String? : null;
-    final emoji = _getRulingEmoji(ruling.toString());
+    final emoji = getRulingEmoji(ruling.toString());
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -329,10 +264,7 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
         children: [
           Text(
             claim,
-            style: const TextStyle(
-              fontStyle: FontStyle.italic,
-              fontSize: 13,
-            ),
+            style: const TextStyle(fontStyle: FontStyle.italic, fontSize: 13),
             maxLines: 3,
             overflow: TextOverflow.ellipsis,
           ),
@@ -347,10 +279,7 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
                 const SizedBox(width: 8),
                 Text(
                   '— $speaker',
-                  style: TextStyle(
-                    color: Colors.grey[600],
-                    fontSize: 12,
-                  ),
+                  style: TextStyle(color: Colors.grey[600], fontSize: 12),
                 ),
               ],
               if (url != null) ...[
@@ -375,7 +304,7 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
     );
   }
 
-  // ── Build ───────────────────────────────────────────────────────────────────
+  // ── Build ─────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -400,7 +329,6 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Source badge
               Container(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 12,
@@ -420,7 +348,6 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
               ),
               const SizedBox(height: 12),
 
-              // Title
               Text(
                 widget.title,
                 style: Theme.of(context)
@@ -430,7 +357,6 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
               ),
               const SizedBox(height: 16),
 
-              // Analysis chips
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
@@ -439,10 +365,10 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
                     avatar: Icon(
                       Icons.balance,
                       size: 16,
-                      color: _getBiasColor(widget.biasScore),
+                      color: getBiasColor(widget.biasScore),
                     ),
-                    label: Text(_getBiasLabel(widget.biasScore)),
-                    backgroundColor: _getBiasColor(widget.biasScore)
+                    label: Text(getBiasLabel(widget.biasScore)),
+                    backgroundColor: getBiasColor(widget.biasScore)
                         .withAlpha((255 * 0.2).round()),
                   ),
                   if (widget.sentimentScore != null)
@@ -454,12 +380,11 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
                                 ? Icons.sentiment_dissatisfied
                                 : Icons.sentiment_neutral,
                         size: 16,
-                        color: _getSentimentColor(widget.sentimentScore),
+                        color: getSentimentColor(widget.sentimentScore),
                       ),
-                      label: Text(_getSentimentLabel(widget.sentimentScore)),
-                      backgroundColor:
-                          _getSentimentColor(widget.sentimentScore)
-                              .withAlpha((255 * 0.2).round()),
+                      label: Text(getSentimentLabel(widget.sentimentScore)),
+                      backgroundColor: getSentimentColor(widget.sentimentScore)
+                          .withAlpha((255 * 0.2).round()),
                     ),
                   if (widget.biasIntensity != null)
                     Chip(
@@ -488,18 +413,11 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
               ),
 
               const SizedBox(height: 16),
-
-              // Credibility card
               _buildCredibilityCard(),
-
               const SizedBox(height: 8),
-
-              // Fact-check expandable section
               _buildFactCheckSection(),
-
               const Divider(height: 32),
 
-              // Content
               if (widget.content != null && widget.content!.isNotEmpty)
                 Text(
                   widget.content!,

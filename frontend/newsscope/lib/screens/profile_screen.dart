@@ -2,7 +2,10 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:fl_chart/fl_chart.dart';
+
+import '../models/bias_profile.dart';
 import '../services/api_service.dart';
+import '../utils/score_helpers.dart';
 import 'settings_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
@@ -16,7 +19,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   final ApiService _apiService = ApiService();
   final user = FirebaseAuth.instance.currentUser;
 
-  Map<String, dynamic>? _profile;
+  BiasProfile? _profile;
   bool _loading = true;
   String? _errorMessage;
 
@@ -48,45 +51,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
-  Color _getBiasColor(double bias) {
-    if (bias < -0.3) return Colors.blue[700]!;
-    if (bias > 0.3) return Colors.red[700]!;
-    return Colors.purple[400]!;
-  }
-
-  String _getBiasLabel(double bias) {
-    if (bias < -0.5) return 'Left';
-    if (bias < -0.2) return 'Center-Left';
-    if (bias < 0.2) return 'Center';
-    if (bias < 0.5) return 'Center-Right';
-    return 'Right';
-  }
-
-  String _getSentimentLabelFromCounts() {
-    final pos = (_profile?['positive_count'] ?? 0) as int;
-    final neu = (_profile?['neutral_count'] ?? 0) as int;
-    final neg = (_profile?['negative_count'] ?? 0) as int;
-
-    if (pos == 0 && neu == 0 && neg == 0) return 'Neutral';
-
-    if (pos >= neu && pos >= neg) return 'Positive';
-    if (neg >= pos && neg >= neu) return 'Negative';
-    return 'Neutral';
-  }
-
-  Color _getSentimentColorFromCounts() {
-    final label = _getSentimentLabelFromCounts();
-    if (label == 'Positive') return Colors.green[600]!;
-    if (label == 'Negative') return Colors.orange[600]!;
-    return Colors.grey[600]!;
-  }
+  // ── Build ─────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      );
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
     if (_errorMessage != null) {
@@ -110,46 +80,26 @@ class _ProfileScreenState extends State<ProfileScreen> {
       );
     }
 
-    if (_profile == null || (_profile!['total_articles_read'] ?? 0) == 0) {
+    if (_profile == null || _profile!.isEmpty) {
       return Scaffold(
         appBar: AppBar(
           title: const Text('My Profile'),
-          actions: [
-            IconButton(
-              icon: const Icon(Icons.settings),
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => const SettingsScreen(),
-                  ),
-                );
-              },
-            ),
-          ],
+          actions: [_settingsButton()],
         ),
         body: Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(
-                Icons.auto_stories,
-                size: 80,
-                color: Colors.grey.shade400,
-              ),
+              Icon(Icons.auto_stories, size: 80, color: Colors.grey.shade400),
               const SizedBox(height: 16),
               Text(
                 'Start reading articles to see your profile!',
-                style: TextStyle(
-                  fontSize: 16,
-                  color: Colors.grey.shade600,
-                ),
+                style: TextStyle(fontSize: 16, color: Colors.grey.shade600),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 24),
               ElevatedButton.icon(
-                onPressed: () {
-                },
+                onPressed: () {},
                 icon: const Icon(Icons.article),
                 label: const Text('Browse Articles'),
               ),
@@ -168,18 +118,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             onPressed: _loadProfile,
             tooltip: 'Refresh',
           ),
-          IconButton(
-            icon: const Icon(Icons.settings),
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => const SettingsScreen(),
-                ),
-              );
-            },
-            tooltip: 'Settings',
-          ),
+          _settingsButton(),
         ],
       ),
       body: RefreshIndicator(
@@ -208,6 +147,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
+  // ── Widgets ───────────────────────────────────────────────────────────────
+
+  Widget _settingsButton() {
+    return IconButton(
+      icon: const Icon(Icons.settings),
+      tooltip: 'Settings',
+      onPressed: () => Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const SettingsScreen()),
+      ),
+    );
+  }
+
   Widget _buildUserHeader() {
     return Row(
       children: [
@@ -229,9 +181,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
             children: [
               Text(
                 user?.displayName ?? 'Reader',
-                style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                      fontWeight: FontWeight.bold,
-                    ),
+                style: Theme.of(context)
+                    .textTheme
+                    .titleLarge
+                    ?.copyWith(fontWeight: FontWeight.bold),
               ),
               if (user?.email != null)
                 Text(
@@ -248,12 +201,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Widget _buildStatCards() {
-    final bias = ((_profile!['avg_bias'] ?? 0.0) as num).toDouble();
-    final total = (_profile!['total_articles_read'] ?? 0) as int;
-    final minutes = (_profile!['reading_time_total_minutes'] ?? 0) as int;
-
-    final sentimentLabel = _getSentimentLabelFromCounts();
-    final sentimentColor = _getSentimentColorFromCounts();
+    final p = _profile!;
+    final sentimentColor = p.sentimentLabel == 'Positive'
+        ? Colors.green[600]!
+        : p.sentimentLabel == 'Negative'
+            ? Colors.orange[600]!
+            : Colors.grey[600]!;
 
     return Column(
       children: [
@@ -262,8 +215,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
             Expanded(
               child: _buildStatCard(
                 'Your Leaning',
-                _getBiasLabel(bias),
-                _getBiasColor(bias),
+                getBiasLabel(p.avgBias),
+                getBiasColor(p.avgBias),
                 Icons.balance,
               ),
             ),
@@ -271,7 +224,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             Expanded(
               child: _buildStatCard(
                 'Avg Sentiment',
-                sentimentLabel,
+                p.sentimentLabel,
                 sentimentColor,
                 Icons.sentiment_satisfied,
               ),
@@ -284,7 +237,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             Expanded(
               child: _buildStatCard(
                 'Articles Read',
-                '$total',
+                '${p.totalArticlesRead}',
                 Colors.blue,
                 Icons.article,
               ),
@@ -293,7 +246,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             Expanded(
               child: _buildStatCard(
                 'Reading Time',
-                '${minutes}min',
+                '${p.readingTimeTotalMinutes}min',
                 Colors.purple,
                 Icons.timer,
               ),
@@ -349,11 +302,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Widget _buildPieChart() {
-    final dist =
-        (_profile!['bias_distribution'] ?? <String, dynamic>{}) as Map<String, dynamic>;
-    final left = ((dist['left'] ?? 0) as num).toDouble();
-    final center = ((dist['center'] ?? 0) as num).toDouble();
-    final right = ((dist['right'] ?? 0) as num).toDouble();
+    final dist = _profile!.biasDistribution;
+    final left = dist['left'] ?? 0.0;
+    final center = dist['center'] ?? 0.0;
+    final right = dist['right'] ?? 0.0;
 
     return Card(
       elevation: 2,
@@ -431,49 +383,39 @@ class _ProfileScreenState extends State<ProfileScreen> {
         Container(
           width: 16,
           height: 16,
-          decoration: BoxDecoration(
-            color: color,
-            shape: BoxShape.circle,
-          ),
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
         ),
         const SizedBox(width: 4),
-        Text(
-          label,
-          style: const TextStyle(fontSize: 12),
-        ),
+        Text(label, style: const TextStyle(fontSize: 12)),
       ],
     );
   }
 
   Widget _buildDetailsCards() {
-    final leftCount = (_profile!['left_count'] ?? 0) as int;
-    final centerCount = (_profile!['center_count'] ?? 0) as int;
-    final rightCount = (_profile!['right_count'] ?? 0) as int;
-    final mostRead = (_profile!['most_read_source'] ?? 'N/A') as String;
-
+    final p = _profile!;
     return Column(
       children: [
         _buildDetailCard(
           'Left-leaning articles',
-          '$leftCount',
+          '${p.leftCount}',
           Colors.blue[700]!,
           Icons.trending_down,
         ),
         _buildDetailCard(
           'Center articles',
-          '$centerCount',
+          '${p.centerCount}',
           Colors.purple[400]!,
           Icons.trending_flat,
         ),
         _buildDetailCard(
           'Right-leaning articles',
-          '$rightCount',
+          '${p.rightCount}',
           Colors.red[700]!,
           Icons.trending_up,
         ),
         _buildDetailCard(
           'Most read source',
-          mostRead,
+          p.mostReadSource,
           Colors.indigo[600]!,
           Icons.bookmark,
         ),
@@ -511,10 +453,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Widget _buildSectionTitle(String title) {
     return Text(
       title,
-      style: const TextStyle(
-        fontSize: 20,
-        fontWeight: FontWeight.bold,
-      ),
+      style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
     );
   }
 }

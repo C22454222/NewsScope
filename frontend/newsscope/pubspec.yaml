@@ -1,3 +1,4 @@
+# pubspec.yaml
 name: newsscope
 description: "NewsScope - A global, bias-aware news aggregator."
 publish_to: 'none'
@@ -17,9 +18,6 @@ dependencies:
   # State management
   provider: ^6.1.2
 
-  # Maps & geolocation
-  flutter_map: ^8.2.2
-
   # Charts & data visualization
   fl_chart: ^1.1.1
 
@@ -30,9 +28,6 @@ dependencies:
   firebase_core: ^4.2.1
   firebase_auth: ^6.1.2
   google_sign_in: ^5.4.2
-
-  # Supabase
-  supabase_flutter: ^2.0.0
 
   # Utilities
   url_launcher: ^6.2.0

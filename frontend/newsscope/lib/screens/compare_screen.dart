@@ -1,21 +1,21 @@
+// lib/screens/compare_screen.dart
 import 'package:flutter/material.dart';
+
 import '../services/api_service.dart';
-import 'article_detail_screen.dart';
+import '../screens/article_detail_screen.dart';
+import '../utils/score_helpers.dart';
+import '../widgets/bias_chip.dart';
 
 class CompareScreen extends StatefulWidget {
   final VoidCallback onArticleRead;
 
-  const CompareScreen({
-    super.key,
-    required this.onArticleRead,
-  });
+  const CompareScreen({super.key, required this.onArticleRead});
 
   @override
   State<CompareScreen> createState() => _CompareScreenState();
 }
 
-class _CompareScreenState extends State<CompareScreen>
-    with SingleTickerProviderStateMixin {
+class _CompareScreenState extends State<CompareScreen> {
   final TextEditingController _searchController = TextEditingController();
   final ApiService _apiService = ApiService();
 
@@ -35,6 +35,12 @@ class _CompareScreenState extends State<CompareScreen>
     'Health',
     'Science',
   ];
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
 
   Future<void> _searchTopic() async {
     final topic = _searchController.text.trim();
@@ -72,32 +78,8 @@ class _CompareScreenState extends State<CompareScreen>
   }
 
   void _onCategorySelected(String label) {
-    setState(() {
-      _selectedCategory = label == 'All' ? null : label;
-    });
-    if (_searchController.text.isNotEmpty) {
-      _searchTopic();
-    }
-  }
-
-  Color _getBiasColor(double? score) {
-    if (score == null) return Colors.grey[300]!;
-    if (score < -0.3) return Colors.blue[700]!;
-    if (score > 0.3) return Colors.red[700]!;
-    return Colors.purple[400]!;
-  }
-
-  String _getBiasLabel(double? score) {
-    if (score == null) return 'Unscored';
-    if (score < -0.3) return 'Left';
-    if (score > 0.3) return 'Right';
-    return 'Center';
-  }
-
-  String _formatCategory(String? category) {
-    if (category == null || category.isEmpty) return 'General';
-    final c = category.toLowerCase();
-    return c[0].toUpperCase() + c.substring(1);
+    setState(() => _selectedCategory = label == 'All' ? null : label);
+    if (_searchController.text.isNotEmpty) _searchTopic();
   }
 
   Widget _buildArticleList(List<dynamic>? articles) {
@@ -119,6 +101,9 @@ class _CompareScreenState extends State<CompareScreen>
       itemCount: articles.length,
       itemBuilder: (context, index) {
         final article = articles[index];
+        final biasScore = (article['bias_score'] as num?)?.toDouble();
+        final biasIntensity =
+            (article['bias_intensity'] as num?)?.toDouble();
 
         return Card(
           margin: const EdgeInsets.only(bottom: 12),
@@ -136,7 +121,7 @@ class _CompareScreenState extends State<CompareScreen>
                 if (article['category'] != null) ...[
                   const SizedBox(height: 4),
                   Text(
-                    _formatCategory(article['category']),
+                    formatCategory(article['category'] as String?),
                     style: TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w500,
@@ -145,35 +130,9 @@ class _CompareScreenState extends State<CompareScreen>
                   ),
                 ],
                 const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Chip(
-                      label: Text(
-                        _getBiasLabel(
-                          (article['bias_score'] as num?)?.toDouble(),
-                        ),
-                      ),
-                      backgroundColor: _getBiasColor(
-                        (article['bias_score'] as num?)?.toDouble(),
-                      ).withAlpha((255 * 0.2).round()),
-                      labelStyle: TextStyle(
-                        fontSize: 10,
-                        color: _getBiasColor(
-                          (article['bias_score'] as num?)?.toDouble(),
-                        ),
-                      ),
-                    ),
-                    if (article['bias_intensity'] != null)
-                      const SizedBox(width: 8),
-                    if (article['bias_intensity'] != null)
-                      Text(
-                        '${(((article['bias_intensity'] ?? 0) as num) * 100).round()}% biased',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey,
-                        ),
-                      ),
-                  ],
+                BiasChip(
+                  biasScore: biasScore,
+                  biasIntensity: biasIntensity,
                 ),
               ],
             ),
@@ -183,16 +142,27 @@ class _CompareScreenState extends State<CompareScreen>
                 context,
                 MaterialPageRoute(
                   builder: (_) => ArticleDetailScreen(
-                    id: article['id'],
+                    id: article['id']?.toString() ?? '',
                     title: article['title'] ?? 'Untitled',
                     sourceName: article['source'] ?? 'Unknown',
-                    content: article['content'],
+                    content: article['content'] as String?,
                     url: article['url'] ?? '',
-                    biasScore: (article['bias_score'] as num?)?.toDouble(),
-                    biasIntensity:
-                        (article['bias_intensity'] as num?)?.toDouble(),
+                    biasScore: biasScore,
+                    biasIntensity: biasIntensity,
                     sentimentScore:
                         (article['sentiment_score'] as num?)?.toDouble(),
+                    credibilityScore:
+                        (article['credibility_score'] as num?)?.toDouble(),
+                    factChecks: article['fact_checks'] is Map
+                        ? Map<String, dynamic>.from(
+                            article['fact_checks'] as Map,
+                          )
+                        : null,
+                    claimsChecked:
+                        (article['claims_checked'] as num?)?.toInt(),
+                    credibilityReason:
+                        article['credibility_reason'] as String?,
+                    generalBias: article['general_bias'] as String?,
                   ),
                 ),
               );
@@ -220,10 +190,7 @@ class _CompareScreenState extends State<CompareScreen>
       children: [
         Text(
           'Results for "${_results!['topic']}"',
-          style: const TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.bold,
-          ),
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
         ),
         const SizedBox(height: 4),
         Text(
@@ -231,6 +198,8 @@ class _CompareScreenState extends State<CompareScreen>
           style: const TextStyle(color: Colors.grey),
         ),
         const SizedBox(height: 12),
+
+        // Category filter chips
         SizedBox(
           height: 40,
           child: ListView.separated(
@@ -249,7 +218,9 @@ class _CompareScreenState extends State<CompareScreen>
             },
           ),
         ),
+
         const SizedBox(height: 16),
+
         Expanded(
           child: DefaultTabController(
             length: 3,
@@ -272,7 +243,8 @@ class _CompareScreenState extends State<CompareScreen>
                       text: 'Centre (${centreArticles?.length ?? 0})',
                     ),
                     Tab(
-                      icon: Icon(Icons.arrow_forward, color: Colors.red[700]),
+                      icon:
+                          Icon(Icons.arrow_forward, color: Colors.red[700]),
                       text: 'Right (${rightArticles?.length ?? 0})',
                     ),
                   ],
@@ -298,9 +270,7 @@ class _CompareScreenState extends State<CompareScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Compare Coverage'),
-      ),
+      appBar: AppBar(title: const Text('Compare Coverage')),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
@@ -363,11 +333,5 @@ class _CompareScreenState extends State<CompareScreen>
         ),
       ),
     );
-  }
-
-  @override
-  void dispose() {
-    _searchController.dispose();
-    super.dispose();
   }
 }
