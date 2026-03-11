@@ -15,6 +15,11 @@ ever running simultaneously — replaces boolean flag which had a
 check-then-act race condition between APScheduler thread pool workers.
 Proven root cause of ConnectionTerminated + OOM crashes on free tier.
 
+Fact-checking runs via PolitiFact API — results stored in
+articles.fact_checks (JSONB) and articles.credibility_score.
+The legacy fact_checks table endpoint has been removed as nothing
+writes to that table — all fact-check data is on the articles row.
+
 Flake8: 0 errors/warnings.
 """
 
@@ -25,7 +30,7 @@ import threading
 from collections import Counter
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Optional
 
 import firebase_admin
 from apscheduler.triggers.cron import CronTrigger
@@ -46,7 +51,6 @@ from app.schemas import (
     BiasProfile,
     ComparisonRequest,
     ComparisonResponse,
-    FactCheck,
     ReadingHistoryCreate,
 )
 
@@ -674,21 +678,6 @@ async def compare_articles(request: ComparisonRequest):
             right_articles=right,
             total_found=len(articles_data),
         )
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
-
-
-@app.get("/api/fact-checks/{article_id}", response_model=List[FactCheck])
-async def get_article_fact_checks(article_id: str):
-    """Return stored fact-checks for a given article."""
-    try:
-        response = (
-            supabase.table("fact_checks")
-            .select("*")
-            .eq("article_id", article_id)
-            .execute()
-        )
-        return response.data
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
