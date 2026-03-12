@@ -6,9 +6,9 @@ import '../utils/score_helpers.dart';
 
 /// Reusable article card used by HomeFeedTab and CompareScreen.
 ///
-/// Displays title, source, date, category, bias chip, and sentiment
-/// chip. Calls [onTap] with the article when tapped. Stateless —
-/// all data comes from the Article model.
+/// Displays title, source, date, category, bias chip, sentiment chip,
+/// and credibility chip. Calls [onTap] with the article when tapped.
+/// Stateless — all data comes from the Article model.
 class ArticleCard extends StatelessWidget {
   final Article article;
   final VoidCallback onTap;
@@ -42,6 +42,7 @@ class ArticleCard extends StatelessWidget {
     final displayTitle = _sanitiseTitle(article.title, article.url);
     final biasColor = getBiasColor(article.biasScore);
     final sentimentColor = getSentimentColor(article.sentimentScore);
+    final credibilityColor = getCredibilityColor(article.credibilityScore);
 
     return Card(
       elevation: 2,
@@ -83,7 +84,10 @@ class ArticleCard extends StatelessWidget {
                   const SizedBox(width: 8),
                   Text(
                     _formatDate(article.publishedAt),
-                    style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Colors.grey[600],
+                    ),
                   ),
                 ],
               ),
@@ -103,8 +107,10 @@ class ArticleCard extends StatelessWidget {
 
               const SizedBox(height: 12),
 
-              // Bias + sentiment chips
-              Row(
+              // Bias + sentiment + credibility chips
+              Wrap(
+                spacing: 8,
+                runSpacing: 6,
                 children: [
                   if (article.biasScore != null)
                     _ScorePill(
@@ -112,27 +118,28 @@ class ArticleCard extends StatelessWidget {
                       color: biasColor,
                       icon: null,
                     ),
-                  if (article.biasScore != null &&
-                      article.sentimentScore != null)
-                    const SizedBox(width: 8),
                   if (article.sentimentScore != null)
                     _ScorePill(
                       label: getSentimentLabel(article.sentimentScore),
                       color: sentimentColor,
-                      icon: article.sentimentScore! > 0
+                      icon: (article.sentimentScore ?? 0) > 0
                           ? Icons.sentiment_satisfied
                           : Icons.sentiment_dissatisfied,
                     ),
-                  if (article.biasIntensity != null) ...[
-                    const SizedBox(width: 8),
-                    Text(
-                      '${(article.biasIntensity! * 100).round()}% biased',
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: Colors.grey[600],
-                      ),
+                  if (article.credibilityScore != null)
+                    _ScorePill(
+                      label:
+                          '${article.credibilityScore!.round()}% credible',
+                      color: credibilityColor,
+                      icon: Icons.fact_check_outlined,
                     ),
-                  ],
+                  if (article.biasIntensity != null)
+                    _ScorePill(
+                      label:
+                          '${(article.biasIntensity! * 100).round()}% biased',
+                      color: Colors.grey,
+                      icon: null,
+                    ),
                 ],
               ),
             ],

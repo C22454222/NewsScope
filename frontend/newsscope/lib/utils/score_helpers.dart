@@ -1,66 +1,67 @@
-// lib/utils/score_helpers.dart
 import 'package:flutter/material.dart';
 
-/// Shared colour and label helpers for bias, sentiment, and credibility scores.
-///
-/// Centralises logic previously duplicated across article_detail_screen,
-/// home_screen, compare_screen, and profile_screen. Import this file
-/// instead of re-implementing the same thresholds per screen.
+// ── Bias ──────────────────────────────────────────────────────────────────────
 
 Color getBiasColor(double? score) {
-  if (score == null) return Colors.grey[300]!;
-  if (score < -0.3) return Colors.blue[700]!;
-  if (score > 0.3) return Colors.red[700]!;
-  return Colors.purple[400]!;
+  if (score == null) return Colors.grey;
+  if (score > 0.3) return Colors.red;
+  if (score < -0.3) return Colors.blue;
+  return Colors.green;
 }
 
-/// Five-band label — matches backend _SOURCE_BIAS_MAP granularity.
-String getBiasLabel(double? score) {
-  if (score == null) return 'Unscored';
-  if (score < -0.5) return 'Left';
-  if (score < -0.2) return 'Center-Left';
-  if (score < 0.2) return 'Center';
-  if (score < 0.5) return 'Center-Right';
-  return 'Right';
-}
-
-/// Three-band label for list/card contexts where space is limited.
 String getBiasLabelShort(double? score) {
-  if (score == null) return 'Unscored';
-  if (score < -0.3) return 'Left';
+  if (score == null) return 'Unknown';
   if (score > 0.3) return 'Right';
-  return 'Center';
+  if (score < -0.3) return 'Left';
+  return 'Centre';
 }
+
+String getBiasLabel(double? score) {
+  if (score == null) return 'Unknown';
+  if (score > 0.6) return 'Far Right';
+  if (score > 0.3) return 'Right';
+  if (score > 0.1) return 'Centre Right';
+  if (score >= -0.1) return 'Centre';
+  if (score >= -0.3) return 'Centre Left';
+  if (score >= -0.6) return 'Left';
+  return 'Far Left';
+}
+
+// ── Sentiment ─────────────────────────────────────────────────────────────────
 
 Color getSentimentColor(double? score) {
   if (score == null) return Colors.grey;
-  if (score > 0.1) return Colors.green[700]!;
-  if (score < -0.1) return Colors.orange[800]!;
-  return Colors.grey[600]!;
+  if (score > 0.1) return Colors.green;
+  if (score < -0.1) return Colors.red;
+  return Colors.orange;
 }
 
 String getSentimentLabel(double? score) {
-  if (score == null) return '--';
+  if (score == null) return 'Neutral';
   if (score > 0.1) return 'Positive';
   if (score < -0.1) return 'Negative';
   return 'Neutral';
 }
 
+// ── Credibility ───────────────────────────────────────────────────────────────
+
+/// Green >= 70 (reliable), Orange >= 40 (mixed), Red < 40 (low credibility).
 Color getCredibilityColor(double? score) {
   if (score == null) return Colors.grey;
-  if (score >= 75) return Colors.green[700]!;
-  if (score >= 50) return Colors.orange[700]!;
-  return Colors.red[700]!;
+  if (score >= 70) return Colors.green;
+  if (score >= 40) return Colors.orange;
+  return Colors.red;
 }
 
 String getCredibilityLabel(double? score) {
   if (score == null) return 'Unverified';
-  if (score >= 75) return 'Credible';
-  if (score >= 50) return 'Mixed';
-  return 'Questionable';
+  if (score >= 70) return 'Reliable';
+  if (score >= 40) return 'Mixed';
+  return 'Low';
 }
 
-/// Map PolitiFact ruling strings to emoji indicators.
+/// Maps PolitiFact ruling strings to emoji indicators.
+/// Used by ArticleDetailScreen._buildFactCheckTile.
 String getRulingEmoji(String ruling) {
   final r = ruling.toLowerCase();
   if (r.contains('true') && !r.contains('mostly')) return '✅';
@@ -71,9 +72,11 @@ String getRulingEmoji(String ruling) {
   return '❓';
 }
 
-/// Title-case a raw category string from the backend.
+// ── Category ──────────────────────────────────────────────────────────────────
+
+/// Capitalises the first letter of a category string for display.
+/// Returns empty string for null or empty input.
 String formatCategory(String? category) {
-  if (category == null || category.isEmpty) return 'General';
-  final c = category.toLowerCase();
-  return c[0].toUpperCase() + c.substring(1);
+  if (category == null || category.isEmpty) return '';
+  return category[0].toUpperCase() + category.substring(1);
 }

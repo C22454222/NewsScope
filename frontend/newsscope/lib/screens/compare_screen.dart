@@ -61,7 +61,10 @@ class _CompareScreenState extends State<CompareScreen> {
     try {
       final results = await _apiService.compareArticles(
         topic,
-        category: _selectedCategory == 'All' ? null : _selectedCategory,
+        category:
+            (_selectedCategory == null || _selectedCategory == 'All')
+                ? null
+                : _selectedCategory!.toLowerCase(),
       );
       if (!mounted) return;
       setState(() {
@@ -104,6 +107,8 @@ class _CompareScreenState extends State<CompareScreen> {
         final biasScore = (article['bias_score'] as num?)?.toDouble();
         final biasIntensity =
             (article['bias_intensity'] as num?)?.toDouble();
+        final credibilityScore =
+            (article['credibility_score'] as num?)?.toDouble();
 
         return Card(
           margin: const EdgeInsets.only(bottom: 12),
@@ -130,9 +135,18 @@ class _CompareScreenState extends State<CompareScreen> {
                   ),
                 ],
                 const SizedBox(height: 8),
-                BiasChip(
-                  biasScore: biasScore,
-                  biasIntensity: biasIntensity,
+                // Bias + credibility chips
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 6,
+                  children: [
+                    BiasChip(
+                      biasScore: biasScore,
+                      biasIntensity: biasIntensity,
+                    ),
+                    if (credibilityScore != null)
+                      _CredibilityChip(score: credibilityScore),
+                  ],
                 ),
               ],
             ),
@@ -151,8 +165,7 @@ class _CompareScreenState extends State<CompareScreen> {
                     biasIntensity: biasIntensity,
                     sentimentScore:
                         (article['sentiment_score'] as num?)?.toDouble(),
-                    credibilityScore:
-                        (article['credibility_score'] as num?)?.toDouble(),
+                    credibilityScore: credibilityScore,
                     factChecks: article['fact_checks'] is Map
                         ? Map<String, dynamic>.from(
                             article['fact_checks'] as Map,
@@ -174,10 +187,14 @@ class _CompareScreenState extends State<CompareScreen> {
     );
   }
 
-  Widget _buildResultsWithTabs() {
+  Widget _buildResultsBody() {
     if (_results == null) {
       return const Center(
-        child: Text('Enter a topic above to start comparing.'),
+        child: Text(
+          'Enter a topic above to compare how\ndifferent outlets cover the same story.',
+          textAlign: TextAlign.center,
+          style: TextStyle(color: Colors.grey),
+        ),
       );
     }
 
@@ -190,37 +207,17 @@ class _CompareScreenState extends State<CompareScreen> {
       children: [
         Text(
           'Results for "${_results!['topic']}"',
-          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+          style: const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+          ),
         ),
         const SizedBox(height: 4),
         Text(
           '${_results!['total_found']} articles found',
           style: const TextStyle(color: Colors.grey),
         ),
-        const SizedBox(height: 12),
-
-        // Category filter chips
-        SizedBox(
-          height: 40,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            padding: EdgeInsets.zero,
-            itemCount: _categories.length,
-            separatorBuilder: (_, _) => const SizedBox(width: 8),
-            itemBuilder: (context, index) {
-              final label = _categories[index];
-              final isSelected = (_selectedCategory ?? 'All') == label;
-              return ChoiceChip(
-                label: Text(label),
-                selected: isSelected,
-                onSelected: (_) => _onCategorySelected(label),
-              );
-            },
-          ),
-        ),
-
         const SizedBox(height: 16),
-
         Expanded(
           child: DefaultTabController(
             length: 3,
@@ -232,7 +229,10 @@ class _CompareScreenState extends State<CompareScreen> {
                   indicatorColor: Theme.of(context).colorScheme.primary,
                   tabs: [
                     Tab(
-                      icon: Icon(Icons.arrow_back, color: Colors.blue[700]),
+                      icon: Icon(
+                        Icons.arrow_back,
+                        color: Colors.blue[700],
+                      ),
                       text: 'Left (${leftArticles?.length ?? 0})',
                     ),
                     Tab(
@@ -243,8 +243,10 @@ class _CompareScreenState extends State<CompareScreen> {
                       text: 'Centre (${centreArticles?.length ?? 0})',
                     ),
                     Tab(
-                      icon:
-                          Icon(Icons.arrow_forward, color: Colors.red[700]),
+                      icon: Icon(
+                        Icons.arrow_forward,
+                        color: Colors.red[700],
+                      ),
                       text: 'Right (${rightArticles?.length ?? 0})',
                     ),
                   ],
@@ -276,6 +278,30 @@ class _CompareScreenState extends State<CompareScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // Category chips — always visible, not gated behind results.
+            SizedBox(
+              height: 40,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                padding: EdgeInsets.zero,
+                itemCount: _categories.length,
+                separatorBuilder: (_,_) => const SizedBox(width: 8),
+                itemBuilder: (context, index) {
+                  final label = _categories[index];
+                  final isSelected =
+                      (_selectedCategory ?? 'All') == label;
+                  return ChoiceChip(
+                    label: Text(label),
+                    selected: isSelected,
+                    onSelected: (_) => _onCategorySelected(label),
+                  );
+                },
+              ),
+            ),
+
+            const SizedBox(height: 12),
+
+            // Search bar
             TextField(
               controller: _searchController,
               decoration: InputDecoration(
@@ -296,7 +322,9 @@ class _CompareScreenState extends State<CompareScreen> {
               ),
               onSubmitted: (_) => _searchTopic(),
             ),
+
             const SizedBox(height: 12),
+
             ElevatedButton.icon(
               onPressed: _isLoading ? null : _searchTopic,
               icon: const Icon(Icons.compare_arrows),
@@ -305,7 +333,9 @@ class _CompareScreenState extends State<CompareScreen> {
                 padding: const EdgeInsets.symmetric(vertical: 14),
               ),
             ),
+
             const SizedBox(height: 16),
+
             Expanded(
               child: _isLoading
                   ? const Center(child: CircularProgressIndicator())
@@ -327,10 +357,46 @@ class _CompareScreenState extends State<CompareScreen> {
                             ],
                           ),
                         )
-                      : _buildResultsWithTabs(),
+                      : _buildResultsBody(),
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Compact credibility chip for compare article tiles.
+class _CredibilityChip extends StatelessWidget {
+  final double score;
+
+  const _CredibilityChip({required this.score});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = getCredibilityColor(score);
+    final label = getCredibilityLabel(score);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withAlpha((255 * 0.15).round()),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.fact_check_outlined, size: 12, color: color),
+          const SizedBox(width: 4),
+          Text(
+            '${score.round()}% · $label',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+              color: color,
+            ),
+          ),
+        ],
       ),
     );
   }
