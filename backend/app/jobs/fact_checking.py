@@ -15,9 +15,15 @@ Claim extraction strategy:
 - Up to _MAX_CLAIMS additional sentences are extracted from content
   using numeric and proper-noun heuristics.
 - Total claims capped at _MAX_CLAIMS + 1 (title + extracted).
+- Sentences beginning with ADVERTISEMENT are skipped to prevent
+  boilerplate leaking into PolitiFact queries.
 
 PolitiFact calls reduced from 5 claims → 2 per article to halve
 the number of concurrent HTTP connections during factcheck batches.
+
+PolitiFact headers updated to browser-like User-Agent with Referer
+and Accept headers — plain "NewsScope/1.0" was being rejected.
+One retry with 2s backoff added per claim to handle transient errors.
 
 Credibility scoring formula:
 - Weighted average of PolitiFact ruling scores (0.0–1.0 per ruling).
@@ -42,6 +48,19 @@ from app.db.supabase import supabase
 # Reduced from 5 → 2 to halve concurrent PolitiFact HTTP connections
 # and reduce factcheck RAM overlap with analysis on Render free tier.
 _MAX_CLAIMS = 2
+
+# Browser-like headers for PolitiFact API — plain "NewsScope/1.0"
+# User-Agent was being rejected with connection errors on Render.
+# Referer and Accept headers added to match expected browser request.
+_POLITIFACT_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json, text/plain, */*",
+    "Referer": "https://www.politifact.com/",
+}
 
 
 # ── Content validation ────────────────────────────────────────────────────────
@@ -82,6 +101,7 @@ def extract_claims(title: str, content: str) -> List[str]:
     - Contains a capitalised proper noun (likely a named entity)
     - Is a declarative statement (not a question)
     - Is long enough to be meaningful (>= 40 chars)
+    - Does not begin with ADVERTISEMENT boilerplate
 
     Falls back to first two long declarative sentences if no
     heuristic-matched sentences are found.
@@ -102,7 +122,10 @@ def extract_claims(title: str, content: str) -> List[str]:
     for sent in raw_sentences:
         sent = sent.strip()
 
+        # Skip questions, very short sentences, and ad boilerplate.
         if sent.endswith("?") or len(sent) < 40:
+            continue
+        if re.match(r"^ADVERTISEMENT", sent, re.IGNORECASE):
             continue
 
         has_number = bool(re.search(r"\b\d+(?:[,.\d]+)?%?\b", sent))
@@ -116,11 +139,13 @@ def extract_claims(title: str, content: str) -> List[str]:
         if len(extracted) >= _MAX_CLAIMS:
             break
 
-    # Fallback: first two long declarative sentences.
+    # Fallback: first two long declarative non-ad sentences.
     if not extracted:
         for sent in raw_sentences:
             sent = sent.strip()
-            if len(sent) >= 40 and not sent.endswith("?"):
+            if (
+                len(sent) >= 40 and not sent.endswith("?") and not re.match(r"^ADVERTISEMENT", sent, re.IGNORECASE)
+            ):
                 extracted.append(sent)
             if len(extracted) >= _MAX_CLAIMS:
                 break
@@ -141,37 +166,55 @@ async def check_politifact_claims(
     Returns a dict mapping each claim to its top ruling and URL.
     Fails gracefully per claim — one API error does not abort the batch.
 
+    Uses browser-like headers (_POLITIFACT_HEADERS) — plain
+    "NewsScope/1.0" User-Agent was being rejected. One retry with
+    2s backoff added per claim to handle transient errors.
+
     Uses a single shared AsyncClient across all claims in the batch
     to avoid opening a new connection pool per claim.
     """
     results: Dict[str, Any] = {}
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    async with httpx.AsyncClient(
+        timeout=15.0, headers=_POLITIFACT_HEADERS
+    ) as client:
         for claim in claims:
-            try:
-                resp = await client.get(
-                    "https://www.politifact.com/api/statements/search/",
-                    params={"q": claim[:100]},
-                    headers={"User-Agent": "NewsScope/1.0"},
-                )
-                resp.raise_for_status()
-                data = resp.json()
-
-                if data.get("items"):
-                    top = data["items"][0]
-                    ruling = (
-                        top.get("ruling", {}).get("ruling", "Unknown")
+            for attempt in range(2):  # one retry on failure
+                try:
+                    resp = await client.get(
+                        "https://www.politifact.com/api/statements/search/",
+                        params={"q": claim[:100]},
                     )
-                    results[claim] = {
-                        "ruling": ruling,
-                        "url": top.get("url"),
-                        "speaker": top.get("speaker", "N/A"),
-                    }
-                else:
-                    results[claim] = {"ruling": "No match", "url": None}
+                    resp.raise_for_status()
+                    data = resp.json()
 
-            except Exception:
-                results[claim] = {"ruling": "API Error", "url": None}
+                    if data.get("items"):
+                        top = data["items"][0]
+                        ruling = (
+                            top.get("ruling", {}).get("ruling", "Unknown")
+                        )
+                        results[claim] = {
+                            "ruling": ruling,
+                            "url": top.get("url"),
+                            "speaker": top.get("speaker", "N/A"),
+                        }
+                    else:
+                        results[claim] = {
+                            "ruling": "No match",
+                            "url": None,
+                        }
+                    break  # success — stop retrying
+
+                except Exception:
+                    if attempt == 0:
+                        # Wait before retry.
+                        import asyncio
+                        await asyncio.sleep(2)
+                    else:
+                        results[claim] = {
+                            "ruling": "API Error",
+                            "url": None,
+                        }
 
     return results
 
@@ -255,9 +298,7 @@ async def compute_credibility_score(
     else:
         verdict = "low credibility"
 
-    reason = (
-        f"{positive}/{total} claims verified true. Rated {verdict}."
-    )
+    reason = f"{positive}/{total} claims verified true. Rated {verdict}."
 
     # Surface negative count in reason when present.
     if negative > 0:
