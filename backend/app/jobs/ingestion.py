@@ -1,7 +1,7 @@
 """
 NewsScope Ingestion Pipeline.
 
-Daily volume: ~7,104 articles fetched, ~4,262 new after dedup.
+Daily volume: ~1,920 articles fetched, ~1,152 new after dedup.
 Credibility fields seeded as defaults on insert; fact-checking
 runs async post-insert via safe loop wrapper with concurrency cap.
 
@@ -11,18 +11,24 @@ MEMORY FIX SUMMARY (v3):
 - _INSERT_CHUNK_SIZE reduced 10→5: chunk size now matches worker
   count more closely — previously 10 article dicts were held in
   the executor queue even though only 3 were being processed.
-- _FACTCHECK_DELAY_SECONDS = 300: factcheck_batch previously fired
+- _FACTCHECK_DELAY_SECONDS = 600: factcheck_batch previously fired
   immediately after ingestion while scraping RAM had not yet been
-  freed and analysis was running. 5 minute delay gives GC time to
+  freed and analysis was running. 10 minute delay gives GC time to
   clear ingestion RAM before factcheck Supabase fetches begin.
-- _FACTCHECK_CONCURRENCY reduced 3→2: each coroutine fetches a
-  full article row (content included) from Supabase. 2 concurrent
-  fetches vs 3 reduces peak RAM from factcheck overlap with analysis.
+- _FACTCHECK_CONCURRENCY = 1: fully sequential factcheck prevents
+  overlap between PolitiFact HTTP response buffers and analysis
+  HF calls. With _MAX_CLAIMS=2 per article this is fast enough.
 - Content stored in DB truncated to _CONTENT_STORE_LIMIT chars:
   full scraped content (can be 50-200KB per article) was being held
   in the payload dict until Supabase insert. Truncating to 5000 chars
   is sufficient for analysis (_TEXT_LIMIT=512) and display purposes
   while dramatically reducing per-payload RAM during batch insert.
+
+ENCODING FIX:
+- BeautifulSoup tiers now use response.text with apparent_encoding
+  fallback instead of raw response.content bytes. This prevents
+  Euronews and other sources that return gzip/brotli compressed
+  responses from storing binary blobs in the content column.
 
 Flake8: 0 errors/warnings.
 """
@@ -71,9 +77,9 @@ FEED_NAME_MAP = {
 # 2 workers ≈ 80-120MB peak vs 3 workers ≈ 150-200MB on Render free tier.
 _SCRAPE_WORKERS = 2
 
-# Reduced from 2→1 — fully sequential factcheck prevents any overlap
-# between PolitiFact HTTP response buffers and analysis HF calls.
-# With _MAX_CLAIMS=2 per article, one article at a time is fast enough.
+# Fully sequential factcheck prevents any overlap between PolitiFact
+# HTTP response buffers and analysis HF calls. With _MAX_CLAIMS=2 per
+# article, one article at a time is fast enough.
 _FACTCHECK_CONCURRENCY = 1
 
 # Reduced from 10 — previously 10 article dicts were held in the executor
@@ -83,8 +89,8 @@ _INSERT_CHUNK_SIZE = 5
 
 # Delay factcheck after ingestion completes — gives GC time to free
 # scraping RAM before factcheck Supabase fetches begin loading full
-# article rows. Increased from 300→600: 10 min gives analysis cycles
-# time to complete before PolitiFact HTTP calls begin.
+# article rows. 10 min gives analysis cycles time to complete before
+# PolitiFact HTTP calls begin.
 _FACTCHECK_DELAY_SECONDS = 600
 
 # Truncate content stored in DB — full scraped content can be 50-200KB
@@ -92,7 +98,7 @@ _FACTCHECK_DELAY_SECONDS = 600
 # Reduces per-payload RAM held during batch insert significantly.
 _CONTENT_STORE_LIMIT = 5000
 
-# Main event loop — captured at startup by set_main_event_loop()
+# Main event loop — captured at startup by set_main_event_loop().
 _main_event_loop: Optional[asyncio.AbstractEventLoop] = None
 
 
@@ -237,8 +243,12 @@ def fetch_content_newspaper(url: str) -> Optional[str]:
 def fetch_content_beautifulsoup(url: str) -> Optional[str]:
     """
     Tier 2: BeautifulSoup smart extraction — handles ~95% of sites.
+
+    Uses response.text with apparent_encoding fallback to ensure
+    compressed responses (gzip/brotli) are correctly decoded before
+    parsing. Prevents binary byte blobs being stored as article content.
     Uses html.parser (pure Python) instead of lxml to reduce RAM.
-    Response content deleted immediately after parsing.
+    Response closed and deleted immediately after parsing.
     """
     try:
         headers = {
@@ -262,7 +272,9 @@ def fetch_content_beautifulsoup(url: str) -> Optional[str]:
         )
         response.raise_for_status()
 
-        soup = BeautifulSoup(response.content, "html.parser")
+        # Decode correctly — prevents binary blobs from compressed sources.
+        response.encoding = response.apparent_encoding or "utf-8"
+        soup = BeautifulSoup(response.text, "html.parser")
         response.close()
         del response
 
@@ -359,6 +371,9 @@ def fetch_content_beautifulsoup(url: str) -> Optional[str]:
 def fetch_content_aggressive(url: str) -> Optional[str]:
     """
     Tier 3: Ultra-aggressive full-page text extraction.
+
+    Uses response.text with apparent_encoding fallback to ensure
+    compressed responses are correctly decoded before parsing.
     Uses html.parser to avoid lxml RAM overhead.
     """
     try:
@@ -370,7 +385,9 @@ def fetch_content_aggressive(url: str) -> Optional[str]:
         )
         response.raise_for_status()
 
-        soup = BeautifulSoup(response.content, "html.parser")
+        # Decode correctly — prevents binary blobs from compressed sources.
+        response.encoding = response.apparent_encoding or "utf-8"
+        soup = BeautifulSoup(response.text, "html.parser")
         response.close()
         del response
 
@@ -403,6 +420,9 @@ def fetch_content_with_retry(
 ) -> Optional[str]:
     """
     Tier 4: Retry with exponential backoff.
+
+    Uses response.text with apparent_encoding fallback to ensure
+    compressed responses are correctly decoded before parsing.
     Max retries capped at 2 to limit memory dwell time.
     Uses html.parser throughout — lxml removed to reduce RAM.
     """
@@ -434,7 +454,10 @@ def fetch_content_with_retry(
 
             response.raise_for_status()
 
-            soup = BeautifulSoup(response.content, "html.parser")
+            # Decode correctly — prevents binary blobs from compressed
+            # sources such as Euronews.
+            response.encoding = response.apparent_encoding or "utf-8"
+            soup = BeautifulSoup(response.text, "html.parser")
             response.close()
             del response
 
@@ -594,7 +617,7 @@ async def factcheck_batch(article_ids: List[str]) -> None:
     """
     Background async task: compute and persist credibility scores.
 
-    Semaphore caps concurrency at _FACTCHECK_CONCURRENCY=2 — prevents
+    Semaphore caps concurrency at _FACTCHECK_CONCURRENCY=1 — prevents
     simultaneous coroutines from spiking RAM after a large ingestion
     cycle on Render free tier (512MB). Each coroutine fetches a full
     article row from Supabase so uncapped parallelism causes OOM.
@@ -651,7 +674,9 @@ async def _delayed_factcheck(article_ids: List[str]) -> None:
         f"in {_FACTCHECK_DELAY_SECONDS}s..."
     )
     await asyncio.sleep(_FACTCHECK_DELAY_SECONDS)
-    print(f"Starting delayed fact-check for {len(article_ids)} articles...")
+    print(
+        f"Starting delayed fact-check for {len(article_ids)} articles..."
+    )
     await factcheck_batch(article_ids)
 
 
@@ -930,7 +955,6 @@ def run_ingestion_cycle() -> None:
     try:
         print(f"Total fetched: {len(articles)} articles")
         insert_articles_batch(articles)
-        # insert_articles_batch owns and deletes articles internally.
         articles = []
     except Exception as exc:
         print(f"Batch insert failed: {exc}")

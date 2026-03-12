@@ -1,5 +1,6 @@
 """
 NewsScope Pydantic schemas.
+
 Flake8: 0 errors/warnings.
 """
 
@@ -55,6 +56,9 @@ class ArticleResponse(ArticleBase):
     Extends ArticleBase with DB-generated fields and credibility/
     fact-check columns. extra='ignore' silently drops unknown
     Supabase columns so ArticleResponse(**row) is always safe.
+
+    credibility_reason is a plain human-readable string, e.g.
+    "2/3 claims verified true. Rated reliable." — never a tally.
     """
 
     id: Optional[str] = None
@@ -63,10 +67,13 @@ class ArticleResponse(ArticleBase):
     created_at: Optional[datetime] = None
     updated_at: Optional[str] = None
 
-    # Credibility + fact-checking fields
-    credibility_score: Optional[float] = 80.0
+    # Credibility + fact-checking fields.
+    # credibility_score starts at None — ingestion seeds 80.0 as a
+    # temporary default until fact_checking.py computes a real value.
+    credibility_score: Optional[float] = None
     fact_checks: Optional[Dict[str, Any]] = Field(default_factory=dict)
     claims_checked: Optional[int] = 0
+    # Human-readable verdict, e.g. "2/3 claims verified. Rated reliable."
     credibility_reason: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True, extra="ignore")

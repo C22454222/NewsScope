@@ -9,8 +9,20 @@ Claims are now extracted using simple sentence splitting and regex,
 which has near-zero RAM cost and produces comparable quality input
 for the PolitiFact API query.
 
+Claim extraction strategy:
+- Title is always included as claim 0 — it is the most concise and
+  fact-checkable representation of the article.
+- Up to _MAX_CLAIMS additional sentences are extracted from content
+  using numeric and proper-noun heuristics.
+- Total claims capped at _MAX_CLAIMS + 1 (title + extracted).
+
 PolitiFact calls reduced from 5 claims → 2 per article to halve
 the number of concurrent HTTP connections during factcheck batches.
+
+Credibility scoring formula:
+- Weighted average of PolitiFact ruling scores (0.0–1.0 per ruling).
+- score = (sum of ruling scores / total claims) * 100
+- Spans full 10–100 range — no hardcoded base anchor.
 
 Flake8: 0 errors/warnings.
 """
@@ -25,58 +37,95 @@ from app.schemas import ArticleResponse
 from app.db.supabase import supabase
 
 
-# Maximum claims to extract and check per article.
+# Maximum claims extracted from content (excluding title).
+# Title is always prepended, so total queries = _MAX_CLAIMS + 1 max.
 # Reduced from 5 → 2 to halve concurrent PolitiFact HTTP connections
 # and reduce factcheck RAM overlap with analysis on Render free tier.
 _MAX_CLAIMS = 2
 
 
+# ── Content validation ────────────────────────────────────────────────────────
+
+
+def _is_valid_content(text: str) -> bool:
+    """
+    Return True if text appears to be readable UTF-8, not binary.
+
+    Euronews and some sources return gzip-compressed bytes when the
+    scraper does not correctly decode the response. Binary blobs have
+    a very low ratio of printable ASCII characters — anything below
+    85% printable in the first 500 chars is treated as invalid and
+    excluded from claim extraction to prevent garbage reaching
+    the PolitiFact API.
+    """
+    if not text or len(text) < 40:
+        return False
+    sample = text[:500]
+    printable = sum(1 for c in sample if c.isprintable())
+    return (printable / len(sample)) > 0.85
+
+
 # ── Claim extraction ──────────────────────────────────────────────────────────
 
 
-def extract_claims(text: str) -> List[str]:
+def extract_claims(title: str, content: str) -> List[str]:
     """
-    Extract up to _MAX_CLAIMS verifiable claims from article text.
+    Extract up to _MAX_CLAIMS + 1 verifiable claims from an article.
 
-    Uses regex sentence splitting — no spaCy or NLP models loaded.
-    Prioritises sentences likely to contain verifiable facts:
+    Title is always included as claim 0 — it is the most concise,
+    consistently available, and fact-checkable part of any article.
+
+    Additional claims are extracted from content using regex sentence
+    splitting — no spaCy or NLP models loaded. Prioritises sentences
+    likely to contain verifiable facts:
     - Contains a number or percentage
     - Contains a capitalised proper noun (likely a named entity)
     - Is a declarative statement (not a question)
-    - Is long enough to be meaningful (> 40 chars)
+    - Is long enough to be meaningful (>= 40 chars)
+
+    Falls back to first two long declarative sentences if no
+    heuristic-matched sentences are found.
 
     Zero RAM overhead vs spaCy's 50MB+ model load.
     """
-    # Split on sentence boundaries.
-    raw_sentences = re.split(r"(?<=[.!?])\s+", text)
-
     claims: List[str] = []
+
+    if title and title.strip():
+        claims.append(title.strip())
+
+    if not content or not _is_valid_content(content):
+        return claims
+
+    raw_sentences = re.split(r"(?<=[.!?])\s+", content)
+    extracted: List[str] = []
+
     for sent in raw_sentences:
         sent = sent.strip()
 
-        # Skip questions and very short sentences.
         if sent.endswith("?") or len(sent) < 40:
             continue
 
-        # Prioritise sentences with numbers, percentages, or proper nouns.
         has_number = bool(re.search(r"\b\d+(?:[,.\d]+)?%?\b", sent))
-        has_proper_noun = bool(re.search(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b", sent))
+        has_proper_noun = bool(
+            re.search(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b", sent)
+        )
 
         if has_number or has_proper_noun:
-            claims.append(sent)
+            extracted.append(sent)
 
-        if len(claims) >= _MAX_CLAIMS:
+        if len(extracted) >= _MAX_CLAIMS:
             break
 
-    # If nothing matched, fall back to first two long sentences.
-    if not claims:
+    # Fallback: first two long declarative sentences.
+    if not extracted:
         for sent in raw_sentences:
             sent = sent.strip()
             if len(sent) >= 40 and not sent.endswith("?"):
-                claims.append(sent)
-            if len(claims) >= _MAX_CLAIMS:
+                extracted.append(sent)
+            if len(extracted) >= _MAX_CLAIMS:
                 break
 
+    claims.extend(extracted)
     return claims
 
 
@@ -88,6 +137,7 @@ async def check_politifact_claims(
 ) -> Dict[str, Any]:
     """
     Query PolitiFact public search API for each extracted claim.
+
     Returns a dict mapping each claim to its top ruling and URL.
     Fails gracefully per claim — one API error does not abort the batch.
 
@@ -109,7 +159,9 @@ async def check_politifact_claims(
 
                 if data.get("items"):
                     top = data["items"][0]
-                    ruling = top.get("ruling", {}).get("ruling", "Unknown")
+                    ruling = (
+                        top.get("ruling", {}).get("ruling", "Unknown")
+                    )
                     results[claim] = {
                         "ruling": ruling,
                         "url": top.get("url"),
@@ -130,7 +182,9 @@ async def check_politifact_claims(
 def ruling_to_score(ruling: str) -> float:
     """
     Convert a PolitiFact ruling string to a normalised credibility score.
+
     Returns a float between 0.0 (least credible) and 1.0 (most credible).
+    Ambiguous or error rulings return 0.5 (neutral).
     """
     r = ruling.lower()
     if "true" in r and "mostly" not in r:
@@ -153,28 +207,29 @@ async def compute_credibility_score(
     article: ArticleResponse,
 ) -> Dict[str, Any]:
     """
-    Compute a credibility score (0-100) for a given article.
-    Uses claim extraction + PolitiFact verification as primary signal.
-    Falls back to a default of 85.0 for short articles or when no
-    verifiable claims are found.
+    Compute a credibility score (0–100) for a given article.
+
+    Scoring formula:
+      score = (mean PolitiFact ruling score) * 100
+
+    Where each ruling is normalised to 0.0–1.0 via ruling_to_score().
+    This spans the full 10–100 range — there is no hardcoded base anchor.
+
+    Falls back to a default of 70.0 (neutral/unknown) when:
+    - Article text is too short to extract claims from
+    - No claims could be extracted from title or content
+
+    credibility_reason is always a human-readable string, never a tally.
     """
-    text = " ".join(
-        filter(None, [article.title, article.description, article.content])
-    ).strip()
+    claims = extract_claims(
+        title=article.title or "",
+        content=article.content or "",
+    )
 
-    if len(text) < 100:
-        return {
-            "score": 85.0,
-            "reason": "Short article, credible source",
-            "fact_checks": {},
-            "claims_checked": 0,
-        }
-
-    claims = extract_claims(text)
     if not claims:
         return {
-            "score": 85.0,
-            "reason": "No claims extracted",
+            "score": 70.0,
+            "reason": "No claims extracted. Score is neutral default.",
             "fact_checks": {},
             "claims_checked": 0,
         }
@@ -182,19 +237,40 @@ async def compute_credibility_score(
     fact_checks = await check_politifact_claims(claims)
     scores = [ruling_to_score(r["ruling"]) for r in fact_checks.values()]
 
+    if scores:
+        fact_score = sum(scores) / len(scores)
+    else:
+        fact_score = 0.5
+
+    score = round(max(10.0, min(100.0, fact_score * 100)), 2)
+
     positive = sum(1 for s in scores if s >= 0.7)
     negative = sum(1 for s in scores if s < 0.3)
+    total = len(claims)
 
-    base = 80.0
-    bonus = (positive / len(claims)) * 15
-    penalty = (negative / len(claims)) * 25
-    score = max(10.0, round(base + bonus - penalty, 2))
+    if score >= 70:
+        verdict = "reliable"
+    elif score >= 40:
+        verdict = "mixed"
+    else:
+        verdict = "low credibility"
+
+    reason = (
+        f"{positive}/{total} claims verified true. Rated {verdict}."
+    )
+
+    # Surface negative count in reason when present.
+    if negative > 0:
+        reason = (
+            f"{positive}/{total} claims verified true, "
+            f"{negative} false. Rated {verdict}."
+        )
 
     return {
         "score": score,
         "fact_checks": fact_checks,
-        "claims_checked": len(claims),
-        "reason": f"{positive}+/{negative}-/{len(claims)}",
+        "claims_checked": total,
+        "reason": reason,
     }
 
 
@@ -207,7 +283,12 @@ async def batch_factcheck_recent(
     """
     Re-fact-check articles published in the last `hours` hours
     whose credibility score is at or below 80.1.
-    Persists updated scores, fact_checks, and reason to Supabase.
+
+    Articles seeded with the ingestion default of 80.0 are caught
+    by the <= 80.1 threshold and re-scored with real PolitiFact data.
+    Persists updated score, fact_checks, claims_checked, and
+    credibility_reason to Supabase.
+
     Returns a list of result dicts keyed by article ID.
     """
     cutoff = (
