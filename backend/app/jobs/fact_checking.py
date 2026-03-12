@@ -15,8 +15,8 @@ Claim extraction strategy:
 - Up to _MAX_CLAIMS additional sentences are extracted from content
   using numeric and proper-noun heuristics.
 - Total claims capped at _MAX_CLAIMS + 1 (title + extracted).
-- Sentences beginning with ADVERTISEMENT are skipped to prevent
-  boilerplate leaking into PolitiFact queries.
+- Sentences matching _BOILERPLATE_RE are skipped to prevent Fox News
+  and other site chrome leaking into PolitiFact queries.
 
 PolitiFact calls reduced from 5 claims → 2 per article to halve
 the number of concurrent HTTP connections during factcheck batches.
@@ -26,13 +26,17 @@ and Accept headers — plain "NewsScope/1.0" was being rejected.
 One retry with 2s backoff added per claim to handle transient errors.
 
 Credibility scoring formula:
-- Weighted average of PolitiFact ruling scores (0.0–1.0 per ruling).
-- score = (sum of ruling scores / total claims) * 100
-- Spans full 10–100 range — no hardcoded base anchor.
+- Weighted average of valid PolitiFact ruling scores (0.0–1.0).
+- API Error and No match rulings are excluded from the mean —
+  they are not false claims, just unverifiable.
+- score = (sum of valid scores / valid count) * 100
+- Falls back to 50.0 neutral when all claims errored.
+- Falls back to 70.0 default when no claims could be extracted.
 
 Flake8: 0 errors/warnings.
 """
 
+import asyncio
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -61,6 +65,23 @@ _POLITIFACT_HEADERS = {
     "Accept": "application/json, text/plain, */*",
     "Referer": "https://www.politifact.com/",
 }
+
+# Boilerplate patterns to skip during claim extraction.
+# Covers Fox News UI chrome (NEW, close, Video), generic ad copy,
+# photo captions (Photograph:, Getty Images) and common site furniture
+# that leaks into scraped content from NewsAPI and RSS sources.
+_BOILERPLATE_RE = re.compile(
+    r"^("
+    r"NEW\b|close\b|Video|Watch|Listen|"
+    r"Advertisement|ADVERTISEMENT|"
+    r"You can now listen|Follow on|Follow us|"
+    r"Subscribe|Sign up|Click here|"
+    r"Fox News Digital|Share this|Read more|"
+    r"Send tips|Previous bylines|"
+    r"Getty Images|Photograph:"
+    r")",
+    re.IGNORECASE,
+)
 
 
 # ── Content validation ────────────────────────────────────────────────────────
@@ -101,10 +122,10 @@ def extract_claims(title: str, content: str) -> List[str]:
     - Contains a capitalised proper noun (likely a named entity)
     - Is a declarative statement (not a question)
     - Is long enough to be meaningful (>= 40 chars)
-    - Does not begin with ADVERTISEMENT boilerplate
+    - Does not match _BOILERPLATE_RE (Fox News chrome, ad copy, etc.)
 
-    Falls back to first two long declarative sentences if no
-    heuristic-matched sentences are found.
+    Falls back to first two long declarative non-boilerplate sentences
+    if no heuristic-matched sentences are found.
 
     Zero RAM overhead vs spaCy's 50MB+ model load.
     """
@@ -122,13 +143,14 @@ def extract_claims(title: str, content: str) -> List[str]:
     for sent in raw_sentences:
         sent = sent.strip()
 
-        # Skip questions, very short sentences, and ad boilerplate.
         if sent.endswith("?") or len(sent) < 40:
             continue
-        if re.match(r"^ADVERTISEMENT", sent, re.IGNORECASE):
+        if _BOILERPLATE_RE.match(sent):
             continue
 
-        has_number = bool(re.search(r"\b\d+(?:[,.\d]+)?%?\b", sent))
+        has_number = bool(
+            re.search(r"\b\d+(?:[,.\d]+)?%?\b", sent)
+        )
         has_proper_noun = bool(
             re.search(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b", sent)
         )
@@ -139,12 +161,12 @@ def extract_claims(title: str, content: str) -> List[str]:
         if len(extracted) >= _MAX_CLAIMS:
             break
 
-    # Fallback: first two long declarative non-ad sentences.
+    # Fallback: first two long declarative non-boilerplate sentences.
     if not extracted:
         for sent in raw_sentences:
             sent = sent.strip()
             if (
-                len(sent) >= 40 and not sent.endswith("?") and not re.match(r"^ADVERTISEMENT", sent, re.IGNORECASE)
+                len(sent) >= 40 and not sent.endswith("?") and not _BOILERPLATE_RE.match(sent)
             ):
                 extracted.append(sent)
             if len(extracted) >= _MAX_CLAIMS:
@@ -179,10 +201,11 @@ async def check_politifact_claims(
         timeout=15.0, headers=_POLITIFACT_HEADERS
     ) as client:
         for claim in claims:
-            for attempt in range(2):  # one retry on failure
+            for attempt in range(2):
                 try:
                     resp = await client.get(
-                        "https://www.politifact.com/api/statements/search/",
+                        "https://www.politifact.com/api/statements/"
+                        "search/",
                         params={"q": claim[:100]},
                     )
                     resp.raise_for_status()
@@ -191,7 +214,8 @@ async def check_politifact_claims(
                     if data.get("items"):
                         top = data["items"][0]
                         ruling = (
-                            top.get("ruling", {}).get("ruling", "Unknown")
+                            top.get("ruling", {})
+                            .get("ruling", "Unknown")
                         )
                         results[claim] = {
                             "ruling": ruling,
@@ -203,12 +227,10 @@ async def check_politifact_claims(
                             "ruling": "No match",
                             "url": None,
                         }
-                    break  # success — stop retrying
+                    break
 
                 except Exception:
                     if attempt == 0:
-                        # Wait before retry.
-                        import asyncio
                         await asyncio.sleep(2)
                     else:
                         results[claim] = {
@@ -222,14 +244,18 @@ async def check_politifact_claims(
 # ── Ruling normalisation ──────────────────────────────────────────────────────
 
 
-def ruling_to_score(ruling: str) -> float:
+def ruling_to_score(ruling: str) -> Optional[float]:
     """
     Convert a PolitiFact ruling string to a normalised credibility score.
 
-    Returns a float between 0.0 (least credible) and 1.0 (most credible).
-    Ambiguous or error rulings return 0.5 (neutral).
+    Returns float 0.0–1.0 for known rulings.
+    Returns None for API Error and No match — these are excluded from
+    the credibility mean so they do not drag all scores to 50.0 when
+    PolitiFact is unreachable or returns no matching fact-check.
     """
     r = ruling.lower()
+    if "error" in r or "no match" in r:
+        return None
     if "true" in r and "mostly" not in r:
         return 1.0
     if "mostly true" in r:
@@ -253,16 +279,14 @@ async def compute_credibility_score(
     Compute a credibility score (0–100) for a given article.
 
     Scoring formula:
-      score = (mean PolitiFact ruling score) * 100
+      score = (mean of valid PolitiFact ruling scores) * 100
 
-    Where each ruling is normalised to 0.0–1.0 via ruling_to_score().
-    This spans the full 10–100 range — there is no hardcoded base anchor.
+    API Error and No match rulings return None from ruling_to_score()
+    and are excluded from the mean — they are not counted as false
+    claims, just unverifiable. Falls back to 50.0 neutral when all
+    claims errored or no PolitiFact match was found.
 
-    Falls back to a default of 70.0 (neutral/unknown) when:
-    - Article text is too short to extract claims from
-    - No claims could be extracted from title or content
-
-    credibility_reason is always a human-readable string, never a tally.
+    Falls back to 70.0 default when no claims could be extracted.
     """
     claims = extract_claims(
         title=article.title or "",
@@ -278,13 +302,15 @@ async def compute_credibility_score(
         }
 
     fact_checks = await check_politifact_claims(claims)
-    scores = [ruling_to_score(r["ruling"]) for r in fact_checks.values()]
 
-    if scores:
-        fact_score = sum(scores) / len(scores)
-    else:
-        fact_score = 0.5
+    # Exclude None (API Error / No match) from mean calculation.
+    scores = [
+        s for s in
+        (ruling_to_score(r["ruling"]) for r in fact_checks.values())
+        if s is not None
+    ]
 
+    fact_score = (sum(scores) / len(scores)) if scores else 0.5
     score = round(max(10.0, min(100.0, fact_score * 100)), 2)
 
     positive = sum(1 for s in scores if s >= 0.7)
@@ -300,7 +326,6 @@ async def compute_credibility_score(
 
     reason = f"{positive}/{total} claims verified true. Rated {verdict}."
 
-    # Surface negative count in reason when present.
     if negative > 0:
         reason = (
             f"{positive}/{total} claims verified true, "

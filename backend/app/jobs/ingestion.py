@@ -30,6 +30,14 @@ ENCODING FIX:
   Euronews and other sources that return gzip/brotli compressed
   responses from storing binary blobs in the content column.
 
+BINARY GUARD (v4):
+- _is_readable_content() validates content before Supabase insert.
+  apparent_encoding detection occasionally fails for Euronews even
+  with the encoding fix applied. A printable-ratio check on the first
+  500 chars catches any remaining blobs — content below 85% printable
+  is replaced with the title-based fallback before insert, so binary
+  data never reaches Supabase or the PolitiFact pipeline.
+
 Flake8: 0 errors/warnings.
 """
 
@@ -100,6 +108,30 @@ _CONTENT_STORE_LIMIT = 5000
 
 # Main event loop — captured at startup by set_main_event_loop().
 _main_event_loop: Optional[asyncio.AbstractEventLoop] = None
+
+
+# ── Content validation ────────────────────────────────────────────────────────
+
+
+def _is_readable_content(text: str) -> bool:
+    """
+    Return True if text is readable UTF-8, not binary data.
+
+    Euronews and some compressed sources occasionally return binary
+    blobs even after apparent_encoding is applied. A printable-ratio
+    check on the first 500 chars catches remaining blobs — anything
+    below 85% printable ASCII is treated as binary and rejected before
+    it reaches Supabase or the PolitiFact pipeline.
+
+    Duplicated from fact_checking._is_valid_content to avoid a
+    circular import — ingestion imports fact_checking lazily inside
+    factcheck_batch to prevent module-load side effects.
+    """
+    if not text or len(text) < 40:
+        return False
+    sample = text[:500]
+    printable = sum(1 for c in sample if c.isprintable())
+    return (printable / len(sample)) > 0.85
 
 
 # ── Event loop bridge ─────────────────────────────────────────────────────────
@@ -554,6 +586,12 @@ def _scrape_one(article: Dict[str, Any]) -> Dict[str, Any]:
     Scrape a single article and return it enriched with content.
     Runs inside a ThreadPoolExecutor worker.
 
+    Content is validated with _is_readable_content() before insert —
+    apparent_encoding detection occasionally fails for Euronews even
+    with the encoding fix applied. Any binary blob that slips through
+    is replaced with the title-based fallback here, so binary data
+    never reaches Supabase or the PolitiFact pipeline.
+
     Content is truncated to _CONTENT_STORE_LIMIT before building
     the result dict — full scraped pages can be 50-200KB each and
     holding them in memory across the chunk insert cycle causes
@@ -563,13 +601,26 @@ def _scrape_one(article: Dict[str, Any]) -> Dict[str, Any]:
     gc.collect() called before returning to free parse tree RAM promptly.
     """
     source_name_val = article.get("source")
+    title_val = article.get("title", "")
+
     content = fetch_content(
         article["url"],
-        title=article.get("title", ""),
+        title=title_val,
         source=source_name_val or "",
     )
 
-    # Truncate immediately after scraping — before any further processing.
+    # Binary guard — reject blobs that slipped past encoding detection.
+    # Replaces with title fallback so Supabase never stores binary data.
+    if not _is_readable_content(content):
+        print(
+            f"  Binary content detected, using fallback: "
+            f"{article.get('url', '?')[:80]}"
+        )
+        content = fetch_content_title_fallback(
+            title_val, source_name_val or ""
+        )
+
+    # Truncate immediately after validation — before any further processing.
     content = content[:_CONTENT_STORE_LIMIT]
 
     category = article.get("category")
@@ -580,7 +631,7 @@ def _scrape_one(article: Dict[str, Any]) -> Dict[str, Any]:
             content,
         )
 
-    title = sanitize_for_postgres(article.get("title", ""))
+    title = sanitize_for_postgres(title_val)
     url = sanitize_for_postgres(article["url"])
     content = sanitize_for_postgres(content)
     source_id = upsert_source(source_name_val) if source_name_val else None
@@ -686,8 +737,6 @@ def _schedule_factcheck(article_ids: List[str]) -> None:
 
     Uses the loop captured at startup via set_main_event_loop() —
     safe to call from inside ThreadPoolExecutor workers.
-    Delay of _FACTCHECK_DELAY_SECONDS ensures ingestion RAM is freed
-    before factcheck Supabase fetches begin.
     """
     if _main_event_loop is None or not _main_event_loop.is_running():
         print("Fact-check skipped — no running event loop captured.")
@@ -711,6 +760,8 @@ def insert_articles_batch(articles: List[Dict[str, Any]]) -> List[str]:
     BeautifulSoup parse trees from exhausting Render free tier RAM.
     gc.collect() runs after each completed future for prompt cleanup.
     Content truncated to _CONTENT_STORE_LIMIT per article before insert.
+    Binary content validated before insert — blobs replaced with
+    title fallback so Supabase never receives unreadable data.
     """
     urls = [a["url"] for a in articles if a.get("url")]
     if not urls:
@@ -730,7 +781,6 @@ def insert_articles_batch(articles: List[Dict[str, Any]]) -> List[str]:
         if a.get("url") and a["url"] not in existing_urls
     ]
 
-    # Release the full fetched list — only new_articles needed from here.
     del articles
     gc.collect()
 
@@ -742,7 +792,6 @@ def insert_articles_batch(articles: List[Dict[str, Any]]) -> List[str]:
     scrape_fallback = 0
     all_new_ids: List[str] = []
 
-    # Scrape and insert in chunks to cap peak RAM.
     for chunk_start in range(0, len(new_articles), _INSERT_CHUNK_SIZE):
         chunk = new_articles[chunk_start:chunk_start + _INSERT_CHUNK_SIZE]
         payloads: List[Dict[str, Any]] = []
@@ -776,7 +825,6 @@ def insert_articles_batch(articles: List[Dict[str, Any]]) -> List[str]:
             )
             all_new_ids.extend(r["id"] for r in res)
 
-        # Explicitly release chunk payloads before next iteration.
         del payloads
         del chunk
         gc.collect()

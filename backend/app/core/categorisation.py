@@ -68,7 +68,7 @@ _HF_API_URL = (
 
 
 def _match_from_path(path: str) -> Optional[str]:
-    """Tier 1a: Direct path/section matching for major sites + keyword fallback."""
+    """Tier 1a: Direct path/section matching + keyword fallback."""
     if not path:
         return None
 
@@ -94,7 +94,7 @@ def _match_from_path(path: str) -> Optional[str]:
         "/section/health": "health",
         "/section/sports": "sport",
         "/section/arts": "entertainment",
-        # RTE.ie
+        # RTE
         "/news/ireland": "ireland",
         "/news/politics": "politics",
         "/sport": "sport",
@@ -109,7 +109,13 @@ def _match_from_path(path: str) -> Optional[str]:
         "/sport": "sport",
         "/culture": "entertainment",
         "/environment": "environment",
+        # Irish Times — crime/law/courts sections
+        "/ireland": "ireland",
+        "/crime-law": "ireland",
+        "/crime-law/courts": "ireland",
+        "/courts": "ireland",
         # Generic
+        "/politics": "politics",
         "/opinion": "opinion",
         "/analysis": "analysis",
         "/local": "local",
@@ -144,9 +150,7 @@ def _match_from_path(path: str) -> Optional[str]:
         return "tech"
     if any(
         seg in path_lower
-        for seg in [
-            "sport", "sports", "football", "rugby", "tennis", "gaa",
-        ]
+        for seg in ["sport", "sports", "football", "rugby", "tennis", "gaa"]
     ):
         return "sport"
     if any(
@@ -159,9 +163,20 @@ def _match_from_path(path: str) -> Optional[str]:
         for seg in ["health", "wellbeing", "covid", "medicine"]
     ):
         return "health"
-    if "science" in path_lower or "environment" in path_lower:
+    if any(
+        seg in path_lower
+        for seg in ["science", "environment"]
+    ):
         return "science"
-    if "opinion" in path_lower or "comment" in path_lower:
+    if any(
+        seg in path_lower
+        for seg in ["crime", "courts", "law", "crime-law"]
+    ):
+        return "ireland"
+    if any(
+        seg in path_lower
+        for seg in ["opinion", "comment"]
+    ):
         return "opinion"
     return None
 
@@ -266,11 +281,13 @@ def _match_from_title(title: str) -> Optional[str]:
     ):
         return "world"
 
-    # Ireland/Local
+    # Ireland/Local — expanded to cover courts, crime, legal proceedings
     if any(
         w in t_lower
         for w in [
             "dublin", "cork", "galway", "traffic", "crime", "courts",
+            "court", "asylum", "high court", "tribunal", "garda",
+            "judicial", "murder", "convicted", "sentencing", "acquitted",
         ]
     ):
         return "ireland"
@@ -278,7 +295,9 @@ def _match_from_title(title: str) -> Optional[str]:
     # Opinion/Analysis
     if any(
         w in t_lower
-        for w in ["opinion", "analysis", "comment", "editorial", "column"]
+        for w in [
+            "opinion", "analysis", "comment", "editorial", "column",
+        ]
     ):
         return "opinion"
 
@@ -332,14 +351,13 @@ def infer_category(
     """
     Enhanced 3-tier category inference — zero local ML model loaded.
 
-    Tier 1a: URL path/section parsing (BBC/NYT/RTE direct maps)
+    Tier 1a: URL path/section parsing (BBC/NYT/RTE/Irish Times maps)
     Tier 1b: URL keyword match (fallback)
-    Tier 2:  Title keyword match (expanded 2x coverage)
+    Tier 2:  Title keyword match (expanded, includes courts/crime)
     Tier 3:  HuggingFace BART zero-shot (8 parent labels only)
     """
     category = None
 
-    # Tier 1a+1b: URL parsing first.
     if url:
         try:
             parsed_path = urlparse(url).path or ""
@@ -347,11 +365,9 @@ def infer_category(
         except Exception:
             pass
 
-    # Tier 2: Title keywords.
     if not category and title:
         category = _match_from_title(title)
 
-    # Tier 3: Zero-shot API (with content if available).
     if not category:
         category = _classify_with_api(title or "", content)
 
