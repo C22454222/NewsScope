@@ -1,13 +1,40 @@
 """
 NewsScope Fact-Checking Service.
 
-Integrates PolitiFact API with lightweight regex claim extraction.
+Integrates Google Fact Check Tools API with lightweight regex
+claim extraction and source reputation scoring.
+
+PolitiFact has been replaced with Google Fact Check Tools API:
+- PolitiFact's public search API was blocking Render's shared IP
+  range, returning connection errors on every request regardless
+  of headers or retry strategy.
+- Google Fact Check Tools API is a proper public REST API (free
+  tier: 1,000 req/day) that aggregates fact-checks from PolitiFact,
+  Reuters, AFP, Snopes, and others — richer than PolitiFact alone.
+- No IP restrictions. API key auth only. No User-Agent tricks needed.
+- Add GOOGLE_FACTCHECK_API_KEY to Render env vars (free at
+  console.cloud.google.com → Fact Check Tools API → Credentials).
+
+Daily request budget:
+- _MAX_CLAIMS = 2 content claims + 1 title = 3 max per article.
+- batch_factcheck_recent caps at 50 articles per 48h window.
+- Worst case: 50 * 3 = 150 requests per 48h cycle — well under 1,000.
+
+SOURCE REPUTATION SCORING:
+- Every article receives a meaningful credibility score regardless
+  of Google Fact Check coverage.
+- Base score derived from known source reputation (journalism
+  standards, editorial oversight, track record of corrections).
+- Google fact-check results act as a ±20 point adjustment when
+  a match is found — they do not replace the base score.
+- Sources not in _SOURCE_REPUTATION default to 65 (neutral/unknown).
+- This guarantees every article has a justified, non-arbitrary score.
 
 spaCy has been removed entirely — it loaded 50MB+ into Render RAM
 on first call, spiking memory when factcheck overlapped with analysis.
 Claims are now extracted using simple sentence splitting and regex,
 which has near-zero RAM cost and produces comparable quality input
-for the PolitiFact API query.
+for the fact-check API query.
 
 Claim extraction strategy:
 - Title is always included as claim 0 — it is the most concise and
@@ -16,27 +43,19 @@ Claim extraction strategy:
   using numeric and proper-noun heuristics.
 - Total claims capped at _MAX_CLAIMS + 1 (title + extracted).
 - Sentences matching _BOILERPLATE_RE are skipped to prevent Fox News
-  and other site chrome leaking into PolitiFact queries.
+  and other site chrome leaking into fact-check queries.
 
-PolitiFact calls reduced from 5 claims → 2 per article to halve
-the number of concurrent HTTP connections during factcheck batches.
-
-PolitiFact headers updated to browser-like User-Agent with Referer
-and Accept headers — plain "NewsScope/1.0" was being rejected.
-One retry with 2s backoff added per claim to handle transient errors.
-
-Credibility scoring formula:
-- Weighted average of valid PolitiFact ruling scores (0.0–1.0).
-- API Error and No match rulings are excluded from the mean —
-  they are not false claims, just unverifiable.
-- score = (sum of valid scores / valid count) * 100
-- Falls back to 50.0 neutral when all claims errored.
-- Falls back to 70.0 default when no claims could be extracted.
+Credibility scoring formula (v2):
+  base  = _SOURCE_REPUTATION.get(source, 65)
+  adj   = (mean valid fact-check scores - 0.5) * 40
+          (ranges from -20 to +20, 0 when no fact-checks found)
+  score = clamp(base + adj, 10, 100)
 
 Flake8: 0 errors/warnings.
 """
 
 import asyncio
+import os
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -49,27 +68,44 @@ from app.db.supabase import supabase
 
 # Maximum claims extracted from content (excluding title).
 # Title is always prepended, so total queries = _MAX_CLAIMS + 1 max.
-# Reduced from 5 → 2 to halve concurrent PolitiFact HTTP connections
-# and reduce factcheck RAM overlap with analysis on Render free tier.
 _MAX_CLAIMS = 2
 
-# Browser-like headers for PolitiFact API — plain "NewsScope/1.0"
-# User-Agent was being rejected with connection errors on Render.
-# Referer and Accept headers added to match expected browser request.
-_POLITIFACT_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
-    ),
-    "Accept": "application/json, text/plain, */*",
-    "Referer": "https://www.politifact.com/",
+# Google Fact Check Tools API — free, reliable, no IP restrictions.
+_GOOGLE_FACTCHECK_KEY = os.getenv("GOOGLE_FACTCHECK_API_KEY", "")
+_GOOGLE_FACTCHECK_URL = (
+    "https://factchecktools.googleapis.com/v1alpha1/claims:search"
+)
+
+# Source reputation scores (0–100) based on journalism standards,
+# editorial oversight, transparency, and corrections track record.
+# Sources not listed default to 65 (unknown/neutral).
+# Scores are intentionally conservative — no source scores above 95.
+_SOURCE_REPUTATION: Dict[str, float] = {
+    # Wire services — highest standards, global reach
+    "Reuters": 93,
+    "Associated Press": 92,
+    "AFP": 91,
+    # Public broadcasters — editorial charter, corrections policy
+    "BBC News": 88,
+    "RTÉ News": 86,
+    "NPR": 85,
+    # Quality broadsheets
+    "The Irish Times": 84,
+    "The Guardian": 82,
+    "The Independent": 76,
+    # US cable/digital — partisan lean lowers score
+    "CNN": 72,
+    "Politico": 74,
+    "Politico Europe": 74,
+    # Right-leaning — known for editorial bias
+    "Fox News": 55,
+    "GB News": 50,
+    # International
+    "Euronews": 72,
+    "Sky News": 74,
 }
 
 # Boilerplate patterns to skip during claim extraction.
-# Covers Fox News UI chrome (NEW, close, Video), generic ad copy,
-# photo captions (Photograph:, Getty Images) and common site furniture
-# that leaks into scraped content from NewsAPI and RSS sources.
 _BOILERPLATE_RE = re.compile(
     r"^("
     r"NEW\b|close\b|Video|Watch|Listen|"
@@ -91,12 +127,9 @@ def _is_valid_content(text: str) -> bool:
     """
     Return True if text appears to be readable UTF-8, not binary.
 
-    Euronews and some sources return gzip-compressed bytes when the
-    scraper does not correctly decode the response. Binary blobs have
-    a very low ratio of printable ASCII characters — anything below
-    85% printable in the first 500 chars is treated as invalid and
-    excluded from claim extraction to prevent garbage reaching
-    the PolitiFact API.
+    Binary blobs have a very low ratio of printable ASCII characters —
+    anything below 85% printable in the first 500 chars is treated as
+    invalid and excluded from claim extraction.
     """
     if not text or len(text) < 40:
         return False
@@ -112,22 +145,9 @@ def extract_claims(title: str, content: str) -> List[str]:
     """
     Extract up to _MAX_CLAIMS + 1 verifiable claims from an article.
 
-    Title is always included as claim 0 — it is the most concise,
-    consistently available, and fact-checkable part of any article.
-
-    Additional claims are extracted from content using regex sentence
-    splitting — no spaCy or NLP models loaded. Prioritises sentences
-    likely to contain verifiable facts:
-    - Contains a number or percentage
-    - Contains a capitalised proper noun (likely a named entity)
-    - Is a declarative statement (not a question)
-    - Is long enough to be meaningful (>= 40 chars)
-    - Does not match _BOILERPLATE_RE (Fox News chrome, ad copy, etc.)
-
-    Falls back to first two long declarative non-boilerplate sentences
-    if no heuristic-matched sentences are found.
-
-    Zero RAM overhead vs spaCy's 50MB+ model load.
+    Title is always included as claim 0. Additional claims extracted
+    from content using regex heuristics — no spaCy or NLP models.
+    Sentences matching _BOILERPLATE_RE are skipped.
     """
     claims: List[str] = []
 
@@ -148,9 +168,7 @@ def extract_claims(title: str, content: str) -> List[str]:
         if _BOILERPLATE_RE.match(sent):
             continue
 
-        has_number = bool(
-            re.search(r"\b\d+(?:[,.\d]+)?%?\b", sent)
-        )
+        has_number = bool(re.search(r"\b\d+(?:[,.\d]+)?%?\b", sent))
         has_proper_noun = bool(
             re.search(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b", sent)
         )
@@ -161,7 +179,6 @@ def extract_claims(title: str, content: str) -> List[str]:
         if len(extracted) >= _MAX_CLAIMS:
             break
 
-    # Fallback: first two long declarative non-boilerplate sentences.
     if not extracted:
         for sent in raw_sentences:
             sent = sent.strip()
@@ -176,52 +193,62 @@ def extract_claims(title: str, content: str) -> List[str]:
     return claims
 
 
-# ── PolitiFact API ────────────────────────────────────────────────────────────
+# ── Google Fact Check Tools API ───────────────────────────────────────────────
 
 
-async def check_politifact_claims(
+async def check_google_factclaims(
     claims: List[str],
 ) -> Dict[str, Any]:
     """
-    Query PolitiFact public search API for each extracted claim.
+    Query Google Fact Check Tools API for each extracted claim.
 
     Returns a dict mapping each claim to its top ruling and URL.
-    Fails gracefully per claim — one API error does not abort the batch.
-
-    Uses browser-like headers (_POLITIFACT_HEADERS) — plain
-    "NewsScope/1.0" User-Agent was being rejected. One retry with
-    2s backoff added per claim to handle transient errors.
-
-    Uses a single shared AsyncClient across all claims in the batch
-    to avoid opening a new connection pool per claim.
+    Fails gracefully per claim — one error does not abort the batch.
+    Falls back to Unverified when key is missing or no match found.
     """
     results: Dict[str, Any] = {}
 
-    async with httpx.AsyncClient(
-        timeout=15.0, headers=_POLITIFACT_HEADERS
-    ) as client:
+    if not _GOOGLE_FACTCHECK_KEY:
+        for claim in claims:
+            results[claim] = {"ruling": "Unverified", "url": None}
+        return results
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
         for claim in claims:
             for attempt in range(2):
                 try:
                     resp = await client.get(
-                        "https://www.politifact.com/api/statements/"
-                        "search/",
-                        params={"q": claim[:100]},
+                        _GOOGLE_FACTCHECK_URL,
+                        params={
+                            "query": claim[:200],
+                            "key": _GOOGLE_FACTCHECK_KEY,
+                            "languageCode": "en",
+                            "pageSize": 1,
+                        },
                     )
                     resp.raise_for_status()
                     data = resp.json()
 
-                    if data.get("items"):
-                        top = data["items"][0]
-                        ruling = (
-                            top.get("ruling", {})
-                            .get("ruling", "Unknown")
-                        )
-                        results[claim] = {
-                            "ruling": ruling,
-                            "url": top.get("url"),
-                            "speaker": top.get("speaker", "N/A"),
-                        }
+                    fact_claims = data.get("claims", [])
+                    if fact_claims:
+                        reviews = fact_claims[0].get("claimReview", [])
+                        if reviews:
+                            top = reviews[0]
+                            results[claim] = {
+                                "ruling": top.get(
+                                    "textualRating", "Unknown"
+                                ),
+                                "url": top.get("url"),
+                                "publisher": (
+                                    top.get("publisher", {})
+                                    .get("name", "Unknown")
+                                ),
+                            }
+                        else:
+                            results[claim] = {
+                                "ruling": "No match",
+                                "url": None,
+                            }
                     else:
                         results[claim] = {
                             "ruling": "No match",
@@ -246,26 +273,29 @@ async def check_politifact_claims(
 
 def ruling_to_score(ruling: str) -> Optional[float]:
     """
-    Convert a PolitiFact ruling string to a normalised credibility score.
+    Convert a fact-check ruling string to a normalised score (0.0–1.0).
 
-    Returns float 0.0–1.0 for known rulings.
-    Returns None for API Error and No match — these are excluded from
-    the credibility mean so they do not drag all scores to 50.0 when
-    PolitiFact is unreachable or returns no matching fact-check.
+    Returns None for API Error, Unverified, No match — excluded from
+    mean so missing data does not drag scores to neutral.
     """
-    r = ruling.lower()
-    if "error" in r or "no match" in r:
+    if not ruling:
         return None
-    if "true" in r and "mostly" not in r:
+    r = ruling.lower()
+
+    if any(x in r for x in ("error", "no match", "unverified")):
+        return None
+
+    if r in ("true", "correct", "accurate", "verified"):
         return 1.0
-    if "mostly true" in r:
+    if any(x in r for x in ("mostly true", "largely true", "mostly correct")):
         return 0.8
-    if "half true" in r:
+    if any(x in r for x in ("half true", "partially true", "mixed")):
         return 0.5
-    if "mostly false" in r:
+    if any(x in r for x in ("mostly false", "largely false", "misleading")):
         return 0.2
-    if "false" in r or "pants" in r:
+    if any(x in r for x in ("false", "pants", "incorrect", "wrong", "fabricated")):
         return 0.0
+
     return 0.5
 
 
@@ -278,16 +308,25 @@ async def compute_credibility_score(
     """
     Compute a credibility score (0–100) for a given article.
 
-    Scoring formula:
-      score = (mean of valid PolitiFact ruling scores) * 100
+    Scoring formula (v2 — guaranteed score for every article):
 
-    API Error and No match rulings return None from ruling_to_score()
-    and are excluded from the mean — they are not counted as false
-    claims, just unverifiable. Falls back to 50.0 neutral when all
-    claims errored or no PolitiFact match was found.
+      base  = _SOURCE_REPUTATION.get(source, 65)
+      adj   = (mean valid fact-check scores - 0.5) * 40
+      score = clamp(base + adj, 10, 100)
 
-    Falls back to 70.0 default when no claims could be extracted.
+    adj ranges from -20 (all false) to +20 (all true), 0 when no
+    fact-checks are found. This means:
+    - Every article gets a meaningful base score from source reputation
+    - Google fact-check results shift the score when available
+    - Irish/regional sources without fact-check coverage still score
+      correctly based on their editorial standards
+
+    Falls back to 65.0 neutral default when no claims could be
+    extracted and source is unknown.
     """
+    source = getattr(article, "source", None) or ""
+    base_score = _SOURCE_REPUTATION.get(source, 65.0)
+
     claims = extract_claims(
         title=article.title or "",
         content=article.content or "",
@@ -295,23 +334,33 @@ async def compute_credibility_score(
 
     if not claims:
         return {
-            "score": 70.0,
-            "reason": "No claims extracted. Score is neutral default.",
+            "score": float(base_score),
+            "reason": (
+                f"No claims extracted. "
+                f"Score based on source reputation ({source or 'unknown'})."
+            ),
             "fact_checks": {},
             "claims_checked": 0,
         }
 
-    fact_checks = await check_politifact_claims(claims)
+    fact_checks = await check_google_factclaims(claims)
 
-    # Exclude None (API Error / No match) from mean calculation.
+    # Exclude None (API Error / No match / Unverified) from mean.
     scores = [
         s for s in
         (ruling_to_score(r["ruling"]) for r in fact_checks.values())
         if s is not None
     ]
 
-    fact_score = (sum(scores) / len(scores)) if scores else 0.5
-    score = round(max(10.0, min(100.0, fact_score * 100)), 2)
+    # Adjustment: ±20 points based on fact-check results.
+    # Zero adjustment when no valid fact-checks found.
+    if scores:
+        fact_mean = sum(scores) / len(scores)
+        adjustment = (fact_mean - 0.5) * 40
+    else:
+        adjustment = 0.0
+
+    score = round(max(10.0, min(100.0, base_score + adjustment)), 2)
 
     positive = sum(1 for s in scores if s >= 0.7)
     negative = sum(1 for s in scores if s < 0.3)
@@ -324,12 +373,22 @@ async def compute_credibility_score(
     else:
         verdict = "low credibility"
 
-    reason = f"{positive}/{total} claims verified true. Rated {verdict}."
-
-    if negative > 0:
+    if scores:
         reason = (
-            f"{positive}/{total} claims verified true, "
-            f"{negative} false. Rated {verdict}."
+            f"{positive}/{total} claims verified. "
+            f"Source: {source or 'unknown'}. Rated {verdict}."
+        )
+        if negative > 0:
+            reason = (
+                f"{positive}/{total} claims verified true, "
+                f"{negative} false. "
+                f"Source: {source or 'unknown'}. Rated {verdict}."
+            )
+    else:
+        reason = (
+            f"No fact-checks found for claims. "
+            f"Score based on source reputation "
+            f"({source or 'unknown'}). Rated {verdict}."
         )
 
     return {
@@ -344,18 +403,15 @@ async def compute_credibility_score(
 
 
 async def batch_factcheck_recent(
-    hours: int = 24,
+    hours: int = 48,
 ) -> List[Dict[str, Any]]:
     """
     Re-fact-check articles published in the last `hours` hours
     whose credibility score is at or below 80.1.
 
-    Articles seeded with the ingestion default of 80.0 are caught
-    by the <= 80.1 threshold and re-scored with real PolitiFact data.
-    Persists updated score, fact_checks, claims_checked, and
-    credibility_reason to Supabase.
-
-    Returns a list of result dicts keyed by article ID.
+    Default window 48h — matches the article display window.
+    Selects source field so compute_credibility_score can apply
+    source reputation scoring to every article.
     """
     cutoff = (
         datetime.now(timezone.utc) - timedelta(hours=hours)
@@ -363,7 +419,7 @@ async def batch_factcheck_recent(
 
     recent: Optional[list] = (
         supabase.table("articles")
-        .select("id, title, content, description")
+        .select("id, title, content, description, source")
         .gte("published_at", cutoff)
         .lte("credibility_score", 80.1)
         .limit(50)

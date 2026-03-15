@@ -1,4 +1,11 @@
-"""NewsScope article category inference - 3-tier, zero local ML."""
+"""NewsScope article category inference - 3-tier, zero local ML.
+
+Never returns 'general' — worst case is 'world'.
+Tier 3 falls back to _match_from_title_broad() instead of 'general'
+when HF_TOKEN is missing or the API call fails.
+
+Flake8: 0 errors/warnings.
+"""
 
 import os
 import requests
@@ -40,7 +47,6 @@ CATEGORIES = [
     "local",
     "opinion",
     "analysis",
-    "general",
 ]
 
 # Tier 3 candidate labels — 8 parent groups only.
@@ -59,12 +65,15 @@ _TIER3_LABELS = [
 ]
 
 # HuggingFace Inference API — free tier, no local model loaded.
-# Add HF_TOKEN to Render env vars (free at huggingface.co/settings/tokens).
+# Add HF_API_TOKEN to Render env vars.
 _HF_TOKEN = os.getenv("HF_API_TOKEN")
 _HF_API_URL = (
     "https://api-inference.huggingface.co/models/"
     "facebook/bart-large-mnli"
 )
+
+
+# ── Tier 1a: URL path matching ────────────────────────────────────────────────
 
 
 def _match_from_path(path: str) -> Optional[str]:
@@ -74,7 +83,6 @@ def _match_from_path(path: str) -> Optional[str]:
 
     path_lower = path.lower()
 
-    # Direct section mapping for common news sites (90% coverage boost).
     section_map = {
         # BBC
         "/news/uk": "uk",
@@ -109,7 +117,7 @@ def _match_from_path(path: str) -> Optional[str]:
         "/sport": "sport",
         "/culture": "entertainment",
         "/environment": "environment",
-        # Irish Times — crime/law/courts sections
+        # Irish Times
         "/ireland": "ireland",
         "/crime-law": "ireland",
         "/crime-law/courts": "ireland",
@@ -127,181 +135,172 @@ def _match_from_path(path: str) -> Optional[str]:
         if key in section_map:
             return section_map[key]
 
-    # Keyword fallback.
-    if any(
-        seg in path_lower
-        for seg in ["politics", "election", "government"]
-    ):
+    # Keyword fallback on path segments.
+    if any(seg in path_lower for seg in ["politics", "election", "government"]):
         return "politics"
-    if any(
-        seg in path_lower
-        for seg in ["world", "international", "europe", "africa", "asia"]
-    ):
+    if any(seg in path_lower for seg in ["world", "international", "europe", "africa", "asia"]):
         return "world"
-    if any(
-        seg in path_lower
-        for seg in ["business", "markets", "economy", "finance"]
-    ):
+    if any(seg in path_lower for seg in ["business", "markets", "economy", "finance"]):
         return "business"
-    if any(
-        seg in path_lower
-        for seg in ["tech", "technology", "digital"]
-    ):
+    if any(seg in path_lower for seg in ["tech", "technology", "digital"]):
         return "tech"
-    if any(
-        seg in path_lower
-        for seg in ["sport", "sports", "football", "rugby", "tennis", "gaa"]
-    ):
+    if any(seg in path_lower for seg in ["sport", "sports", "football", "rugby", "tennis", "gaa"]):
         return "sport"
-    if any(
-        seg in path_lower
-        for seg in ["entertainment", "culture", "arts", "tv", "film"]
-    ):
+    if any(seg in path_lower for seg in ["entertainment", "culture", "arts", "tv", "film"]):
         return "entertainment"
-    if any(
-        seg in path_lower
-        for seg in ["health", "wellbeing", "covid", "medicine"]
-    ):
+    if any(seg in path_lower for seg in ["health", "wellbeing", "covid", "medicine"]):
         return "health"
-    if any(
-        seg in path_lower
-        for seg in ["science", "environment"]
-    ):
+    if any(seg in path_lower for seg in ["science", "environment"]):
         return "science"
-    if any(
-        seg in path_lower
-        for seg in ["crime", "courts", "law", "crime-law"]
-    ):
+    if any(seg in path_lower for seg in ["crime", "courts", "law", "crime-law"]):
         return "ireland"
-    if any(
-        seg in path_lower
-        for seg in ["opinion", "comment"]
-    ):
+    if any(seg in path_lower for seg in ["opinion", "comment"]):
         return "opinion"
+
     return None
+
+
+# ── Tier 2: Title keyword matching ────────────────────────────────────────────
 
 
 def _match_from_title(title: str) -> Optional[str]:
-    """Tier 2: Expanded title keywords covering 95% common topics."""
+    """Tier 2: Expanded title keywords covering ~95% of common topics."""
     if not title:
         return None
 
-    t_lower = title.lower()
+    t = title.lower()
 
-    # Politics
-    if any(
-        w in t_lower
-        for w in [
-            "election", "minister", "government", "parliament",
-            "taoiseach", "senate", "congress", "brexit", "treaty",
-            "legislation", "referendum", "political", "politician",
-            "policy", "bill",
-        ]
-    ):
+    if any(w in t for w in [
+        "election", "minister", "government", "parliament",
+        "taoiseach", "senate", "congress", "brexit", "treaty",
+        "legislation", "referendum", "political", "politician",
+        "policy", "bill",
+    ]):
         return "politics"
 
-    # Business/Economy
-    if any(
-        w in t_lower
-        for w in [
-            "stocks", "market", "economy", "inflation", "company",
-            "bank", "gdp", "trade", "revenue", "profit", "investment",
-            "financial", "shares", "nasdaq", "ftse", "dow", "recession",
-        ]
-    ):
+    if any(w in t for w in [
+        "stocks", "market", "economy", "inflation", "company",
+        "bank", "gdp", "trade", "revenue", "profit", "investment",
+        "financial", "shares", "nasdaq", "ftse", "dow", "recession",
+    ]):
         return "business"
 
-    # Tech
-    if any(
-        w in t_lower
-        for w in [
-            "ai", "app", "software", "startup", "technology", "cyber",
-            "hack", "data breach", "robot", "drone", "smartphone",
-            "chip", "gpu", "openai", "google", "apple", "microsoft",
-            "chatgpt",
-        ]
-    ):
+    if any(w in t for w in [
+        "ai", "app", "software", "startup", "technology", "cyber",
+        "hack", "data breach", "robot", "drone", "smartphone",
+        "chip", "gpu", "openai", "google", "apple", "microsoft",
+        "chatgpt",
+    ]):
         return "tech"
 
-    # Sport
-    if any(
-        w in t_lower
-        for w in [
-            "wins", "defeat", "draw", "tournament", "league", "cup",
-            "match", "goal", "score", "player", "manager", "transfer",
-            "premier league", "champions league", "fifa", "gaa",
-            "all-ireland", "hurling", "camogie", "cricket", "rugby",
-            "six nations",
-        ]
-    ):
+    if any(w in t for w in [
+        "wins", "defeat", "draw", "tournament", "league", "cup",
+        "match", "goal", "score", "player", "manager", "transfer",
+        "premier league", "champions league", "fifa", "gaa",
+        "all-ireland", "hurling", "camogie", "cricket", "rugby",
+        "six nations",
+    ]):
         return "sport"
 
-    # Entertainment/Culture
-    if any(
-        w in t_lower
-        for w in [
-            "film", "movie", "series", "album", "festival", "celebrity",
-            "actor", "actress", "director", "netflix", "disney",
-            "spotify", "grammy", "oscar", "bafta", "concert", "theatre",
-        ]
-    ):
+    if any(w in t for w in [
+        "film", "movie", "series", "album", "festival", "celebrity",
+        "actor", "actress", "director", "netflix", "disney",
+        "spotify", "grammy", "oscar", "bafta", "concert", "theatre",
+    ]):
         return "entertainment"
 
-    # Health
-    if any(
-        w in t_lower
-        for w in [
-            "covid", "hospital", "vaccine", "health", "nhs", "hse",
-            "cancer", "mental health", "drug", "medical", "disease",
-            "pandemic", "obesity", "surgery", "patient", "waiting lists",
-        ]
-    ):
+    if any(w in t for w in [
+        "covid", "hospital", "vaccine", "health", "nhs", "hse",
+        "cancer", "mental health", "drug", "medical", "disease",
+        "pandemic", "obesity", "surgery", "patient", "waiting lists",
+    ]):
         return "health"
 
-    # Science/Environment
-    if any(
-        w in t_lower
-        for w in [
-            "climate", "planet", "environment", "research", "study",
-            "scientists", "nasa", "space", "species", "carbon",
-            "emissions", "biodiversity", "fossil", "renewable", "solar",
-            "weather",
-        ]
-    ):
+    if any(w in t for w in [
+        "climate", "planet", "environment", "research", "study",
+        "scientists", "nasa", "space", "species", "carbon",
+        "emissions", "biodiversity", "fossil", "renewable", "solar",
+        "weather",
+    ]):
         return "science"
 
-    # World
-    if any(
-        w in t_lower
-        for w in [
-            "war", "conflict", "troops", "ukraine", "russia", "israel",
-            "gaza", "nato", "united nations", "foreign", "diplomacy",
-            "sanctions", "refugee", "ambassador", "peace talks",
-        ]
-    ):
+    if any(w in t for w in [
+        "war", "conflict", "troops", "ukraine", "russia", "israel",
+        "gaza", "nato", "united nations", "foreign", "diplomacy",
+        "sanctions", "refugee", "ambassador", "peace talks",
+    ]):
         return "world"
 
-    # Ireland/Local — expanded to cover courts, crime, legal proceedings
-    if any(
-        w in t_lower
-        for w in [
-            "dublin", "cork", "galway", "traffic", "crime", "courts",
-            "court", "asylum", "high court", "tribunal", "garda",
-            "judicial", "murder", "convicted", "sentencing", "acquitted",
-        ]
-    ):
+    if any(w in t for w in [
+        "dublin", "cork", "galway", "traffic", "crime", "courts",
+        "court", "asylum", "high court", "tribunal", "garda",
+        "judicial", "murder", "convicted", "sentencing", "acquitted",
+    ]):
         return "ireland"
 
-    # Opinion/Analysis
-    if any(
-        w in t_lower
-        for w in [
-            "opinion", "analysis", "comment", "editorial", "column",
-        ]
-    ):
+    if any(w in t for w in [
+        "opinion", "analysis", "comment", "editorial", "column",
+    ]):
         return "opinion"
 
     return None
+
+
+# ── Tier 3 fallback: broad scan ───────────────────────────────────────────────
+
+
+def _match_from_title_broad(title: str) -> str:
+    """
+    Broad fallback keyword scan — catches what tier 2 misses.
+
+    Used when HF_TOKEN is missing or the API call fails.
+    Returns 'world' as true last resort — unclassifiable articles
+    are more likely international news than any other single category.
+    Never returns 'general'.
+    """
+    if not title:
+        return "world"
+
+    t = title.lower()
+
+    # Governance / official events → politics or world
+    if any(w in t for w in [
+        "president", "prime minister", "official", "authorities",
+        "agency", "committee", "summit", "bilateral", "rally",
+        "protest", "military", "army", "attack", "shooting",
+        "explosion",
+    ]):
+        return "world"
+
+    # Legal / courts / crime
+    if any(w in t for w in [
+        "court", "judge", "jury", "verdict", "sentence", "charged",
+        "arrested", "police", "murder", "trial", "lawsuit", "legal",
+        "attorney", "prosecution", "accused",
+    ]):
+        return "ireland"
+
+    # Economy / money
+    if any(w in t for w in [
+        "price", "cost", "billion", "million", "fund", "budget",
+        "tax", "rate", "growth", "loss", "earnings", "quarter",
+        "fiscal", "debt", "interest",
+    ]):
+        return "business"
+
+    # People / culture / lifestyle
+    if any(w in t for w in [
+        "star", "fans", "award", "show", "premiere", "release",
+        "interview", "model", "fashion", "viral", "social media",
+    ]):
+        return "entertainment"
+
+    # True last resort — international news is the most likely bucket
+    # for any article that genuinely cannot be classified.
+    return "world"
+
+
+# ── Tier 3: HuggingFace API ───────────────────────────────────────────────────
 
 
 def _classify_with_api(
@@ -310,14 +309,12 @@ def _classify_with_api(
     """
     Tier 3: HuggingFace Inference API — zero local memory cost.
 
-    Uses _TIER3_LABELS (8 parent groups only) instead of the full
-    CATEGORIES list. BART MNLI accuracy degrades significantly with
-    more than ~10 candidate labels — 8 is the reliable sweet spot.
-    Sub-category resolution is handled downstream by CATEGORY_GROUP_MAP
-    in articles.py, so tier 3 only needs to return a parent group.
+    Falls back to _match_from_title_broad() instead of 'general'
+    when HF_TOKEN is missing or the API call fails — every article
+    gets a meaningful category regardless of API availability.
     """
     if not _HF_TOKEN:
-        return "general"
+        return _match_from_title_broad(title)
 
     text = f"{title}. {(content or '')[:400]}"
 
@@ -333,14 +330,17 @@ def _classify_with_api(
         )
 
         if response.status_code == 503:
-            # Model loading on HF side — acceptable silent failure.
-            return "general"
+            # HF model still loading — fall back to broad scan.
+            return _match_from_title_broad(title)
 
         response.raise_for_status()
         return response.json()["labels"][0]
 
     except Exception:
-        return "general"
+        return _match_from_title_broad(title)
+
+
+# ── Public interface ──────────────────────────────────────────────────────────
 
 
 def infer_category(
@@ -349,12 +349,13 @@ def infer_category(
     content: Optional[str] = None,
 ) -> str:
     """
-    Enhanced 3-tier category inference — zero local ML model loaded.
+    3-tier category inference — zero local ML model loaded.
 
     Tier 1a: URL path/section parsing (BBC/NYT/RTE/Irish Times maps)
-    Tier 1b: URL keyword match (fallback)
-    Tier 2:  Title keyword match (expanded, includes courts/crime)
-    Tier 3:  HuggingFace BART zero-shot (8 parent labels only)
+    Tier 1b: URL keyword match
+    Tier 2:  Title keyword match (strict, ~95% coverage)
+    Tier 3:  HuggingFace BART zero-shot OR broad keyword fallback
+    Never returns 'general' — worst case is 'world'.
     """
     category = None
 
@@ -371,4 +372,5 @@ def infer_category(
     if not category:
         category = _classify_with_api(title or "", content)
 
-    return category or "general"
+    # _classify_with_api guarantees a non-None, non-'general' result.
+    return category

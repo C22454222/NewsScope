@@ -73,7 +73,6 @@ class ArticleResponse(ArticleBase):
     credibility_score: Optional[float] = None
     fact_checks: Optional[Dict[str, Any]] = Field(default_factory=dict)
     claims_checked: Optional[int] = 0
-    # Human-readable verdict, e.g. "2/3 claims verified. Rated reliable."
     credibility_reason: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True, extra="ignore")
@@ -203,19 +202,26 @@ class FactCheck(BaseModel):
 
 
 class ComparisonRequest(BaseModel):
-    """Request payload for comparing coverage across outlets."""
+    """
+    Request payload for comparing coverage across outlets.
+
+    limit field removed — no row cap applied. With a 72h article
+    window the total result set is well under 1,000 in practice.
+    category field added — backend filters by category before
+    returning so the Flutter client receives pre-filtered results.
+    """
 
     topic: str
-    limit: int = Field(default=5, ge=1, le=20)
+    category: Optional[str] = None
 
 
 class ComparisonResponse(BaseModel):
     """Response containing articles grouped by political leaning."""
 
     topic: str
-    left_articles: List[Article]
-    center_articles: List[Article]
-    right_articles: List[Article]
+    left_articles: List[Dict[str, Any]]
+    center_articles: List[Dict[str, Any]]
+    right_articles: List[Dict[str, Any]]
     total_found: int
 
 

@@ -15,10 +15,17 @@ ever running simultaneously — replaces boolean flag which had a
 check-then-act race condition between APScheduler thread pool workers.
 Proven root cause of ConnectionTerminated + OOM crashes on free tier.
 
-Fact-checking runs via PolitiFact API — results stored in
+Fact-checking runs via Google Fact Check Tools API — results stored in
 articles.fact_checks (JSONB) and articles.credibility_score.
-The legacy fact_checks table endpoint has been removed as nothing
-writes to that table — all fact-check data is on the articles row.
+Credibility score is blended from source reputation base score and
+any available Google fact-check rulings (±20 point adjustment).
+
+Reading history snapshot: bias_score, sentiment_score, source, and
+general_bias are copied from the article row onto the reading_history
+row at read time. The article FK is ON DELETE SET NULL so archiving
+never deletes history rows. The bias profile is calculated entirely
+from snapshot columns — never from the articles join — so stats are
+permanently stable regardless of archiving.
 
 Flake8: 0 errors/warnings.
 """
@@ -255,7 +262,7 @@ async def lifespan(app: FastAPI):
 
     scheduler.add_job(
         _sync_analysis,
-        trigger=IntervalTrigger(minutes=5),
+        trigger=IntervalTrigger(minutes=10),
         id="analysis",
         max_instances=1,
         coalesce=True,
@@ -464,12 +471,8 @@ def health():
 @app.post("/internal/analyze-batch")
 async def internal_analyze_batch(background_tasks: BackgroundTasks):
     """
-    Manual or external analysis trigger. Keep-alive no longer calls
-    this — analysis is handled exclusively by APScheduler every 5
-    minutes. Retained for debug use only.
+    Manual or external analysis trigger. Retained for debug use only.
     Uses BackgroundTasks — avoids asyncio.create_task race condition.
-    Does not acquire _heavy_job_lock — _analysis_running inner guard
-    in _guarded_analysis prevents duplicates from this path.
     """
     if _analysis_running:
         return {"status": "skipped — analysis already running"}
@@ -506,18 +509,48 @@ async def track_reading(
     data: ReadingHistoryCreate,
     user_id: str = Depends(get_current_user),
 ):
-    """Track article reading time for bias profile calculation."""
+    """
+    Track article reading time and snapshot scores for bias profile.
+
+    Scores are copied from the article row onto the reading_history row
+    at read time. The article FK is ON DELETE SET NULL so archiving
+    sets article_id to NULL but never deletes the history row itself.
+    get_bias_profile reads exclusively from these snapshot columns —
+    never from the articles join — so stats are permanently stable.
+
+    If the article row is not found (race condition between scrape and
+    analysis), scores default to None and the row is still recorded so
+    time-spent data is never lost.
+    """
     try:
+        article_data = (
+            supabase.table("articles")
+            .select("bias_score, sentiment_score, source, general_bias")
+            .eq("id", data.article_id)
+            .limit(1)
+            .execute()
+            .data
+        )
+        scores = article_data[0] if article_data else {}
+
         payload = {
             "user_id": user_id,
             "article_id": data.article_id,
             "time_spent_seconds": data.time_spent_seconds,
             "opened_at": datetime.utcnow().isoformat(),
+            # Snapshotted at read time — bias profile stable after archiving.
+            "bias_score": scores.get("bias_score"),
+            "sentiment_score": scores.get("sentiment_score"),
+            "source": scores.get("source"),
+            "general_bias": scores.get("general_bias"),
         }
         response = supabase.table("reading_history").upsert(
             payload, on_conflict="user_id,article_id"
         ).execute()
-        print("Reading tracked successfully")
+        print(
+            f"Reading tracked: {data.article_id} "
+            f"({data.time_spent_seconds}s)"
+        )
         return {"success": True, "data": response.data}
     except Exception as exc:
         print(f"Error tracking reading: {exc}")
@@ -526,11 +559,24 @@ async def track_reading(
 
 @app.get("/api/bias-profile", response_model=BiasProfile)
 async def get_bias_profile(user_id: str = Depends(get_current_user)):
-    """Calculate user's bias profile from reading history."""
+    """
+    Calculate user's bias profile from reading history snapshot columns.
+
+    Reads bias_score, sentiment_score, source, and general_bias directly
+    from reading_history snapshot columns — never from the articles join.
+    This means the profile is fully stable after article archiving:
+    deleted articles contribute their scores permanently via the snapshot.
+
+    Rows written before the snapshot migration have NULL score columns
+    and are included in total_articles_read and reading_time but skipped
+    in weighted score calculations — same behaviour as unscored articles.
+    """
     try:
         response = (
             supabase.table("reading_history")
-            .select("time_spent_seconds, articles(*)")
+            .select(
+                "time_spent_seconds, bias_score, sentiment_score, source"
+            )
             .eq("user_id", user_id)
             .execute()
         )
@@ -556,15 +602,16 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
 
         total_time = sum(h["time_spent_seconds"] for h in history)
 
+        # Weighted averages — only rows with snapshot scores contribute.
         bias_terms = [
-            (h["time_spent_seconds"], h["articles"].get("bias_score"))
+            (h["time_spent_seconds"], h["bias_score"])
             for h in history
-            if h["articles"].get("bias_score") is not None
+            if h.get("bias_score") is not None
         ]
         sent_terms = [
-            (h["time_spent_seconds"], h["articles"].get("sentiment_score"))
+            (h["time_spent_seconds"], h["sentiment_score"])
             for h in history
-            if h["articles"].get("sentiment_score") is not None
+            if h.get("sentiment_score") is not None
         ]
 
         weighted_bias = (
@@ -579,34 +626,26 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
         )
 
         left = sum(
-            1
-            for h in history
-            if (b := h["articles"].get("bias_score")) is not None and b < -0.3
+            1 for h in history
+            if h.get("bias_score") is not None and h["bias_score"] < -0.3
         )
         right = sum(
-            1
-            for h in history
-            if (b := h["articles"].get("bias_score")) is not None and b > 0.3
+            1 for h in history
+            if h.get("bias_score") is not None and h["bias_score"] > 0.3
         )
         center = len(history) - left - right
 
         pos = sum(
-            1
-            for h in history
-            if (s := h["articles"].get("sentiment_score")) and s > 0.3
+            1 for h in history
+            if h.get("sentiment_score") is not None and h["sentiment_score"] > 0.3
         )
         neg = sum(
-            1
-            for h in history
-            if (s := h["articles"].get("sentiment_score")) and s < -0.3
+            1 for h in history
+            if h.get("sentiment_score") is not None and h["sentiment_score"] < -0.3
         )
         neu = len(history) - pos - neg
 
-        sources = [
-            h["articles"]["source"]
-            for h in history
-            if h["articles"].get("source")
-        ]
+        sources = [h["source"] for h in history if h.get("source")]
         most_read = (
             Counter(sources).most_common(1)[0][0] if sources else "N/A"
         )
@@ -645,9 +684,18 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
 
 @app.post("/api/articles/compare", response_model=ComparisonResponse)
 async def compare_articles(request: ComparisonRequest):
-    """Find articles on the same topic grouped by political bias."""
+    """
+    Find articles on the same topic grouped by political bias.
+
+    No row limit — Supabase default of 1000 overridden with 10000.
+    With a 72h article window total results are well under 1,000
+    in practice, but the cap is set high to never silently truncate.
+
+    Category filter applied server-side when provided — Flutter client
+    receives pre-filtered results without client-side post-processing.
+    """
     try:
-        response = (
+        query = (
             supabase.table("articles")
             .select("*")
             .or_(
@@ -656,9 +704,12 @@ async def compare_articles(request: ComparisonRequest):
             )
             .not_.is_("bias_score", "null")
             .order("published_at", desc=True)
-            .execute()
         )
-        articles_data = response.data
+
+        if request.category:
+            query = query.eq("category", request.category)
+
+        articles_data = query.limit(10000).execute().data
 
         left = [
             a for a in articles_data if a.get("bias_score", 0) < -0.3

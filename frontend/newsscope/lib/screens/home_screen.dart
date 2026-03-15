@@ -79,7 +79,10 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
   final user = FirebaseAuth.instance.currentUser;
   final ApiService _apiService = ApiService();
 
-  Future<List<Article>>? _articlesFuture;
+  // Initialised directly — no Future.delayed so first load never
+  // hits the empty Future.value([]) fallback and shows articles
+  // immediately without requiring a manual refresh.
+  late Future<List<Article>> _articlesFuture;
 
   String? _selectedCategory;
   final List<String> _categories = const [
@@ -97,11 +100,10 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
   @override
   void initState() {
     super.initState();
-    Future.delayed(const Duration(milliseconds: 100), () {
-      if (mounted) {
-        setState(() => _articlesFuture = _apiService.getArticles());
-      }
-    });
+    // Direct assignment — removed Future.delayed which was leaving
+    // _articlesFuture null for 100ms, causing "No articles found"
+    // on first load before the real fetch could begin.
+    _articlesFuture = _apiService.getArticles();
   }
 
   void _loadArticles() {
@@ -191,7 +193,7 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
 
           Expanded(
             child: FutureBuilder<List<Article>>(
-              future: _articlesFuture ?? Future.value([]),
+              future: _articlesFuture,
               builder: (context, snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting) {
                   return const Center(child: CircularProgressIndicator());
@@ -279,11 +281,13 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                       final sectionArticles = grouped[dateKey]!;
 
                       final now = DateTime.now();
-                      final todayKey = '${now.year}-${now.month}-${now.day}';
+                      final todayKey =
+                          '${now.year}-${now.month}-${now.day}';
                       final yesterday =
                           now.subtract(const Duration(days: 1));
                       final yesterdayKey =
-                          '${yesterday.year}-${yesterday.month}-${yesterday.day}';
+                          '${yesterday.year}-${yesterday.month}'
+                          '-${yesterday.day}';
 
                       String headerText;
                       if (dateKey == todayKey) {
@@ -294,7 +298,8 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                         headerText = 'Unknown Date';
                       } else {
                         final parts = dateKey.split('-');
-                        headerText = '${parts[2]}/${parts[1]}/${parts[0]}';
+                        headerText =
+                            '${parts[2]}/${parts[1]}/${parts[0]}';
                       }
 
                       return Column(
@@ -314,8 +319,6 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                               ),
                             ),
                           ),
-                          // ArticleCard widget replaces the inline card — Bug 4 fix
-                          // (fromArticle passes all credibility + fact-check fields).
                           ...sectionArticles.map(
                             (article) => ArticleCard(
                               article: article,

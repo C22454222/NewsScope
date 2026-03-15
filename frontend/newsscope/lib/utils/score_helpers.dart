@@ -11,20 +11,20 @@ Color getBiasColor(double? score) {
 
 String getBiasLabelShort(double? score) {
   if (score == null) return 'Unknown';
-  if (score > 0.3) return 'Right';
-  if (score < -0.3) return 'Left';
+  if (score > 0.3) return 'Right Wing';
+  if (score < -0.3) return 'Left Wing';
   return 'Centre';
 }
 
 String getBiasLabel(double? score) {
   if (score == null) return 'Unknown';
-  if (score > 0.6) return 'Far Right';
-  if (score > 0.3) return 'Right';
+  if (score > 0.6) return 'Right Wing';    // was 'Far Right' — removed
+  if (score > 0.3) return 'Right Wing';    // was 'Right'
   if (score > 0.1) return 'Centre Right';
   if (score >= -0.1) return 'Centre';
   if (score >= -0.3) return 'Centre Left';
-  if (score >= -0.6) return 'Left';
-  return 'Far Left';
+  if (score >= -0.6) return 'Left Wing';   // was 'Left'
+  return 'Left Wing';                      // was 'Far Left' — removed
 }
 
 // ── Sentiment ─────────────────────────────────────────────────────────────────
@@ -60,7 +60,7 @@ String getCredibilityLabel(double? score) {
   return 'Low';
 }
 
-/// Maps PolitiFact ruling strings to emoji indicators.
+/// Maps fact-check ruling strings to emoji indicators.
 /// Used by ArticleDetailScreen._buildFactCheckTile.
 String getRulingEmoji(String ruling) {
   final r = ruling.toLowerCase();
