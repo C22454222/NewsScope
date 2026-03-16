@@ -190,8 +190,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   secondary: CircleAvatar(
                     radius: 18,
                     backgroundColor: Colors.blue[700]!.withAlpha(25),
-                    child: Icon(Icons.notifications_outlined,
-                        size: 18, color: Colors.blue[700]),
+                    child: Icon(
+                      Icons.notifications_outlined,
+                      size: 18,
+                      color: Colors.blue[700],
+                    ),
                   ),
                   title: Text(
                     'Notifications',
@@ -205,15 +208,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     'Breaking news alerts',
                     style: TextStyle(fontSize: 12, color: Colors.grey[500]),
                   ),
-                  activeColor: Colors.blue[700],
+                  activeThumbColor: Colors.blue[700],
+                  activeTrackColor: Colors.blue[300],
                   value: _notificationsEnabled,
                   onChanged: (value) {
                     setState(() => _notificationsEnabled = value);
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
-                        content: Text(value
-                            ? 'Notifications enabled'
-                            : 'Notifications disabled'),
+                        content: Text(
+                          value
+                              ? 'Notifications enabled'
+                              : 'Notifications disabled',
+                        ),
                         duration: const Duration(seconds: 1),
                         behavior: SnackBarBehavior.floating,
                       ),
@@ -273,7 +279,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
 
-          // ── Danger zone ───────────────────────────────────────────────────
+          // ── Account Actions ───────────────────────────────────────────────
           _buildSectionHeader('Account Actions'),
           Card(
             margin: const EdgeInsets.symmetric(horizontal: 16),
