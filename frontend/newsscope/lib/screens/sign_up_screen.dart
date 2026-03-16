@@ -1,4 +1,3 @@
-// lib/screens/sign_up_screen.dart
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
@@ -14,36 +13,49 @@ class _SignUpScreenState extends State<SignUpScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _isLoading = false;
+  bool _obscurePassword = true;
 
-  /// Handles new user registration via Firebase Auth.
-  /// Updates the display name immediately after creation.
+  @override
+  void dispose() {
+    _usernameController.dispose();
+    _emailController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
   Future<void> _signUp() async {
-    if (_usernameController.text.isEmpty || 
-        _emailController.text.isEmpty || 
+    if (_usernameController.text.isEmpty ||
+        _emailController.text.isEmpty ||
         _passwordController.text.isEmpty) {
-      _showError("Please fill in all fields");
+      _showError('Please fill in all fields');
+      return;
+    }
+    if (_passwordController.text.trim().length < 6) {
+      _showError('Password must be at least 6 characters');
       return;
     }
 
     setState(() => _isLoading = true);
     try {
-      UserCredential userCred = await FirebaseAuth.instance
+      final userCred = await FirebaseAuth.instance
           .createUserWithEmailAndPassword(
         email: _emailController.text.trim(),
         password: _passwordController.text.trim(),
       );
-
-      // Set the display name so the home screen can greet the user
-      await userCred.user?.updateDisplayName(_usernameController.text.trim());
-
+      await userCred.user?.updateDisplayName(
+        _usernameController.text.trim(),
+      );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Account created! Please sign in.")),
+        SnackBar(
+          content: const Text('Account created! Please sign in.'),
+          backgroundColor: Colors.green[700],
+          behavior: SnackBarBehavior.floating,
+        ),
       );
-
-      Navigator.pop(context); // Return to sign-in screen
+      Navigator.pop(context);
     } on FirebaseAuthException catch (e) {
-      _showError(e.message ?? "Registration failed");
+      _showError(e.message ?? 'Registration failed');
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -52,7 +64,11 @@ class _SignUpScreenState extends State<SignUpScreen> {
   void _showError(String message) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message), backgroundColor: Colors.redAccent),
+      SnackBar(
+        content: Text(message),
+        backgroundColor: Colors.red[700],
+        behavior: SnackBarBehavior.floating,
+      ),
     );
   }
 
@@ -60,74 +76,215 @@ class _SignUpScreenState extends State<SignUpScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Create Account"),
-        elevation: 0,
-        backgroundColor: Colors.transparent,
-        foregroundColor: Colors.black,
+        centerTitle: true,
+        title: RichText(
+          text: TextSpan(
+            style: const TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 0.3,
+            ),
+            children: [
+              const TextSpan(
+                text: 'Create ',
+                style: TextStyle(color: Colors.white),
+              ),
+              TextSpan(
+                text: 'Account',
+                style: TextStyle(color: Colors.blue[200]),
+              ),
+            ],
+          ),
+        ),
       ),
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.all(24),
+            padding: const EdgeInsets.all(28),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(
-                  "Join NewsScope",
-                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                    fontWeight: FontWeight.bold
+                // ── Header ────────────────────────────────────────────────
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 20,
+                  ),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [
+                        Colors.blue.shade800,
+                        Colors.blue.shade500,
+                      ],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    borderRadius: BorderRadius.circular(16),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.blue.shade200.withAlpha(120),
+                        blurRadius: 12,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Join NewsScope',
+                        style: TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Track media bias and analyse news\nacross the political spectrum.',
+                        style: TextStyle(
+                          color: Colors.white.withAlpha(210),
+                          fontSize: 13,
+                          height: 1.4,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                const SizedBox(height: 8),
-                const Text("Create an account to track media bias and analyze news."),
+
                 const SizedBox(height: 32),
-                
-                // Username
+
+                // ── Fields ────────────────────────────────────────────────
                 TextField(
                   controller: _usernameController,
-                  decoration: const InputDecoration(
-                    labelText: "Username",
-                    prefixIcon: Icon(Icons.person_outline),
-                    border: OutlineInputBorder(),
+                  decoration: InputDecoration(
+                    labelText: 'Display Name',
+                    prefixIcon: Icon(
+                      Icons.person_outline,
+                      color: Colors.blue[700],
+                    ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide(
+                        color: Colors.blue[700]!,
+                        width: 2,
+                      ),
+                    ),
                   ),
+                  textCapitalization: TextCapitalization.words,
                 ),
                 const SizedBox(height: 16),
-                
-                // Email
+
                 TextField(
                   controller: _emailController,
-                  decoration: const InputDecoration(
-                    labelText: "Email",
-                    prefixIcon: Icon(Icons.email_outlined),
-                    border: OutlineInputBorder(),
+                  decoration: InputDecoration(
+                    labelText: 'Email',
+                    prefixIcon: Icon(
+                      Icons.email_outlined,
+                      color: Colors.blue[700],
+                    ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide(
+                        color: Colors.blue[700]!,
+                        width: 2,
+                      ),
+                    ),
                   ),
                   keyboardType: TextInputType.emailAddress,
                 ),
                 const SizedBox(height: 16),
-                
-                // Password
+
                 TextField(
                   controller: _passwordController,
-                  decoration: const InputDecoration(
-                    labelText: "Password",
-                    prefixIcon: Icon(Icons.lock_outline),
-                    border: OutlineInputBorder(),
-                  ),
-                  obscureText: true,
-                ),
-                const SizedBox(height: 24),
-                
-                // Sign Up Button
-                _isLoading 
-                  ? const Center(child: CircularProgressIndicator())
-                  : ElevatedButton(
-                      onPressed: _signUp,
-                      style: ElevatedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                      ),
-                      child: const Text("Sign Up", style: TextStyle(fontSize: 16)),
+                  obscureText: _obscurePassword,
+                  decoration: InputDecoration(
+                    labelText: 'Password',
+                    helperText: 'At least 6 characters',
+                    prefixIcon: Icon(
+                      Icons.lock_outline,
+                      color: Colors.blue[700],
                     ),
+                    suffixIcon: IconButton(
+                      icon: Icon(
+                        _obscurePassword
+                            ? Icons.visibility_off_outlined
+                            : Icons.visibility_outlined,
+                        color: Colors.grey[500],
+                        size: 20,
+                      ),
+                      onPressed: () => setState(
+                        () => _obscurePassword = !_obscurePassword,
+                      ),
+                    ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide(
+                        color: Colors.blue[700]!,
+                        width: 2,
+                      ),
+                    ),
+                  ),
+                  onSubmitted: (_) => _signUp(),
+                ),
+                const SizedBox(height: 28),
+
+                // ── Sign up button ────────────────────────────────────────
+                _isLoading
+                    ? const Center(child: CircularProgressIndicator())
+                    : ElevatedButton(
+                        onPressed: _signUp,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.blue[700],
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 15),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          textStyle: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        child: const Text('Create Account'),
+                      ),
+                const SizedBox(height: 20),
+
+                // ── Back to sign in ───────────────────────────────────────
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      'Already have an account?',
+                      style: TextStyle(
+                        color: Colors.grey[600],
+                        fontSize: 14,
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      style: TextButton.styleFrom(
+                        foregroundColor: Colors.blue[700],
+                        padding:
+                            const EdgeInsets.symmetric(horizontal: 6),
+                      ),
+                      child: const Text(
+                        'Sign In',
+                        style: TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                  ],
+                ),
               ],
             ),
           ),

@@ -1,4 +1,3 @@
-// lib/screens/home_screen.dart
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
@@ -49,11 +48,13 @@ class _HomeScreenState extends State<HomeScreen> {
       body: IndexedStack(index: _currentIndex, children: _screens),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _currentIndex,
+        selectedItemColor: Colors.blue[700],
+        unselectedItemColor: Colors.grey[500],
         items: const [
           BottomNavigationBarItem(icon: Icon(Icons.home), label: 'Home'),
           BottomNavigationBarItem(
             icon: Icon(Icons.compare_arrows),
-            label: 'Compare',
+            label: 'Spectrum',
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.person),
@@ -65,6 +66,8 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 }
+
+// ── Home Feed Tab ─────────────────────────────────────────────────────────────
 
 class HomeFeedTab extends StatefulWidget {
   final VoidCallback onArticleRead;
@@ -79,9 +82,6 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
   final user = FirebaseAuth.instance.currentUser;
   final ApiService _apiService = ApiService();
 
-  // Initialised directly — no Future.delayed so first load never
-  // hits the empty Future.value([]) fallback and shows articles
-  // immediately without requiring a manual refresh.
   late Future<List<Article>> _articlesFuture;
 
   String? _selectedCategory;
@@ -100,9 +100,6 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
   @override
   void initState() {
     super.initState();
-    // Direct assignment — removed Future.delayed which was leaving
-    // _articlesFuture null for 100ms, causing "No articles found"
-    // on first load before the real fetch could begin.
     _articlesFuture = _apiService.getArticles();
   }
 
@@ -124,16 +121,111 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
     Navigator.of(context).popUntil((route) => route.isFirst);
   }
 
+  String get _timeOfDayGreeting {
+    final hour = DateTime.now().hour;
+    if (hour < 12) return 'Good morning';
+    if (hour < 17) return 'Good afternoon';
+    return 'Good evening';
+  }
+
+  Widget _buildNewsScopeTitle() {
+    return RichText(
+      text: TextSpan(
+        style: const TextStyle(
+          fontSize: 22,
+          fontWeight: FontWeight.bold,
+          letterSpacing: 0.5,
+        ),
+        children: [
+          const TextSpan(
+            text: 'News',
+            style: TextStyle(color: Colors.white),
+          ),
+          TextSpan(
+            text: 'Scope',
+            style: TextStyle(color: Colors.blue[200]),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGreetingCard() {
+    final name = user?.displayName ?? 'Reader';
+    final initial = name[0].toUpperCase();
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [Colors.blue.shade800, Colors.blue.shade500],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.blue.shade200.withAlpha(120),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '$_timeOfDayGreeting, $name! 👋',
+                  style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  "Here's the latest from across the spectrum.",
+                  style: TextStyle(
+                    color: Colors.white.withAlpha(210),
+                    fontSize: 13,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          CircleAvatar(
+            radius: 26,
+            backgroundColor: Colors.white.withAlpha(50),
+            child: Text(
+              initial,
+              style: const TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.bold,
+                color: Colors.white,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('NewsScope'),
         centerTitle: true,
+        title: _buildNewsScopeTitle(),
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: _refreshArticles,
+            tooltip: 'Refresh',
           ),
           IconButton(
             icon: const Icon(Icons.logout),
@@ -146,27 +238,12 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Hello, ${user?.displayName ?? 'Reader'}!',
-                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.bold,
-                      ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'Latest articles from your feed.',
-                  style: Theme.of(context).textTheme.bodyMedium,
-                ),
-              ],
-            ),
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+            child: _buildGreetingCard(),
           ),
 
           SizedBox(
-            height: 40,
+            height: 36,
             child: ListView.separated(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               scrollDirection: Axis.horizontal,
@@ -176,8 +253,14 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                 final label = _categories[index];
                 final isSelected = (_selectedCategory ?? 'All') == label;
                 return ChoiceChip(
-                  label: Text(label),
+                  label: Text(label, style: const TextStyle(fontSize: 12)),
                   selected: isSelected,
+                  selectedColor: Colors.blue[700],
+                  labelStyle: TextStyle(
+                    color: isSelected ? Colors.white : Colors.grey[700],
+                    fontWeight:
+                        isSelected ? FontWeight.w600 : FontWeight.normal,
+                  ),
                   onSelected: (_) {
                     setState(() {
                       _selectedCategory = label == 'All' ? null : label;
@@ -204,13 +287,13 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        const Icon(
-                          Icons.error_outline,
-                          size: 64,
-                          color: Colors.red,
-                        ),
+                        const Icon(Icons.error_outline,
+                            size: 64, color: Colors.red),
                         const SizedBox(height: 16),
-                        Text('Error: ${snapshot.error}'),
+                        Text(
+                          'Error: ${snapshot.error}',
+                          textAlign: TextAlign.center,
+                        ),
                         const SizedBox(height: 16),
                         ElevatedButton(
                           onPressed: _refreshArticles,
@@ -226,13 +309,13 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(
-                          Icons.article_outlined,
-                          size: 64,
-                          color: Colors.grey.shade400,
-                        ),
+                        Icon(Icons.article_outlined,
+                            size: 64, color: Colors.grey.shade300),
                         const SizedBox(height: 16),
-                        const Text('No articles found.'),
+                        Text(
+                          'No articles found.',
+                          style: TextStyle(color: Colors.grey[500]),
+                        ),
                         const SizedBox(height: 16),
                         ElevatedButton(
                           onPressed: _refreshArticles,
@@ -310,13 +393,26 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                               top: 16.0,
                               bottom: 8.0,
                             ),
-                            child: Text(
-                              headerText,
-                              style: TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.grey[800],
-                              ),
+                            child: Row(
+                              children: [
+                                Container(
+                                  width: 4,
+                                  height: 20,
+                                  decoration: BoxDecoration(
+                                    color: Colors.blue[700],
+                                    borderRadius: BorderRadius.circular(2),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  headerText,
+                                  style: TextStyle(
+                                    fontSize: 17,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.grey[800],
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                           ...sectionArticles.map(

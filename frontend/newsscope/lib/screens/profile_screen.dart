@@ -1,4 +1,3 @@
-// lib/screens/profile_screen.dart
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:fl_chart/fl_chart.dart';
@@ -51,17 +50,51 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
+  Widget _buildBiasProfileTitle() {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(Icons.balance, size: 20, color: Colors.blue[200]),
+        const SizedBox(width: 8),
+        RichText(
+          text: TextSpan(
+            style: const TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 0.3,
+            ),
+            children: [
+              const TextSpan(
+                text: 'Bias ',
+                style: TextStyle(color: Colors.white),
+              ),
+              TextSpan(
+                text: 'Profile',
+                style: TextStyle(color: Colors.blue[200]),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
   // ── Build ─────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
     }
 
     if (_errorMessage != null) {
       return Scaffold(
-        appBar: AppBar(title: const Text('My Profile')),
+        appBar: AppBar(
+          centerTitle: true,
+          title: _buildBiasProfileTitle(),
+        ),
         body: Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -83,25 +116,33 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (_profile == null || _profile!.isEmpty) {
       return Scaffold(
         appBar: AppBar(
-          title: const Text('My Profile'),
+          centerTitle: true,
+          title: _buildBiasProfileTitle(),
           actions: [_settingsButton()],
         ),
         body: Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(Icons.auto_stories, size: 80, color: Colors.grey.shade400),
-              const SizedBox(height: 16),
+              Icon(Icons.auto_stories, size: 80, color: Colors.grey.shade300),
+              const SizedBox(height: 20),
               Text(
-                'Start reading articles to see your profile!',
-                style: TextStyle(fontSize: 16, color: Colors.grey.shade600),
-                textAlign: TextAlign.center,
+                'Your Bias Profile',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.grey.shade700,
+                ),
               ),
-              const SizedBox(height: 24),
-              ElevatedButton.icon(
-                onPressed: () {},
-                icon: const Icon(Icons.article),
-                label: const Text('Browse Articles'),
+              const SizedBox(height: 8),
+              Text(
+                'Start reading articles to build\nyour personal bias breakdown.',
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Colors.grey.shade500,
+                  height: 1.5,
+                ),
+                textAlign: TextAlign.center,
               ),
             ],
           ),
@@ -111,7 +152,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('My Profile'),
+        centerTitle: true,
+        title: _buildBiasProfileTitle(),
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
@@ -133,12 +175,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
               const SizedBox(height: 24),
               _buildStatCards(),
               const SizedBox(height: 24),
-              _buildSectionTitle('Reading Distribution'),
-              const SizedBox(height: 16),
+              _buildSectionTitle('Reading Distribution', Icons.pie_chart),
+              const SizedBox(height: 12),
               _buildPieChart(),
               const SizedBox(height: 24),
-              _buildSectionTitle('Detailed Breakdown'),
-              const SizedBox(height: 16),
+              _buildSectionTitle('Detailed Breakdown', Icons.bar_chart),
+              const SizedBox(height: 12),
               _buildDetailsCards(),
             ],
           ),
@@ -161,42 +203,89 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Widget _buildUserHeader() {
-    return Row(
-      children: [
-        CircleAvatar(
-          radius: 32,
-          backgroundColor: Colors.blue[100],
-          child: Text(
-            (user?.displayName ?? user?.email ?? 'U')[0].toUpperCase(),
-            style: const TextStyle(
-              fontSize: 28,
-              fontWeight: FontWeight.bold,
+    final name = user?.displayName ?? 'Reader';
+    final initial = name[0].toUpperCase();
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [Colors.blue.shade800, Colors.blue.shade500],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.blue.shade200.withAlpha(120),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          CircleAvatar(
+            radius: 32,
+            backgroundColor: Colors.white.withAlpha(50),
+            child: Text(
+              initial,
+              style: const TextStyle(
+                fontSize: 28,
+                fontWeight: FontWeight.bold,
+                color: Colors.white,
+              ),
             ),
           ),
-        ),
-        const SizedBox(width: 16),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                user?.displayName ?? 'Reader',
-                style: Theme.of(context)
-                    .textTheme
-                    .titleLarge
-                    ?.copyWith(fontWeight: FontWeight.bold),
-              ),
-              if (user?.email != null)
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
                 Text(
-                  user!.email!,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: Colors.grey[600],
-                      ),
+                  name,
+                  style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
                 ),
-            ],
+                if (user?.email != null) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    user!.email!,
+                    style: TextStyle(
+                      color: Colors.white.withAlpha(200),
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 3,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withAlpha(40),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    '${_profile!.totalArticlesRead} articles read · '
+                    '${_profile!.readingTimeTotalMinutes}min',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
@@ -205,8 +294,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final sentimentColor = p.sentimentLabel == 'Positive'
         ? Colors.green[600]!
         : p.sentimentLabel == 'Negative'
-            ? Colors.orange[600]!
-            : Colors.grey[600]!;
+            ? Colors.red[600]!
+            : Colors.orange[600]!;
 
     return Column(
       children: [
@@ -231,28 +320,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
           ],
         ),
-        const SizedBox(height: 12),
-        Row(
-          children: [
-            Expanded(
-              child: _buildStatCard(
-                'Articles Read',
-                '${p.totalArticlesRead}',
-                Colors.blue,
-                Icons.article,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: _buildStatCard(
-                'Reading Time',
-                '${p.readingTimeTotalMinutes}min',
-                Colors.purple,
-                Icons.timer,
-              ),
-            ),
-          ],
-        ),
       ],
     );
   }
@@ -273,24 +340,25 @@ class _ProfileScreenState extends State<ProfileScreen> {
             Row(
               children: [
                 Icon(icon, size: 16, color: color),
-                const SizedBox(width: 4),
+                const SizedBox(width: 6),
                 Expanded(
                   child: Text(
                     title,
                     style: TextStyle(
                       fontSize: 12,
                       color: Colors.grey.shade600,
+                      fontWeight: FontWeight.w500,
                     ),
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 10),
             Text(
               value,
               style: TextStyle(
-                fontSize: 20,
+                fontSize: 18,
                 fontWeight: FontWeight.bold,
                 color: color,
               ),
@@ -310,24 +378,24 @@ class _ProfileScreenState extends State<ProfileScreen> {
     return Card(
       elevation: 2,
       child: Padding(
-        padding: const EdgeInsets.all(16.0),
+        padding: const EdgeInsets.all(20.0),
         child: Column(
           children: [
             SizedBox(
-              height: 250,
+              height: 220,
               child: PieChart(
                 PieChartData(
-                  sectionsSpace: 2,
-                  centerSpaceRadius: 60,
+                  sectionsSpace: 3,
+                  centerSpaceRadius: 55,
                   sections: [
                     if (left > 0)
                       PieChartSectionData(
                         value: left,
                         title: '${left.toInt()}%',
                         color: Colors.blue[700],
-                        radius: 80,
+                        radius: 75,
                         titleStyle: const TextStyle(
-                          fontSize: 14,
+                          fontSize: 13,
                           fontWeight: FontWeight.bold,
                           color: Colors.white,
                         ),
@@ -337,9 +405,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         value: center,
                         title: '${center.toInt()}%',
                         color: Colors.purple[400],
-                        radius: 80,
+                        radius: 75,
                         titleStyle: const TextStyle(
-                          fontSize: 14,
+                          fontSize: 13,
                           fontWeight: FontWeight.bold,
                           color: Colors.white,
                         ),
@@ -349,9 +417,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         value: right,
                         title: '${right.toInt()}%',
                         color: Colors.red[700],
-                        radius: 80,
+                        radius: 75,
                         titleStyle: const TextStyle(
-                          fontSize: 14,
+                          fontSize: 13,
                           fontWeight: FontWeight.bold,
                           color: Colors.white,
                         ),
@@ -364,11 +432,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                _buildLegendItem('Left', Colors.blue[700]!),
-                const SizedBox(width: 16),
-                _buildLegendItem('Center', Colors.purple[400]!),
-                const SizedBox(width: 16),
-                _buildLegendItem('Right', Colors.red[700]!),
+                _buildLegendItem('Left Wing', Colors.blue[700]!),
+                const SizedBox(width: 20),
+                _buildLegendItem('Centre', Colors.purple[400]!),
+                const SizedBox(width: 20),
+                _buildLegendItem('Right Wing', Colors.red[700]!),
               ],
             ),
           ],
@@ -381,12 +449,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
     return Row(
       children: [
         Container(
-          width: 16,
-          height: 16,
+          width: 14,
+          height: 14,
           decoration: BoxDecoration(color: color, shape: BoxShape.circle),
         ),
-        const SizedBox(width: 4),
-        Text(label, style: const TextStyle(fontSize: 12)),
+        const SizedBox(width: 6),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w500,
+            color: Colors.grey[700],
+          ),
+        ),
       ],
     );
   }
@@ -396,29 +471,23 @@ class _ProfileScreenState extends State<ProfileScreen> {
     return Column(
       children: [
         _buildDetailCard(
-          'Left-leaning articles',
-          '${p.leftCount}',
-          Colors.blue[700]!,
-          Icons.trending_down,
-        ),
+            'Left Wing articles', '${p.leftCount}',
+            Colors.blue[700]!, Icons.trending_down),
         _buildDetailCard(
-          'Center articles',
-          '${p.centerCount}',
-          Colors.purple[400]!,
-          Icons.trending_flat,
-        ),
+            'Centre articles', '${p.centerCount}',
+            Colors.purple[400]!, Icons.trending_flat),
         _buildDetailCard(
-          'Right-leaning articles',
-          '${p.rightCount}',
-          Colors.red[700]!,
-          Icons.trending_up,
-        ),
+            'Right Wing articles', '${p.rightCount}',
+            Colors.red[700]!, Icons.trending_up),
         _buildDetailCard(
-          'Most read source',
-          p.mostReadSource,
-          Colors.indigo[600]!,
-          Icons.bookmark,
-        ),
+            'Positive articles', '${p.positiveCount}',
+            Colors.green[600]!, Icons.sentiment_satisfied),
+        _buildDetailCard(
+            'Negative articles', '${p.negativeCount}',
+            Colors.red[600]!, Icons.sentiment_dissatisfied),
+        _buildDetailCard(
+            'Most read source', p.mostReadSource,
+            Colors.indigo[600]!, Icons.bookmark),
       ],
     );
   }
@@ -430,14 +499,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
     IconData icon,
   ) {
     return Card(
-      margin: const EdgeInsets.only(bottom: 12),
+      margin: const EdgeInsets.only(bottom: 10),
       elevation: 1,
       child: ListTile(
         leading: CircleAvatar(
-          backgroundColor: color.withAlpha((255 * 0.2).round()),
+          backgroundColor: color.withAlpha(40),
           child: Icon(icon, color: color, size: 20),
         ),
-        title: Text(label),
+        title: Text(
+          label,
+          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+        ),
         trailing: Text(
           value,
           style: TextStyle(
@@ -450,10 +522,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  Widget _buildSectionTitle(String title) {
-    return Text(
-      title,
-      style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+  Widget _buildSectionTitle(String title, IconData icon) {
+    return Row(
+      children: [
+        Icon(icon, size: 20, color: Colors.blue[700]),
+        const SizedBox(width: 8),
+        Text(
+          title,
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+            color: Colors.grey[800],
+          ),
+        ),
+      ],
     );
   }
 }

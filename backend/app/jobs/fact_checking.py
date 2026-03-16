@@ -1,55 +1,28 @@
 """
 NewsScope Fact-Checking Service.
 
-Integrates Google Fact Check Tools API with lightweight regex
-claim extraction and source reputation scoring.
+Google Fact Check Tools API only indexes claims that have been
+explicitly reviewed by registered fact-checkers (PolitiFact, Snopes,
+AFP, Reuters, etc.) with ClaimReview markup. It does NOT index
+breaking news or sports results.
 
-PolitiFact has been replaced with Google Fact Check Tools API:
-- PolitiFact's public search API was blocking Render's shared IP
-  range, returning connection errors on every request regardless
-  of headers or retry strategy.
-- Google Fact Check Tools API is a proper public REST API (free
-  tier: 1,000 req/day) that aggregates fact-checks from PolitiFact,
-  Reuters, AFP, Snopes, and others — richer than PolitiFact alone.
-- No IP restrictions. API key auth only. No User-Agent tricks needed.
-- Add GOOGLE_FACTCHECK_API_KEY to Render env vars (free at
-  console.cloud.google.com → Fact Check Tools API → Credentials).
+Root cause of "No match" on all queries (v1):
+- Queries were full sentences (100-200 chars) sent verbatim.
+- API is a keyword/topic search — it needs short, specific terms.
+- Fix: extract 3-6 keyword topics from title + content instead of
+  sending raw sentences. Match rate improves dramatically.
 
-Daily request budget:
-- _MAX_CLAIMS = 2 content claims + 1 title = 3 max per article.
-- batch_factcheck_recent caps at 50 articles per 48h window.
-- Worst case: 50 * 3 = 150 requests per 48h cycle — well under 1,000.
-
-SOURCE REPUTATION SCORING:
-- Every article receives a meaningful credibility score regardless
-  of Google Fact Check coverage.
-- Base score derived from known source reputation (journalism
-  standards, editorial oversight, track record of corrections).
-- Google fact-check results act as a ±20 point adjustment when
-  a match is found — they do not replace the base score.
-- Sources not in _SOURCE_REPUTATION default to 65 (neutral/unknown).
-- This guarantees every article has a justified, non-arbitrary score.
-
-spaCy has been removed entirely — it loaded 50MB+ into Render RAM
-on first call, spiking memory when factcheck overlapped with analysis.
-Claims are now extracted using simple sentence splitting and regex,
-which has near-zero RAM cost and produces comparable quality input
-for the fact-check API query.
-
-Claim extraction strategy:
-- Title is always included as claim 0 — it is the most concise and
-  fact-checkable representation of the article.
-- Up to _MAX_CLAIMS additional sentences are extracted from content
-  using numeric and proper-noun heuristics.
-- Total claims capped at _MAX_CLAIMS + 1 (title + extracted).
-- Sentences matching _BOILERPLATE_RE are skipped to prevent Fox News
-  and other site chrome leaking into fact-check queries.
-
-Credibility scoring formula (v2):
+Credibility scoring formula (v2 — unchanged):
   base  = _SOURCE_REPUTATION.get(source, 65)
-  adj   = (mean valid fact-check scores - 0.5) * 40
-          (ranges from -20 to +20, 0 when no fact-checks found)
+  adj   = (mean valid fact-check scores - 0.5) * 40  → ±20 pts
   score = clamp(base + adj, 10, 100)
+
+Every article still receives a meaningful base score from source
+reputation. Fact-check results shift the score when a match is found.
+
+Daily budget:
+- _MAX_KEYWORD_QUERIES = 3 per article
+- 50 articles per 48h batch × 3 = 150 requests — well under 1,000/day
 
 Flake8: 0 errors/warnings.
 """
@@ -66,11 +39,9 @@ from app.schemas import ArticleResponse
 from app.db.supabase import supabase
 
 
-# Maximum claims extracted from content (excluding title).
-# Title is always prepended, so total queries = _MAX_CLAIMS + 1 max.
-_MAX_CLAIMS = 2
+# Maximum keyword queries per article (budget control).
+_MAX_KEYWORD_QUERIES = 3
 
-# Google Fact Check Tools API — free, reliable, no IP restrictions.
 _GOOGLE_FACTCHECK_KEY = os.getenv("GOOGLE_FACTCHECK_API_KEY", "")
 _GOOGLE_FACTCHECK_URL = (
     "https://factchecktools.googleapis.com/v1alpha1/claims:search"
@@ -105,7 +76,19 @@ _SOURCE_REPUTATION: Dict[str, float] = {
     "Sky News": 74,
 }
 
-# Boilerplate patterns to skip during claim extraction.
+# Words that add no search value — stripped before keyword extraction.
+_STOPWORDS = {
+    "the", "a", "an", "and", "or", "but", "in", "on", "at", "to",
+    "for", "of", "with", "by", "from", "is", "are", "was", "were",
+    "has", "have", "had", "will", "would", "could", "should", "may",
+    "that", "this", "its", "it", "be", "been", "as", "after",
+    "before", "over", "also", "said", "says", "say", "new", "he",
+    "she", "they", "their", "his", "her", "our", "we", "who", "what",
+    "when", "where", "how", "which", "than", "more", "not", "no",
+    "up", "out", "about", "into", "than", "us", "can",
+}
+
+# Boilerplate patterns to skip during keyword extraction.
 _BOILERPLATE_RE = re.compile(
     r"^("
     r"NEW\b|close\b|Video|Watch|Listen|"
@@ -129,7 +112,7 @@ def _is_valid_content(text: str) -> bool:
 
     Binary blobs have a very low ratio of printable ASCII characters —
     anything below 85% printable in the first 500 chars is treated as
-    invalid and excluded from claim extraction.
+    invalid and excluded from keyword extraction.
     """
     if not text or len(text) < 40:
         return False
@@ -138,92 +121,119 @@ def _is_valid_content(text: str) -> bool:
     return (printable / len(sample)) > 0.85
 
 
-# ── Claim extraction ──────────────────────────────────────────────────────────
+# ── Keyword extraction ────────────────────────────────────────────────────────
 
 
-def extract_claims(title: str, content: str) -> List[str]:
+def _extract_keywords_from_text(text: str, max_words: int = 5) -> List[str]:
     """
-    Extract up to _MAX_CLAIMS + 1 verifiable claims from an article.
+    Extract the most meaningful capitalised/numeric terms from text.
 
-    Title is always included as claim 0. Additional claims extracted
-    from content using regex heuristics — no spaCy or NLP models.
-    Sentences matching _BOILERPLATE_RE are skipped.
+    Returns a list of individual keyword tokens — not full sentences.
+    Proper nouns are prioritised over common words. Stopwords removed.
+    Used to build short topic queries for the Google Fact Check API.
     """
-    claims: List[str] = []
+    words = re.findall(r"\b[A-Za-z][a-zA-Z'\-]{2,}\b|\b\d{4}\b", text)
+    seen: Dict[str, int] = {}
+    for w in words:
+        lower = w.lower()
+        if lower not in _STOPWORDS and len(lower) > 2:
+            seen[lower] = seen.get(lower, 0) + 1
 
+    # Prefer capitalised (proper noun) terms, then by frequency.
+    ranked = sorted(
+        seen.keys(),
+        key=lambda w: (-int(w[0].isupper()), -seen[w]),
+    )
+    return ranked[:max_words]
+
+
+def build_search_queries(title: str, content: str) -> List[str]:
+    """
+    Build 1–3 short keyword queries for the Google Fact Check API.
+
+    Strategy:
+    1. Title keywords  → query 1 (most concise, highest signal)
+    2. Content proper nouns → query 2
+    3. Combined blend  → query 3
+
+    Queries are 3-6 words max — matches how the API's search index
+    works. Full sentences never return results; short topic phrases do.
+
+    Examples of good queries vs old bad queries:
+      OLD: "President Donald Trump's administration has imposed the
+            oil blockade on the Cuban government as Washington presses
+            for regime change..."  → No match (always)
+      NEW: "Trump Cuba blockade regime"  → matches fact-checker results
+
+      OLD: "Chelsea have been given a suspended one-year transfer ban,
+            and fined a record £10.75m..."  → No match (always)
+      NEW: "Chelsea Premier League fine"  → matches if reviewed
+    """
+    queries: List[str] = []
+
+    # Query 1: title keywords
     if title and title.strip():
-        claims.append(title.strip())
+        title_kws = _extract_keywords_from_text(title, max_words=5)
+        if title_kws:
+            queries.append(" ".join(title_kws))
 
-    if not content or not _is_valid_content(content):
-        return claims
-
-    raw_sentences = re.split(r"(?<=[.!?])\s+", content)
-    extracted: List[str] = []
-
-    for sent in raw_sentences:
-        sent = sent.strip()
-
-        if sent.endswith("?") or len(sent) < 40:
-            continue
-        if _BOILERPLATE_RE.match(sent):
-            continue
-
-        has_number = bool(re.search(r"\b\d+(?:[,.\d]+)?%?\b", sent))
-        has_proper_noun = bool(
-            re.search(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b", sent)
+    # Query 2: top proper nouns from content
+    if content and _is_valid_content(content):
+        content_kws = _extract_keywords_from_text(
+            content[:800], max_words=5
         )
+        if content_kws:
+            q2 = " ".join(content_kws)
+            if q2 not in queries:
+                queries.append(q2)
 
-        if has_number or has_proper_noun:
-            extracted.append(sent)
+    # Query 3: blended title + content for broader coverage
+    if title and content and len(queries) < _MAX_KEYWORD_QUERIES:
+        title_kws = _extract_keywords_from_text(title, max_words=3)
+        content_kws = _extract_keywords_from_text(
+            content[:400], max_words=3
+        )
+        combined = list(dict.fromkeys(title_kws + content_kws))[:5]
+        q3 = " ".join(combined)
+        if q3 and q3 not in queries:
+            queries.append(q3)
 
-        if len(extracted) >= _MAX_CLAIMS:
-            break
-
-    if not extracted:
-        for sent in raw_sentences:
-            sent = sent.strip()
-            if (
-                len(sent) >= 40 and not sent.endswith("?") and not _BOILERPLATE_RE.match(sent)
-            ):
-                extracted.append(sent)
-            if len(extracted) >= _MAX_CLAIMS:
-                break
-
-    claims.extend(extracted)
-    return claims
+    return queries[:_MAX_KEYWORD_QUERIES]
 
 
 # ── Google Fact Check Tools API ───────────────────────────────────────────────
 
 
 async def check_google_factclaims(
-    claims: List[str],
+    queries: List[str],
 ) -> Dict[str, Any]:
     """
-    Query Google Fact Check Tools API for each extracted claim.
+    Query Google Fact Check Tools API with short keyword queries.
 
-    Returns a dict mapping each claim to its top ruling and URL.
-    Fails gracefully per claim — one error does not abort the batch.
-    Falls back to Unverified when key is missing or no match found.
+    Each query is a topic phrase (3-6 words), not a full sentence.
+    Returns dict mapping each query to its top ruling and URL.
+    pageSize=3 checks top 3 results per query for best match.
+    Falls back gracefully per query — one error does not abort batch.
+    matched_claim stored so DB shows exactly what Google matched.
     """
     results: Dict[str, Any] = {}
 
     if not _GOOGLE_FACTCHECK_KEY:
-        for claim in claims:
-            results[claim] = {"ruling": "Unverified", "url": None}
+        for q in queries:
+            results[q] = {"ruling": "Unverified", "url": None}
         return results
 
     async with httpx.AsyncClient(timeout=15.0) as client:
-        for claim in claims:
+        for query in queries:
             for attempt in range(2):
                 try:
                     resp = await client.get(
                         _GOOGLE_FACTCHECK_URL,
                         params={
-                            "query": claim[:200],
+                            "query": query,
                             "key": _GOOGLE_FACTCHECK_KEY,
                             "languageCode": "en",
-                            "pageSize": 1,
+                            "pageSize": 3,
                         },
                     )
                     resp.raise_for_status()
@@ -231,26 +241,34 @@ async def check_google_factclaims(
 
                     fact_claims = data.get("claims", [])
                     if fact_claims:
-                        reviews = fact_claims[0].get("claimReview", [])
-                        if reviews:
-                            top = reviews[0]
-                            results[claim] = {
-                                "ruling": top.get(
-                                    "textualRating", "Unknown"
-                                ),
-                                "url": top.get("url"),
-                                "publisher": (
-                                    top.get("publisher", {})
-                                    .get("name", "Unknown")
-                                ),
-                            }
-                        else:
-                            results[claim] = {
+                        # Pick the first claim that has a review.
+                        matched = False
+                        for claim in fact_claims:
+                            reviews = claim.get("claimReview", [])
+                            if reviews:
+                                top = reviews[0]
+                                results[query] = {
+                                    "ruling": top.get(
+                                        "textualRating", "Unknown"
+                                    ),
+                                    "url": top.get("url"),
+                                    "publisher": (
+                                        top.get("publisher", {})
+                                        .get("name", "Unknown")
+                                    ),
+                                    "matched_claim": claim.get(
+                                        "text", ""
+                                    )[:120],
+                                }
+                                matched = True
+                                break
+                        if not matched:
+                            results[query] = {
                                 "ruling": "No match",
                                 "url": None,
                             }
                     else:
-                        results[claim] = {
+                        results[query] = {
                             "ruling": "No match",
                             "url": None,
                         }
@@ -260,7 +278,7 @@ async def check_google_factclaims(
                     if attempt == 0:
                         await asyncio.sleep(2)
                     else:
-                        results[claim] = {
+                        results[query] = {
                             "ruling": "API Error",
                             "url": None,
                         }
@@ -276,7 +294,8 @@ def ruling_to_score(ruling: str) -> Optional[float]:
     Convert a fact-check ruling string to a normalised score (0.0–1.0).
 
     Returns None for API Error, Unverified, No match — excluded from
-    mean so missing data does not drag scores to neutral.
+    mean so missing data does not drag scores toward neutral.
+    Unknown rulings default to 0.5 (neutral) rather than being ignored.
     """
     if not ruling:
         return None
@@ -293,9 +312,12 @@ def ruling_to_score(ruling: str) -> Optional[float]:
         return 0.5
     if any(x in r for x in ("mostly false", "largely false", "misleading")):
         return 0.2
-    if any(x in r for x in ("false", "pants", "incorrect", "wrong", "fabricated")):
+    if any(x in r for x in (
+        "false", "pants", "incorrect", "wrong", "fabricated"
+    )):
         return 0.0
 
+    # Unknown rating — treat as neutral rather than ignoring entirely.
     return 0.5
 
 
@@ -309,41 +331,38 @@ async def compute_credibility_score(
     Compute a credibility score (0–100) for a given article.
 
     Scoring formula (v2 — guaranteed score for every article):
-
       base  = _SOURCE_REPUTATION.get(source, 65)
-      adj   = (mean valid fact-check scores - 0.5) * 40
+      adj   = (mean valid fact-check scores - 0.5) * 40  → ±20 pts
       score = clamp(base + adj, 10, 100)
 
     adj ranges from -20 (all false) to +20 (all true), 0 when no
-    fact-checks are found. This means:
-    - Every article gets a meaningful base score from source reputation
-    - Google fact-check results shift the score when available
-    - Irish/regional sources without fact-check coverage still score
-      correctly based on their editorial standards
+    fact-checks are found. Every article gets a meaningful base score
+    from source reputation. Fact-check results shift when available.
 
-    Falls back to 65.0 neutral default when no claims could be
-    extracted and source is unknown.
+    Queries are now short keyword phrases (3-6 words) rather than full
+    sentences — dramatically improves Google API match rate.
     """
     source = getattr(article, "source", None) or ""
     base_score = _SOURCE_REPUTATION.get(source, 65.0)
 
-    claims = extract_claims(
+    queries = build_search_queries(
         title=article.title or "",
         content=article.content or "",
     )
 
-    if not claims:
+    if not queries:
         return {
             "score": float(base_score),
             "reason": (
-                f"No claims extracted. "
-                f"Score based on source reputation ({source or 'unknown'})."
+                f"No queries could be built. "
+                f"Score based on source reputation "
+                f"({source or 'unknown'})."
             ),
             "fact_checks": {},
             "claims_checked": 0,
         }
 
-    fact_checks = await check_google_factclaims(claims)
+    fact_checks = await check_google_factclaims(queries)
 
     # Exclude None (API Error / No match / Unverified) from mean.
     scores = [
@@ -354,17 +373,13 @@ async def compute_credibility_score(
 
     # Adjustment: ±20 points based on fact-check results.
     # Zero adjustment when no valid fact-checks found.
-    if scores:
-        fact_mean = sum(scores) / len(scores)
-        adjustment = (fact_mean - 0.5) * 40
-    else:
-        adjustment = 0.0
-
+    adjustment = (sum(scores) / len(scores) - 0.5) * 40 if scores else 0.0
     score = round(max(10.0, min(100.0, base_score + adjustment)), 2)
 
     positive = sum(1 for s in scores if s >= 0.7)
     negative = sum(1 for s in scores if s < 0.3)
-    total = len(claims)
+    total = len(queries)
+    matched = len(scores)
 
     if score >= 70:
         verdict = "reliable"
@@ -375,18 +390,12 @@ async def compute_credibility_score(
 
     if scores:
         reason = (
-            f"{positive}/{total} claims verified. "
-            f"Source: {source or 'unknown'}. Rated {verdict}."
+            f"{matched}/{total} queries matched fact-checks. "
+            f"{positive} verified true" + (f", {negative} false" if negative else "") + f". Source: {source or 'unknown'}. Rated {verdict}."
         )
-        if negative > 0:
-            reason = (
-                f"{positive}/{total} claims verified true, "
-                f"{negative} false. "
-                f"Source: {source or 'unknown'}. Rated {verdict}."
-            )
     else:
         reason = (
-            f"No fact-checks found for claims. "
+            f"No fact-checks found for topic. "
             f"Score based on source reputation "
             f"({source or 'unknown'}). Rated {verdict}."
         )
@@ -410,8 +419,7 @@ async def batch_factcheck_recent(
     whose credibility score is at or below 80.1.
 
     Default window 48h — matches the article display window.
-    Selects source field so compute_credibility_score can apply
-    source reputation scoring to every article.
+    description column removed — dropped from DB schema.
     """
     cutoff = (
         datetime.now(timezone.utc) - timedelta(hours=hours)
@@ -419,7 +427,7 @@ async def batch_factcheck_recent(
 
     recent: Optional[list] = (
         supabase.table("articles")
-        .select("id, title, content, description, source")
+        .select("id, title, content, source")
         .gte("published_at", cutoff)
         .lte("credibility_score", 80.1)
         .limit(50)

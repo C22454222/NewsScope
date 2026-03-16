@@ -1,14 +1,9 @@
-// lib/widgets/article_card.dart
 import 'package:flutter/material.dart';
 
 import '../models/article.dart';
 import '../utils/score_helpers.dart';
 
 /// Reusable article card used by HomeFeedTab and CompareScreen.
-///
-/// Displays title, source, date, category, bias chip, sentiment chip,
-/// and credibility chip. Calls [onTap] with the article when tapped.
-/// Stateless — all data comes from the Article model.
 class ArticleCard extends StatelessWidget {
   final Article article;
   final VoidCallback onTap;
@@ -47,7 +42,9 @@ class ArticleCard extends StatelessWidget {
     return Card(
       elevation: 2,
       margin: const EdgeInsets.only(bottom: 12),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: InkWell(
+        borderRadius: BorderRadius.circular(12),
         onTap: onTap,
         child: Padding(
           padding: const EdgeInsets.all(16),
@@ -64,52 +61,55 @@ class ArticleCard extends StatelessWidget {
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
               ),
-              const SizedBox(height: 6),
+              const SizedBox(height: 8),
 
-              // Source + date row
+              // Source + date + category row
               Row(
                 children: [
-                  Icon(Icons.source, size: 14, color: Colors.grey[600]),
+                  Icon(Icons.source, size: 13, color: Colors.grey[500]),
                   const SizedBox(width: 4),
                   Expanded(
                     child: Text(
                       article.source,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.grey[700],
-                      ),
+                      style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
+                  if (article.category != null &&
+                      article.category!.isNotEmpty) ...[
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 7,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.blue[50],
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        formatCategory(article.category),
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.blue[700],
+                        ),
+                      ),
+                    ),
+                  ],
                   const SizedBox(width: 8),
                   Text(
                     _formatDate(article.publishedAt),
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: Colors.grey[600],
-                    ),
+                    style: TextStyle(fontSize: 11, color: Colors.grey[500]),
                   ),
                 ],
               ),
 
-              const SizedBox(height: 4),
+              const SizedBox(height: 10),
 
-              // Category label
-              if (article.category != null && article.category!.isNotEmpty)
-                Text(
-                  formatCategory(article.category),
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w500,
-                    color: Colors.blueGrey[700],
-                  ),
-                ),
-
-              const SizedBox(height: 12),
-
-              // Bias + sentiment + credibility chips
+              // Score pills
               Wrap(
-                spacing: 8,
+                spacing: 6,
                 runSpacing: 6,
                 children: [
                   if (article.biasScore != null)
@@ -128,8 +128,7 @@ class ArticleCard extends StatelessWidget {
                     ),
                   if (article.credibilityScore != null)
                     _ScorePill(
-                      label:
-                          '${article.credibilityScore!.round()}% credible',
+                      label: '${article.credibilityScore!.round()}% credible',
                       color: credibilityColor,
                       icon: Icons.fact_check_outlined,
                     ),
@@ -137,7 +136,7 @@ class ArticleCard extends StatelessWidget {
                     _ScorePill(
                       label:
                           '${(article.biasIntensity! * 100).round()}% biased',
-                      color: Colors.grey,
+                      color: Colors.grey.shade500,
                       icon: null,
                     ),
                 ],
@@ -150,7 +149,6 @@ class ArticleCard extends StatelessWidget {
   }
 }
 
-/// Internal pill badge used by ArticleCard only.
 class _ScorePill extends StatelessWidget {
   final String label;
   final Color color;
@@ -167,15 +165,15 @@ class _ScorePill extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: color.withAlpha((255 * 0.15).round()),
+        color: color.withAlpha((255 * 0.12).round()),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color),
+        border: Border.all(color: color.withAlpha(180)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           if (icon != null) ...[
-            Icon(icon, size: 12, color: color),
+            Icon(icon, size: 11, color: color),
             const SizedBox(width: 4),
           ],
           Text(
