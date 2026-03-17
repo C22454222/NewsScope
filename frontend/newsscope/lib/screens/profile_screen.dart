@@ -51,31 +51,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
-  // ── Helpers ───────────────────────────────────────────────────────────────
+  // ── AppBar title — single colour, readable on white AppBar ───────────────
 
   Widget _buildBiasProfileTitle() {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(Icons.balance, size: 20, color: Colors.blue[200]),
-        const SizedBox(width: 8),
-        RichText(
-          text: TextSpan(
-            style: const TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
-              letterSpacing: 0.3,
-            ),
-            children: [
-              const TextSpan(
-                  text: 'Bias ', style: TextStyle(color: Colors.white)),
-              TextSpan(
-                  text: 'Profile',
-                  style: TextStyle(color: Colors.blue[200])),
-            ],
-          ),
-        ),
-      ],
+    return Text(
+      'Bias Profile',
+      style: TextStyle(
+        fontSize: 20,
+        fontWeight: FontWeight.bold,
+        letterSpacing: 0.3,
+        color: Colors.blue[800],
+      ),
     );
   }
 
@@ -129,7 +115,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(Icons.auto_stories, size: 80, color: Colors.grey.shade300),
+              Icon(Icons.auto_stories,
+                  size: 80, color: Colors.grey.shade300),
               const SizedBox(height: 20),
               Text(
                 'Your Bias Profile',
@@ -188,7 +175,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
               const SizedBox(height: 12),
               _buildSourceBarChart(),
               const SizedBox(height: 24),
-              _buildSectionTitle('Detailed Breakdown', Icons.analytics_outlined),
+              _buildSectionTitle(
+                  'Detailed Breakdown', Icons.analytics_outlined),
               const SizedBox(height: 12),
               _buildDetailsCards(),
             ],
@@ -326,7 +314,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   ) {
     return Card(
       elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      shape:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -376,7 +365,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
     return Card(
       elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      shape:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
         child: Column(
@@ -452,7 +442,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
         Container(
           width: 12,
           height: 12,
-          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          decoration:
+              BoxDecoration(color: color, shape: BoxShape.circle),
         ),
         const SizedBox(width: 6),
         Text(
@@ -506,7 +497,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
     return Card(
       elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      shape:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 20, 12, 12),
         child: Column(
@@ -519,8 +511,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   alignment: BarChartAlignment.spaceAround,
                   maxY: maxVal * 1.25,
                   barTouchData: BarTouchData(
-                    touchCallback:
-                        (FlTouchEvent event, BarTouchResponse? response) {
+                    touchCallback: (FlTouchEvent event,
+                        BarTouchResponse? response) {
                       setState(() {
                         if (response == null ||
                             response.spot == null ||
@@ -534,7 +526,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     },
                     touchTooltipData: BarTouchTooltipData(
                       getTooltipColor: (_) => Colors.blueGrey.shade800,
-                      getTooltipItem: (group, groupIndex, rod, rodIndex) {
+                      getTooltipItem:
+                          (group, groupIndex, rod, rodIndex) {
                         final s = sources[groupIndex];
                         return BarTooltipItem(
                           '${s.key}\n',
@@ -697,7 +690,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
       elevation: 1,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      shape:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: ListTile(
         leading: CircleAvatar(
           backgroundColor: color.withAlpha(40),
@@ -705,7 +699,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ),
         title: Text(
           label,
-          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+          style:
+              const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
         ),
         trailing: Text(
           value,

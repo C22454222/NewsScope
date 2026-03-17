@@ -12,6 +12,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final user = FirebaseAuth.instance.currentUser;
   bool _notificationsEnabled = false;
 
+  // ── Logout ────────────────────────────────────────────────────────────────
+
   Future<void> _handleLogout() async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -40,6 +42,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  // ── Change password ───────────────────────────────────────────────────────
+
   Future<void> _handleChangePassword() async {
     final email = user?.email;
     if (email == null) return;
@@ -65,27 +69,71 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  Widget _buildSettingsTitle() {
-    return RichText(
-      text: TextSpan(
-        style: const TextStyle(
-          fontSize: 20,
-          fontWeight: FontWeight.bold,
-          letterSpacing: 0.3,
+  // ── Delete account ────────────────────────────────────────────────────────
+
+  Future<void> _handleDeleteAccount() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text(
+          'Delete Account',
+          style: TextStyle(color: Colors.red),
         ),
-        children: [
-          const TextSpan(
-            text: 'App ',
-            style: TextStyle(color: Colors.white),
+        content: const Text(
+          'This will permanently delete your account and all reading '
+          'history. This cannot be undone.',
+          style: TextStyle(height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
           ),
-          TextSpan(
-            text: 'Settings',
-            style: TextStyle(color: Colors.blue[200]),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text(
+              'Delete',
+              style: TextStyle(
+                  color: Colors.red, fontWeight: FontWeight.bold),
+            ),
           ),
         ],
       ),
     );
+
+    if (confirmed != true || !mounted) return;
+
+    try {
+      await user?.delete();
+      if (!mounted) return;
+      Navigator.of(context).popUntil((route) => route.isFirst);
+    } on FirebaseAuthException catch (e) {
+      if (!mounted) return;
+      // Requires recent login — prompt re-authentication
+      if (e.code == 'requires-recent-login') {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Please sign out and sign back in before deleting your account.',
+            ),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to delete account: ${e.message}'),
+            backgroundColor: Colors.red,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
   }
+
+  // ── Widgets ───────────────────────────────────────────────────────────────
 
   Widget _buildSectionHeader(String title) {
     return Padding(
@@ -133,18 +181,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
           : null,
       trailing: trailing ??
           (onTap != null
-              ? Icon(Icons.chevron_right, color: Colors.grey[400], size: 20)
+              ? Icon(Icons.chevron_right,
+                  color: Colors.grey[400], size: 20)
               : null),
       onTap: onTap,
     );
   }
+
+  // ── Build ─────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         centerTitle: true,
-        title: _buildSettingsTitle(),
+        title: Text(
+          'Settings',
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+            color: Colors.blue[800],
+          ),
+        ),
       ),
       body: ListView(
         children: [
@@ -153,6 +211,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           Card(
             margin: const EdgeInsets.symmetric(horizontal: 16),
             elevation: 1,
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12)),
             child: Column(
               children: [
                 _buildTile(
@@ -161,12 +221,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   subtitle: user?.displayName?.isNotEmpty == true
                       ? user!.displayName!
                       : 'Not set',
+                  trailing: const SizedBox.shrink(),
                 ),
                 const Divider(height: 1, indent: 56),
                 _buildTile(
                   icon: Icons.email_outlined,
                   title: 'Email',
                   subtitle: user?.email ?? 'Not signed in',
+                  trailing: const SizedBox.shrink(),
                 ),
                 const Divider(height: 1, indent: 56),
                 _buildTile(
@@ -184,6 +246,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           Card(
             margin: const EdgeInsets.symmetric(horizontal: 16),
             elevation: 1,
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12)),
             child: Column(
               children: [
                 SwitchListTile(
@@ -206,7 +270,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                   subtitle: Text(
                     'Breaking news alerts',
-                    style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+                    style:
+                        TextStyle(fontSize: 12, color: Colors.grey[500]),
                   ),
                   activeThumbColor: Colors.blue[700],
                   activeTrackColor: Colors.blue[300],
@@ -230,7 +295,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 _buildTile(
                   icon: Icons.source_outlined,
                   title: 'Preferred Sources',
-                  subtitle: 'BBC, CNN, RTÉ +3 more',
+                  subtitle: 'Customisation coming soon',
                   onTap: () {
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(
@@ -249,12 +314,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
           Card(
             margin: const EdgeInsets.symmetric(horizontal: 16),
             elevation: 1,
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12)),
             child: Column(
               children: [
                 _buildTile(
                   icon: Icons.info_outline,
                   title: 'App Version',
                   subtitle: '1.0.0 — Final Year Demo',
+                  trailing: const SizedBox.shrink(),
+                ),
+                const Divider(height: 1, indent: 56),
+                _buildTile(
+                  icon: Icons.newspaper,
+                  title: 'NewsScope',
+                  subtitle:
+                      'Bias-aware news aggregation for everyone.',
                   trailing: const SizedBox.shrink(),
                 ),
                 const Divider(height: 1, indent: 56),
@@ -284,13 +359,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
           Card(
             margin: const EdgeInsets.symmetric(horizontal: 16),
             elevation: 1,
-            child: _buildTile(
-              icon: Icons.logout,
-              title: 'Sign Out',
-              iconColor: Colors.red[600],
-              titleColor: Colors.red[600],
-              trailing: const SizedBox.shrink(),
-              onTap: _handleLogout,
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12)),
+            child: Column(
+              children: [
+                _buildTile(
+                  icon: Icons.logout,
+                  title: 'Sign Out',
+                  iconColor: Colors.red[600],
+                  titleColor: Colors.red[600],
+                  trailing: const SizedBox.shrink(),
+                  onTap: _handleLogout,
+                ),
+                const Divider(height: 1, indent: 56),
+                _buildTile(
+                  icon: Icons.delete_outline,
+                  title: 'Delete Account',
+                  subtitle: 'Permanently remove your account and data',
+                  iconColor: Colors.red[800],
+                  titleColor: Colors.red[800],
+                  trailing: const SizedBox.shrink(),
+                  onTap: _handleDeleteAccount,
+                ),
+              ],
             ),
           ),
 

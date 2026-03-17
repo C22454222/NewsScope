@@ -24,7 +24,6 @@ class _CompareScreenState extends State<CompareScreen>
   Map<String, dynamic>? _rawResults;
   bool _isLoading = false;
   String? _errorMessage;
-
   int _activeTab = 0;
 
   String? _selectedCategory;
@@ -70,6 +69,7 @@ class _CompareScreenState extends State<CompareScreen>
   Future<void> _searchTopic() async {
     final topic = _searchController.text.trim();
 
+    // Require at least a topic or a category to search
     if (topic.isEmpty && _selectedCategory == null) {
       setState(() {
         _errorMessage = null;
@@ -111,12 +111,14 @@ class _CompareScreenState extends State<CompareScreen>
 
     setState(() {
       _selectedCategory = newCategory;
+      // Clear results only if nothing to search on
       if (newCategory == null && !hasTopic) {
         _rawResults = null;
         _errorMessage = null;
       }
     });
 
+    // Auto-trigger search whenever a category is tapped
     if (newCategory != null || hasTopic) {
       _searchTopic();
     }
@@ -167,8 +169,7 @@ class _CompareScreenState extends State<CompareScreen>
             await Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) =>
-                    ArticleDetailScreen.fromArticle(article),
+                builder: (_) => ArticleDetailScreen.fromArticle(article),
               ),
             );
             widget.onArticleRead();
@@ -267,19 +268,16 @@ class _CompareScreenState extends State<CompareScreen>
       );
     }
 
-    final leftArticles =
-        _rawResults!['left_articles'] as List<dynamic>?;
-    final centreArticles =
-        _rawResults!['center_articles'] as List<dynamic>?;
-    final rightArticles =
-        _rawResults!['right_articles'] as List<dynamic>?;
+    final leftArticles = _rawResults!['left_articles'] as List<dynamic>?;
+    final centreArticles = _rawResults!['center_articles'] as List<dynamic>?;
+    final rightArticles = _rawResults!['right_articles'] as List<dynamic>?;
     final total = _rawResults!['total_found'] ?? 0;
 
     final topic = (_rawResults!['topic'] as String?)?.trim() ?? '';
     final isCategoryOnly = topic.isEmpty;
     final headerText = isCategoryOnly
         ? '${_selectedCategory ?? 'All'} — all coverage'
-        : '"$topic"${_selectedCategory != null ? ' · ${_selectedCategory!}' : ''}';
+        : '"$topic"${_selectedCategory != null ? ' · $_selectedCategory' : ''}';
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -290,9 +288,7 @@ class _CompareScreenState extends State<CompareScreen>
               child: Text(
                 headerText,
                 style: const TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.bold,
-                ),
+                    fontSize: 15, fontWeight: FontWeight.bold),
               ),
             ),
             Container(
@@ -340,7 +336,7 @@ class _CompareScreenState extends State<CompareScreen>
         scrollDirection: Axis.horizontal,
         padding: EdgeInsets.zero,
         itemCount: _categories.length,
-        separatorBuilder: (_, _) => const SizedBox(width: 8),
+        separatorBuilder: (_, _) => const SizedBox(width: 8), // ← fixed
         itemBuilder: (context, index) {
           final label = _categories[index];
           final isSelected = (_selectedCategory ?? 'All') == label;
@@ -354,17 +350,15 @@ class _CompareScreenState extends State<CompareScreen>
                 color: isSelected ? Colors.blue[700] : Colors.grey[100],
                 borderRadius: BorderRadius.circular(20),
                 border: Border.all(
-                  color: isSelected
-                      ? Colors.blue[700]!
-                      : Colors.grey[300]!,
+                  color:
+                      isSelected ? Colors.blue[700]! : Colors.grey[300]!,
                 ),
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   if (isSelected) ...[
-                    const Icon(Icons.check,
-                        size: 12, color: Colors.white),
+                    const Icon(Icons.check, size: 12, color: Colors.white),
                     const SizedBox(width: 4),
                   ],
                   Text(
@@ -374,9 +368,8 @@ class _CompareScreenState extends State<CompareScreen>
                       fontWeight: isSelected
                           ? FontWeight.w600
                           : FontWeight.normal,
-                      color: isSelected
-                          ? Colors.white
-                          : Colors.grey[700],
+                      color:
+                          isSelected ? Colors.white : Colors.grey[700],
                     ),
                   ),
                 ],
@@ -388,34 +381,17 @@ class _CompareScreenState extends State<CompareScreen>
     );
   }
 
-  // ── AppBar title ───────────────────────────────────────────────────────────
+  // ── AppBar title — single colour, readable on white AppBar ───────────────
 
   Widget _buildSpectrumTitle() {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(Icons.compare_arrows, size: 20, color: Colors.blue[200]),
-        const SizedBox(width: 8),
-        RichText(
-          text: TextSpan(
-            style: const TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
-              letterSpacing: 0.3,
-            ),
-            children: [
-              const TextSpan(
-                text: 'The ',
-                style: TextStyle(color: Colors.white),
-              ),
-              TextSpan(
-                text: 'Spectrum',
-                style: TextStyle(color: Colors.blue[200]),
-              ),
-            ],
-          ),
-        ),
-      ],
+    return Text(
+      'The Spectrum',
+      style: TextStyle(
+        fontSize: 20,
+        fontWeight: FontWeight.bold,
+        letterSpacing: 0.3,
+        color: Colors.blue[800],
+      ),
     );
   }
 
@@ -438,22 +414,18 @@ class _CompareScreenState extends State<CompareScreen>
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Browse by category',
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.grey[600],
-                    letterSpacing: 0.5,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                _buildCategoryChips(),
-              ],
+            // ── Category filter ──────────────────────────────────────────
+            Text(
+              'Filter by category',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: Colors.grey[600],
+                letterSpacing: 0.5,
+              ),
             ),
+            const SizedBox(height: 8),
+            _buildCategoryChips(),
 
             const SizedBox(height: 16),
 
@@ -464,8 +436,7 @@ class _CompareScreenState extends State<CompareScreen>
                   padding: const EdgeInsets.symmetric(horizontal: 12),
                   child: Text(
                     'or refine with a keyword',
-                    style:
-                        TextStyle(fontSize: 11, color: Colors.grey[500]),
+                    style: TextStyle(fontSize: 11, color: Colors.grey[500]),
                   ),
                 ),
                 Expanded(child: Divider(color: Colors.grey[300])),
@@ -474,6 +445,7 @@ class _CompareScreenState extends State<CompareScreen>
 
             const SizedBox(height: 12),
 
+            // ── Keyword search ───────────────────────────────────────────
             TextField(
               controller: _searchController,
               decoration: InputDecoration(
@@ -535,10 +507,8 @@ class _CompareScreenState extends State<CompareScreen>
                               const Icon(Icons.error_outline,
                                   size: 64, color: Colors.red),
                               const SizedBox(height: 16),
-                              Text(
-                                _errorMessage!,
-                                textAlign: TextAlign.center,
-                              ),
+                              Text(_errorMessage!,
+                                  textAlign: TextAlign.center),
                               const SizedBox(height: 16),
                               ElevatedButton(
                                 onPressed: _searchTopic,

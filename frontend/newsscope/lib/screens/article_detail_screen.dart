@@ -178,15 +178,14 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
                 const SizedBox(width: 8),
                 const Text(
                   'Ideological Spectrum',
-                  style:
-                      TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
                 ),
                 const Spacer(),
                 Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 10, vertical: 4),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                   decoration: BoxDecoration(
-                    color: markerColor.withValues(alpha: 0.12), // ← fixed
+                    color: markerColor.withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(20),
                     border: Border.all(color: markerColor, width: 1),
                   ),
@@ -233,26 +232,22 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
                           left: (barWidth * pos - markerSize / 2)
                               .clamp(0, barWidth - markerSize),
                           top: -4,
-                          child: Column(
-                            children: [
-                              Container(
-                                width: markerSize,
-                                height: markerSize,
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  shape: BoxShape.circle,
-                                  border: Border.all(
-                                      color: markerColor, width: 2.5),
-                                  boxShadow: const [
-                                    BoxShadow(
-                                      color: Colors.black26,
-                                      blurRadius: 4,
-                                      offset: Offset(0, 2),
-                                    ),
-                                  ],
+                          child: Container(
+                            width: markerSize,
+                            height: markerSize,
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              shape: BoxShape.circle,
+                              border:
+                                  Border.all(color: markerColor, width: 2.5),
+                              boxShadow: const [
+                                BoxShadow(
+                                  color: Colors.black26,
+                                  blurRadius: 4,
+                                  offset: Offset(0, 2),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
                         ),
                       ],
@@ -365,8 +360,8 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
         showDialog(
           context: context,
           builder: (_) => AlertDialog(
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
             title: Row(
               children: [
                 Icon(icon, color: color, size: 20),
@@ -388,9 +383,9 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
         decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.1),             // ← fixed
+          color: color.withValues(alpha: 0.1),
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: color.withValues(alpha: 0.7)), // ← fixed
+          border: Border.all(color: color.withValues(alpha: 0.7)),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -404,8 +399,7 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
             ),
             const SizedBox(width: 4),
             Icon(Icons.info_outline,
-                size: 11,
-                color: color.withValues(alpha: 0.7)), // ← fixed
+                size: 11, color: color.withValues(alpha: 0.7)),
           ],
         ),
       ),
@@ -528,8 +522,7 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
         children: [
           Text(
             claim,
-            style:
-                const TextStyle(fontStyle: FontStyle.italic, fontSize: 13),
+            style: const TextStyle(fontStyle: FontStyle.italic, fontSize: 13),
             maxLines: 3,
             overflow: TextOverflow.ellipsis,
           ),
@@ -544,8 +537,7 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
                 const SizedBox(width: 8),
                 Text(
                   '— $speaker',
-                  style:
-                      TextStyle(color: Colors.grey[600], fontSize: 12),
+                  style: TextStyle(color: Colors.grey[600], fontSize: 12),
                 ),
               ],
               if (url != null) ...[
@@ -566,6 +558,103 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
           ),
           const Divider(),
         ],
+      ),
+    );
+  }
+
+  // ── Article content card ──────────────────────────────────────────────────
+
+  Widget _buildArticleContentCard() {
+    final wordCount = widget.content!.trim().split(RegExp(r'\s+')).length;
+    final readingMins = (wordCount / 200).ceil(); // ~200 wpm
+
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          border: Border(
+            left: BorderSide(color: Colors.blue[700]!, width: 4),
+          ),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // ── Card header ──────────────────────────────────────────────
+              Row(
+                children: [
+                  Icon(Icons.article, size: 16, color: Colors.blue[700]),
+                  const SizedBox(width: 6),
+                  Text(
+                    'ARTICLE CONTENT',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.blue[700],
+                      letterSpacing: 1.0,
+                    ),
+                  ),
+                  const Spacer(),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: Colors.grey[100],
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      '$wordCount words · $readingMins min read',
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: Colors.grey[500],
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              const Divider(height: 1),
+              const SizedBox(height: 18),
+
+              // ── Article body — grows dynamically with content ─────────────
+              SelectableText(
+                widget.content!,
+                style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                      height: 1.8,
+                      fontSize: 15.5,
+                      color: Colors.grey[850],
+                      letterSpacing: 0.1,
+                    ),
+              ),
+
+              const SizedBox(height: 24),
+              const Divider(height: 1),
+              const SizedBox(height: 14),
+
+              // ── Footer — source link ──────────────────────────────────────
+              Center(
+                child: OutlinedButton.icon(
+                  onPressed: _launchURL,
+                  icon: const Icon(Icons.open_in_browser, size: 16),
+                  label: Text(
+                    'Read full article on ${widget.sourceName}',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.blue[700],
+                    side: BorderSide(color: Colors.blue[200]!),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 10),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -595,9 +684,10 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // ── Source badge ─────────────────────────────────────────────
               Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 12, vertical: 6),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 decoration: BoxDecoration(
                   color: Colors.blue.shade50,
                   borderRadius: BorderRadius.circular(16),
@@ -612,6 +702,7 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
               ),
               const SizedBox(height: 12),
 
+              // ── Title ────────────────────────────────────────────────────
               Text(
                 widget.title,
                 style: Theme.of(context)
@@ -621,6 +712,7 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
               ),
               const SizedBox(height: 16),
 
+              // ── Chips ────────────────────────────────────────────────────
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
@@ -646,8 +738,7 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
                         size: 16,
                         color: getSentimentColor(widget.sentimentScore),
                       ),
-                      label:
-                          Text(getSentimentLabel(widget.sentimentScore)),
+                      label: Text(getSentimentLabel(widget.sentimentScore)),
                       backgroundColor:
                           getSentimentColor(widget.sentimentScore)
                               .withAlpha((255 * 0.2).round()),
@@ -678,16 +769,11 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
               _buildCredibilityCard(),
               const SizedBox(height: 8),
               _buildFactCheckSection(),
-              const Divider(height: 32),
+              const SizedBox(height: 16),
 
+              // ── Article content ──────────────────────────────────────────
               if (widget.content != null && widget.content!.isNotEmpty)
-                Text(
-                  widget.content!,
-                  style: Theme.of(context)
-                      .textTheme
-                      .bodyLarge
-                      ?.copyWith(height: 1.6),
-                )
+                _buildArticleContentCard()
               else
                 Center(
                   child: Column(
@@ -705,6 +791,8 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
                     ],
                   ),
                 ),
+
+              const SizedBox(height: 24),
             ],
           ),
         ),

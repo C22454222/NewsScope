@@ -130,24 +130,15 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
     return 'Good evening';
   }
 
+  // ── AppBar title — single colour, readable on white AppBar ───────────────
   Widget _buildNewsScopeTitle() {
-    return RichText(
-      text: TextSpan(
-        style: const TextStyle(
-          fontSize: 22,
-          fontWeight: FontWeight.bold,
-          letterSpacing: 0.5,
-        ),
-        children: [
-          const TextSpan(
-            text: 'News',
-            style: TextStyle(color: Colors.white),
-          ),
-          TextSpan(
-            text: 'Scope',
-            style: TextStyle(color: Colors.blue[200]),
-          ),
-        ],
+    return Text(
+      'NewsScope',
+      style: TextStyle(
+        fontSize: 22,
+        fontWeight: FontWeight.bold,
+        letterSpacing: 0.5,
+        color: Colors.blue[800],
       ),
     );
   }
@@ -226,7 +217,7 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
         padding: const EdgeInsets.symmetric(horizontal: 16),
         scrollDirection: Axis.horizontal,
         itemCount: _categories.length,
-        separatorBuilder: (_, _) => const SizedBox(width: 8),
+        separatorBuilder: (_, _) => const SizedBox(width: 8), // ← fixed
         itemBuilder: (context, index) {
           final label = _categories[index];
           final isSelected = (_selectedCategory ?? 'All') == label;
@@ -245,9 +236,8 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                 color: isSelected ? Colors.blue[700] : Colors.grey[100],
                 borderRadius: BorderRadius.circular(20),
                 border: Border.all(
-                  color: isSelected
-                      ? Colors.blue[700]!
-                      : Colors.grey[300]!,
+                  color:
+                      isSelected ? Colors.blue[700]! : Colors.grey[300]!,
                 ),
               ),
               child: Row(
@@ -264,7 +254,8 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                       fontWeight: isSelected
                           ? FontWeight.w600
                           : FontWeight.normal,
-                      color: isSelected ? Colors.white : Colors.grey[700],
+                      color:
+                          isSelected ? Colors.white : Colors.grey[700],
                     ),
                   ),
                 ],
