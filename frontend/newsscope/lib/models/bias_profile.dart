@@ -1,10 +1,4 @@
-// lib/models/bias_profile.dart
-
 /// Typed model for the /api/bias-profile response.
-///
-/// Replaces Map (String, dynamic) usage in profile_screen and
-/// api_service, providing null-safe field access and a single
-/// fromJson factory consistent with Article.fromJson.
 class BiasProfile {
   final double avgBias;
   final double avgSentiment;
@@ -18,6 +12,7 @@ class BiasProfile {
   final int positiveCount;
   final int neutralCount;
   final int negativeCount;
+  final Map<String, int>? sourceBreakdown;
 
   const BiasProfile({
     required this.avgBias,
@@ -32,11 +27,14 @@ class BiasProfile {
     required this.positiveCount,
     required this.neutralCount,
     required this.negativeCount,
+    this.sourceBreakdown,
   });
 
   factory BiasProfile.fromJson(Map<String, dynamic> json) {
     final rawDist =
         (json['bias_distribution'] as Map<String, dynamic>?) ?? {};
+    final rawSources =
+        (json['source_breakdown'] as Map<String, dynamic>?);
 
     return BiasProfile(
       avgBias: (json['avg_bias'] as num?)?.toDouble() ?? 0.0,
@@ -55,6 +53,9 @@ class BiasProfile {
       positiveCount: (json['positive_count'] as num?)?.toInt() ?? 0,
       neutralCount: (json['neutral_count'] as num?)?.toInt() ?? 0,
       negativeCount: (json['negative_count'] as num?)?.toInt() ?? 0,
+      sourceBreakdown: rawSources?.map(
+        (k, v) => MapEntry(k, (v as num).toInt()),
+      ),
     );
   }
 

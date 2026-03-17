@@ -22,6 +22,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   bool _loading = true;
   String? _errorMessage;
 
+  int _touchedBarIndex = -1;
+
   @override
   void initState() {
     super.initState();
@@ -33,7 +35,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
       _loading = true;
       _errorMessage = null;
     });
-
     try {
       final profile = await _apiService.getBiasProfile();
       if (!mounted) return;
@@ -50,6 +51,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
+  // ── Helpers ───────────────────────────────────────────────────────────────
+
   Widget _buildBiasProfileTitle() {
     return Row(
       mainAxisSize: MainAxisSize.min,
@@ -65,17 +68,25 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
             children: [
               const TextSpan(
-                text: 'Bias ',
-                style: TextStyle(color: Colors.white),
-              ),
+                  text: 'Bias ', style: TextStyle(color: Colors.white)),
               TextSpan(
-                text: 'Profile',
-                style: TextStyle(color: Colors.blue[200]),
-              ),
+                  text: 'Profile',
+                  style: TextStyle(color: Colors.blue[200])),
             ],
           ),
         ),
       ],
+    );
+  }
+
+  Widget _settingsButton() {
+    return IconButton(
+      icon: const Icon(Icons.settings),
+      tooltip: 'Settings',
+      onPressed: () => Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const SettingsScreen()),
+      ),
     );
   }
 
@@ -85,16 +96,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Widget build(BuildContext context) {
     if (_loading) {
       return const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      );
+          body: Center(child: CircularProgressIndicator()));
     }
 
     if (_errorMessage != null) {
       return Scaffold(
-        appBar: AppBar(
-          centerTitle: true,
-          title: _buildBiasProfileTitle(),
-        ),
+        appBar: AppBar(centerTitle: true, title: _buildBiasProfileTitle()),
         body: Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -104,9 +111,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               Text(_errorMessage!),
               const SizedBox(height: 16),
               ElevatedButton(
-                onPressed: _loadProfile,
-                child: const Text('Retry'),
-              ),
+                  onPressed: _loadProfile, child: const Text('Retry')),
             ],
           ),
         ),
@@ -179,7 +184,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
               const SizedBox(height: 12),
               _buildPieChart(),
               const SizedBox(height: 24),
-              _buildSectionTitle('Detailed Breakdown', Icons.bar_chart),
+              _buildSectionTitle('Most Read Sources', Icons.bar_chart),
+              const SizedBox(height: 12),
+              _buildSourceBarChart(),
+              const SizedBox(height: 24),
+              _buildSectionTitle('Detailed Breakdown', Icons.analytics_outlined),
               const SizedBox(height: 12),
               _buildDetailsCards(),
             ],
@@ -189,18 +198,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  // ── Widgets ───────────────────────────────────────────────────────────────
-
-  Widget _settingsButton() {
-    return IconButton(
-      icon: const Icon(Icons.settings),
-      tooltip: 'Settings',
-      onPressed: () => Navigator.push(
-        context,
-        MaterialPageRoute(builder: (_) => const SettingsScreen()),
-      ),
-    );
-  }
+  // ── User header ───────────────────────────────────────────────────────────
 
   Widget _buildUserHeader() {
     final name = user?.displayName ?? 'Reader';
@@ -264,9 +262,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 const SizedBox(height: 8),
                 Container(
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 3,
-                  ),
+                      horizontal: 10, vertical: 3),
                   decoration: BoxDecoration(
                     color: Colors.white.withAlpha(40),
                     borderRadius: BorderRadius.circular(12),
@@ -289,6 +285,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
+  // ── Stat cards ────────────────────────────────────────────────────────────
+
   Widget _buildStatCards() {
     final p = _profile!;
     final sentimentColor = p.sentimentLabel == 'Positive'
@@ -297,28 +295,24 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ? Colors.red[600]!
             : Colors.orange[600]!;
 
-    return Column(
+    return Row(
       children: [
-        Row(
-          children: [
-            Expanded(
-              child: _buildStatCard(
-                'Your Leaning',
-                getBiasLabel(p.avgBias),
-                getBiasColor(p.avgBias),
-                Icons.balance,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: _buildStatCard(
-                'Avg Sentiment',
-                p.sentimentLabel,
-                sentimentColor,
-                Icons.sentiment_satisfied,
-              ),
-            ),
-          ],
+        Expanded(
+          child: _buildStatCard(
+            'Your Leaning',
+            getBiasLabel(p.avgBias),
+            getBiasColor(p.avgBias),
+            Icons.balance,
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: _buildStatCard(
+            'Avg Sentiment',
+            p.sentimentLabel,
+            sentimentColor,
+            Icons.sentiment_satisfied,
+          ),
         ),
       ],
     );
@@ -332,6 +326,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   ) {
     return Card(
       elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -369,31 +364,37 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
+  // ── Pie chart ─────────────────────────────────────────────────────────────
+
   Widget _buildPieChart() {
     final dist = _profile!.biasDistribution;
-    final left = dist['left'] ?? 0.0;
-    final center = dist['center'] ?? 0.0;
-    final right = dist['right'] ?? 0.0;
+    final left = (dist['left'] ?? 0.0).toDouble();
+    final center = (dist['center'] ?? 0.0).toDouble();
+    final right = (dist['right'] ?? 0.0).toDouble();
+    final total = left + center + right;
+    if (total == 0) return const SizedBox.shrink();
 
     return Card(
       elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Padding(
-        padding: const EdgeInsets.all(20.0),
+        padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
         child: Column(
           children: [
             SizedBox(
-              height: 220,
+              height: 210,
               child: PieChart(
                 PieChartData(
                   sectionsSpace: 3,
-                  centerSpaceRadius: 55,
+                  centerSpaceRadius: 50,
+                  startDegreeOffset: -90,
                   sections: [
                     if (left > 0)
                       PieChartSectionData(
                         value: left,
                         title: '${left.toInt()}%',
-                        color: Colors.blue[700],
-                        radius: 75,
+                        color: Colors.blue[700]!,
+                        radius: 55,
                         titleStyle: const TextStyle(
                           fontSize: 13,
                           fontWeight: FontWeight.bold,
@@ -404,8 +405,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       PieChartSectionData(
                         value: center,
                         title: '${center.toInt()}%',
-                        color: Colors.purple[400],
-                        radius: 75,
+                        color: Colors.purple[400]!,
+                        radius: 55,
                         titleStyle: const TextStyle(
                           fontSize: 13,
                           fontWeight: FontWeight.bold,
@@ -416,8 +417,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       PieChartSectionData(
                         value: right,
                         title: '${right.toInt()}%',
-                        color: Colors.red[700],
-                        radius: 75,
+                        color: Colors.red[700]!,
+                        radius: 55,
                         titleStyle: const TextStyle(
                           fontSize: 13,
                           fontWeight: FontWeight.bold,
@@ -449,8 +450,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
     return Row(
       children: [
         Container(
-          width: 14,
-          height: 14,
+          width: 12,
+          height: 12,
           decoration: BoxDecoration(color: color, shape: BoxShape.circle),
         ),
         const SizedBox(width: 6),
@@ -466,28 +467,223 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
+  // ── Source bar chart ──────────────────────────────────────────────────────
+
+  Color _sourceBarColor(int index, int total) {
+    final palette = [
+      Colors.blue[700]!,
+      Colors.blue[500]!,
+      Colors.cyan[600]!,
+      Colors.purple[400]!,
+      Colors.purple[600]!,
+      Colors.indigo[500]!,
+      Colors.teal[500]!,
+      Colors.orange[600]!,
+      Colors.orange[400]!,
+      Colors.red[400]!,
+      Colors.red[600]!,
+      Colors.red[800]!,
+    ];
+    return palette[index % palette.length];
+  }
+
+  Widget _buildSourceBarChart() {
+    final raw = _profile!.sourceBreakdown;
+
+    if (raw == null || raw.isEmpty) {
+      return _buildDetailCard(
+        'Most read source',
+        _profile!.mostReadSource,
+        Colors.indigo[600]!,
+        Icons.bookmark,
+      );
+    }
+
+    final sorted = raw.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    final sources = sorted.take(12).toList();
+    final maxVal = sources.first.value.toDouble();
+
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 20, 12, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              height: 240,
+              child: BarChart(
+                BarChartData(
+                  alignment: BarChartAlignment.spaceAround,
+                  maxY: maxVal * 1.25,
+                  barTouchData: BarTouchData(
+                    touchCallback:
+                        (FlTouchEvent event, BarTouchResponse? response) {
+                      setState(() {
+                        if (response == null ||
+                            response.spot == null ||
+                            event is FlTapUpEvent == false) {
+                          _touchedBarIndex = -1;
+                          return;
+                        }
+                        _touchedBarIndex =
+                            response.spot!.touchedBarGroupIndex;
+                      });
+                    },
+                    touchTooltipData: BarTouchTooltipData(
+                      getTooltipColor: (_) => Colors.blueGrey.shade800,
+                      getTooltipItem: (group, groupIndex, rod, rodIndex) {
+                        final s = sources[groupIndex];
+                        return BarTooltipItem(
+                          '${s.key}\n',
+                          const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 12,
+                          ),
+                          children: [
+                            TextSpan(
+                              text:
+                                  '${s.value} article${s.value == 1 ? '' : 's'}',
+                              style: const TextStyle(
+                                color: Colors.white70,
+                                fontSize: 11,
+                                fontWeight: FontWeight.normal,
+                              ),
+                            ),
+                          ],
+                        );
+                      },
+                    ),
+                  ),
+                  titlesData: FlTitlesData(
+                    bottomTitles: AxisTitles(
+                      sideTitles: SideTitles(
+                        showTitles: true,
+                        reservedSize: 44,
+                        getTitlesWidget: (value, meta) {
+                          final i = value.toInt();
+                          if (i < 0 || i >= sources.length) {
+                            return const SizedBox.shrink();
+                          }
+                          final name = sources[i].key;
+                          final short = name.split(' ').first;
+                          final abbr = short.length > 7
+                              ? '${short.substring(0, 6)}…'
+                              : short;
+                          return Padding(
+                            padding: const EdgeInsets.only(top: 6),
+                            child: Transform.rotate(
+                              angle: -0.45,
+                              child: Text(
+                                abbr,
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: i == _touchedBarIndex
+                                      ? FontWeight.bold
+                                      : FontWeight.normal,
+                                  color: i == _touchedBarIndex
+                                      ? Colors.blue[700]
+                                      : Colors.grey[600],
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                    leftTitles: AxisTitles(
+                      sideTitles: SideTitles(
+                        showTitles: true,
+                        reservedSize: 28,
+                        interval: (maxVal / 4)
+                            .ceilToDouble()
+                            .clamp(1, double.infinity),
+                        getTitlesWidget: (value, meta) => Text(
+                          value.toInt().toString(),
+                          style: TextStyle(
+                              fontSize: 10, color: Colors.grey[500]),
+                        ),
+                      ),
+                    ),
+                    topTitles: const AxisTitles(
+                        sideTitles: SideTitles(showTitles: false)),
+                    rightTitles: const AxisTitles(
+                        sideTitles: SideTitles(showTitles: false)),
+                  ),
+                  gridData: FlGridData(
+                    show: true,
+                    drawVerticalLine: false,
+                    horizontalInterval: (maxVal / 4)
+                        .ceilToDouble()
+                        .clamp(1, double.infinity),
+                    getDrawingHorizontalLine: (_) => FlLine(
+                      color: Colors.grey.withValues(alpha: 0.15),
+                      strokeWidth: 1,
+                    ),
+                  ),
+                  borderData: FlBorderData(show: false),
+                  barGroups: sources.asMap().entries.map((entry) {
+                    final i = entry.key;
+                    final isTouched = i == _touchedBarIndex;
+                    return BarChartGroupData(
+                      x: i,
+                      barRods: [
+                        BarChartRodData(
+                          toY: entry.value.value.toDouble(),
+                          color: isTouched
+                              ? _sourceBarColor(i, sources.length)
+                                  .withValues(alpha: 1.0)
+                              : _sourceBarColor(i, sources.length)
+                                  .withValues(alpha: 0.82),
+                          width: sources.length > 8 ? 14 : 18,
+                          borderRadius: const BorderRadius.vertical(
+                              top: Radius.circular(6)),
+                          backDrawRodData: BackgroundBarChartRodData(
+                            show: true,
+                            toY: maxVal * 1.25,
+                            color: Colors.grey.withValues(alpha: 0.05),
+                          ),
+                        ),
+                      ],
+                    );
+                  }).toList(),
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Tap a bar for details · showing top ${sources.length} sources',
+              style: TextStyle(fontSize: 10, color: Colors.grey[400]),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── Detailed breakdown cards ───────────────────────────────────────────────
+
   Widget _buildDetailsCards() {
     final p = _profile!;
     return Column(
       children: [
-        _buildDetailCard(
-            'Left Wing articles', '${p.leftCount}',
+        _buildDetailCard('Left Wing articles', '${p.leftCount}',
             Colors.blue[700]!, Icons.trending_down),
-        _buildDetailCard(
-            'Centre articles', '${p.centerCount}',
+        _buildDetailCard('Centre articles', '${p.centerCount}',
             Colors.purple[400]!, Icons.trending_flat),
-        _buildDetailCard(
-            'Right Wing articles', '${p.rightCount}',
+        _buildDetailCard('Right Wing articles', '${p.rightCount}',
             Colors.red[700]!, Icons.trending_up),
-        _buildDetailCard(
-            'Positive articles', '${p.positiveCount}',
+        _buildDetailCard('Positive articles', '${p.positiveCount}',
             Colors.green[600]!, Icons.sentiment_satisfied),
-        _buildDetailCard(
-            'Negative articles', '${p.negativeCount}',
+        _buildDetailCard('Negative articles', '${p.negativeCount}',
             Colors.red[600]!, Icons.sentiment_dissatisfied),
-        _buildDetailCard(
-            'Most read source', p.mostReadSource,
-            Colors.indigo[600]!, Icons.bookmark),
+        if (_profile!.sourceBreakdown == null ||
+            _profile!.sourceBreakdown!.isEmpty)
+          _buildDetailCard('Most read source', p.mostReadSource,
+              Colors.indigo[600]!, Icons.bookmark),
       ],
     );
   }
@@ -501,6 +697,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
       elevation: 1,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: ListTile(
         leading: CircleAvatar(
           backgroundColor: color.withAlpha(40),
@@ -521,6 +718,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
       ),
     );
   }
+
+  // ── Section title ─────────────────────────────────────────────────────────
 
   Widget _buildSectionTitle(String title, IconData icon) {
     return Row(

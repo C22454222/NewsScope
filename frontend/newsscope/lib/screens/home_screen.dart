@@ -50,6 +50,8 @@ class _HomeScreenState extends State<HomeScreen> {
         currentIndex: _currentIndex,
         selectedItemColor: Colors.blue[700],
         unselectedItemColor: Colors.grey[500],
+        backgroundColor: Colors.white,
+        elevation: 8,
         items: const [
           BottomNavigationBarItem(icon: Icon(Icons.home), label: 'Home'),
           BottomNavigationBarItem(
@@ -215,6 +217,96 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
     );
   }
 
+  // ── Category chips ─────────────────────────────────────────────────────────
+
+  Widget _buildCategoryChips() {
+    return SizedBox(
+      height: 36,
+      child: ListView.separated(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        scrollDirection: Axis.horizontal,
+        itemCount: _categories.length,
+        separatorBuilder: (_, _) => const SizedBox(width: 8),
+        itemBuilder: (context, index) {
+          final label = _categories[index];
+          final isSelected = (_selectedCategory ?? 'All') == label;
+          return GestureDetector(
+            onTap: () {
+              setState(() {
+                _selectedCategory = label == 'All' ? null : label;
+                _loadArticles();
+              });
+            },
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+              decoration: BoxDecoration(
+                color: isSelected ? Colors.blue[700] : Colors.grey[100],
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: isSelected
+                      ? Colors.blue[700]!
+                      : Colors.grey[300]!,
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (isSelected) ...[
+                    const Icon(Icons.check, size: 12, color: Colors.white),
+                    const SizedBox(width: 4),
+                  ],
+                  Text(
+                    label,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: isSelected
+                          ? FontWeight.w600
+                          : FontWeight.normal,
+                      color: isSelected ? Colors.white : Colors.grey[700],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  // ── Date section header ────────────────────────────────────────────────────
+
+  Widget _buildDateHeader(String headerText) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 16.0, bottom: 8.0),
+      child: Row(
+        children: [
+          Container(
+            width: 4,
+            height: 20,
+            decoration: BoxDecoration(
+              color: Colors.blue[700],
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            headerText,
+            style: TextStyle(
+              fontSize: 17,
+              fontWeight: FontWeight.bold,
+              color: Colors.grey[800],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Build ──────────────────────────────────────────────────────────────────
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -241,39 +333,8 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
             child: _buildGreetingCard(),
           ),
-
-          SizedBox(
-            height: 36,
-            child: ListView.separated(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              scrollDirection: Axis.horizontal,
-              itemCount: _categories.length,
-              separatorBuilder: (_, _) => const SizedBox(width: 8),
-              itemBuilder: (context, index) {
-                final label = _categories[index];
-                final isSelected = (_selectedCategory ?? 'All') == label;
-                return ChoiceChip(
-                  label: Text(label, style: const TextStyle(fontSize: 12)),
-                  selected: isSelected,
-                  selectedColor: Colors.blue[700],
-                  labelStyle: TextStyle(
-                    color: isSelected ? Colors.white : Colors.grey[700],
-                    fontWeight:
-                        isSelected ? FontWeight.w600 : FontWeight.normal,
-                  ),
-                  onSelected: (_) {
-                    setState(() {
-                      _selectedCategory = label == 'All' ? null : label;
-                      _loadArticles();
-                    });
-                  },
-                );
-              },
-            ),
-          ),
-
+          _buildCategoryChips(),
           const SizedBox(height: 8),
-
           Expanded(
             child: FutureBuilder<List<Article>>(
               future: _articlesFuture,
@@ -388,33 +449,7 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Padding(
-                            padding: const EdgeInsets.only(
-                              top: 16.0,
-                              bottom: 8.0,
-                            ),
-                            child: Row(
-                              children: [
-                                Container(
-                                  width: 4,
-                                  height: 20,
-                                  decoration: BoxDecoration(
-                                    color: Colors.blue[700],
-                                    borderRadius: BorderRadius.circular(2),
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Text(
-                                  headerText,
-                                  style: TextStyle(
-                                    fontSize: 17,
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.grey[800],
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
+                          _buildDateHeader(headerText),
                           ...sectionArticles.map(
                             (article) => ArticleCard(
                               article: article,

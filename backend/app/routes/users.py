@@ -19,7 +19,7 @@ def add_user(user: UserCreate) -> dict:
 
     Called after every Firebase login — not just registration —
     so the users row is guaranteed present before any reading
-    history is written. upsert on conflict id is idempotent.
+    history is written. upsert on_conflict=id is idempotent.
     """
     response = (
         supabase.table("users")
@@ -63,7 +63,7 @@ def update_preferences(uid: str, prefs: dict) -> dict:
 
 @router.put("/{uid}/bias_profile")
 def update_bias_profile(uid: str, profile: dict) -> dict:
-    """Update the user's computed bias profile."""
+    """Store a pre-computed bias profile blob against the user record."""
     response = (
         supabase.table("users")
         .update({"bias_profile": profile})

@@ -154,6 +154,10 @@ class BiasProfile(BaseModel):
     """
     Calculated bias profile based on the user's reading history,
     weighted by time spent on articles.
+
+    source_breakdown: top-12 sources by article count, keyed by
+    source name. Powers the bar chart on the Flutter profile screen.
+    None when no reading history exists yet.
     """
 
     avg_bias: float
@@ -168,6 +172,7 @@ class BiasProfile(BaseModel):
     positive_count: int = 0
     neutral_count: int = 0
     negative_count: int = 0
+    source_breakdown: Optional[Dict[str, int]] = None
 
 
 class FactCheckBase(BaseModel):

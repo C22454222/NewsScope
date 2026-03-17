@@ -138,7 +138,7 @@ def _sync_ingestion() -> None:
 def _sync_analysis() -> None:
     """
     Sync bridge — runs _guarded_analysis on the main event loop.
-    Fires every 5 minutes via APScheduler IntervalTrigger.
+    Fires every 10 minutes via APScheduler IntervalTrigger.
 
     acquire(blocking=False) is atomic — physically prevents overlap
     with _sync_ingestion even when both fire simultaneously from
@@ -567,6 +567,9 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
     This means the profile is fully stable after article archiving:
     deleted articles contribute their scores permanently via the snapshot.
 
+    source_breakdown: top-12 sources by article count, keyed by source
+    name. Powers the bar chart on the Flutter profile screen.
+
     Rows written before the snapshot migration have NULL score columns
     and are included in total_articles_read and reading_time but skipped
     in weighted score calculations — same behaviour as unscored articles.
@@ -598,6 +601,7 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
                 positive_count=0,
                 neutral_count=0,
                 negative_count=0,
+                source_breakdown={},  # ← added
             )
 
         total_time = sum(h["time_spent_seconds"] for h in history)
@@ -646,9 +650,11 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
         neu = len(history) - pos - neg
 
         sources = [h["source"] for h in history if h.get("source")]
+        source_counter = Counter(sources)                              # ← added
         most_read = (
-            Counter(sources).most_common(1)[0][0] if sources else "N/A"
+            source_counter.most_common(1)[0][0] if source_counter else "N/A"
         )
+        source_breakdown = dict(source_counter.most_common(12))       # ← added
 
         total_reads = len(history)
         distribution = {
@@ -676,6 +682,7 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
             positive_count=pos,
             neutral_count=neu,
             negative_count=neg,
+            source_breakdown=source_breakdown,                        # ← added
         )
     except Exception as exc:
         print(f"Error fetching bias profile: {exc}")

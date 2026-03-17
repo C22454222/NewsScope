@@ -14,13 +14,18 @@ class CompareScreen extends StatefulWidget {
   State<CompareScreen> createState() => _CompareScreenState();
 }
 
-class _CompareScreenState extends State<CompareScreen> {
+class _CompareScreenState extends State<CompareScreen>
+    with SingleTickerProviderStateMixin {
   final TextEditingController _searchController = TextEditingController();
   final ApiService _apiService = ApiService();
+
+  late TabController _tabController;
 
   Map<String, dynamic>? _rawResults;
   bool _isLoading = false;
   String? _errorMessage;
+
+  int _activeTab = 0;
 
   String? _selectedCategory;
   final List<String> _categories = const [
@@ -35,13 +40,32 @@ class _CompareScreenState extends State<CompareScreen> {
     'Science',
   ];
 
+  static const _tabColors = [
+    Color(0xFF1565C0), // Left   — blue[800]
+    Color(0xFF7B1FA2), // Centre — purple[800]
+    Color(0xFFC62828), // Right  — red[800]
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _tabController = TabController(length: 3, vsync: this);
+    _tabController.addListener(() {
+      if (_tabController.indexIsChanging ||
+          _tabController.index != _activeTab) {
+        setState(() => _activeTab = _tabController.index);
+      }
+    });
+  }
+
   @override
   void dispose() {
     _searchController.dispose();
+    _tabController.dispose();
     super.dispose();
   }
 
-  // ── Search ────────────────────────────────────────────────────────────────
+  // ── Search ─────────────────────────────────────────────────────────────────
 
   Future<void> _searchTopic() async {
     final topic = _searchController.text.trim();
@@ -69,6 +93,8 @@ class _CompareScreenState extends State<CompareScreen> {
       setState(() {
         _rawResults = results;
         _isLoading = false;
+        _tabController.animateTo(0);
+        _activeTab = 0;
       });
     } catch (e) {
       if (!mounted) return;
@@ -96,7 +122,7 @@ class _CompareScreenState extends State<CompareScreen> {
     }
   }
 
-  // ── Article list ──────────────────────────────────────────────────────────
+  // ── Article list ───────────────────────────────────────────────────────────
 
   List<Article> _toArticles(List<dynamic>? raw) {
     if (raw == null) return [];
@@ -116,7 +142,8 @@ class _CompareScreenState extends State<CompareScreen> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(Icons.article_outlined, size: 48, color: Colors.grey[300]),
+              Icon(Icons.article_outlined,
+                  size: 48, color: Colors.grey[300]),
               const SizedBox(height: 12),
               Text(
                 'No articles found in this band.',
@@ -140,7 +167,8 @@ class _CompareScreenState extends State<CompareScreen> {
             await Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => ArticleDetailScreen.fromArticle(article),
+                builder: (_) =>
+                    ArticleDetailScreen.fromArticle(article),
               ),
             );
             widget.onArticleRead();
@@ -150,7 +178,72 @@ class _CompareScreenState extends State<CompareScreen> {
     );
   }
 
-  // ── Results body ──────────────────────────────────────────────────────────
+  // ── Tab bar ────────────────────────────────────────────────────────────────
+
+  Widget _buildBiasTabBar(
+    List<dynamic>? leftArticles,
+    List<dynamic>? centreArticles,
+    List<dynamic>? rightArticles,
+  ) {
+    final activeColor = _tabColors[_activeTab];
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.grey[100],
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: TabBar(
+        controller: _tabController,
+        labelColor: Colors.white,
+        unselectedLabelColor: Colors.grey[600],
+        indicator: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          color: activeColor,
+        ),
+        dividerColor: Colors.transparent,
+        tabs: [
+          _buildTab(
+            icon: Icons.arrow_back,
+            iconColor: Colors.blue[400]!,
+            label: 'Left (${leftArticles?.length ?? 0})',
+            isSelected: _activeTab == 0,
+          ),
+          _buildTab(
+            icon: Icons.horizontal_rule,
+            iconColor: Colors.purple[400]!,
+            label: 'Centre (${centreArticles?.length ?? 0})',
+            isSelected: _activeTab == 1,
+          ),
+          _buildTab(
+            icon: Icons.arrow_forward,
+            iconColor: Colors.red[400]!,
+            label: 'Right (${rightArticles?.length ?? 0})',
+            isSelected: _activeTab == 2,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Tab _buildTab({
+    required IconData icon,
+    required Color iconColor,
+    required String label,
+    required bool isSelected,
+  }) {
+    return Tab(
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(icon, size: 14, color: isSelected ? Colors.white : iconColor),
+          const SizedBox(width: 4),
+          Text(label, style: const TextStyle(fontSize: 12)),
+        ],
+      ),
+    );
+  }
+
+  // ── Results body ───────────────────────────────────────────────────────────
 
   Widget _buildResultsBody() {
     if (_rawResults == null) {
@@ -174,9 +267,12 @@ class _CompareScreenState extends State<CompareScreen> {
       );
     }
 
-    final leftArticles = _rawResults!['left_articles'] as List<dynamic>?;
-    final centreArticles = _rawResults!['center_articles'] as List<dynamic>?;
-    final rightArticles = _rawResults!['right_articles'] as List<dynamic>?;
+    final leftArticles =
+        _rawResults!['left_articles'] as List<dynamic>?;
+    final centreArticles =
+        _rawResults!['center_articles'] as List<dynamic>?;
+    final rightArticles =
+        _rawResults!['right_articles'] as List<dynamic>?;
     final total = _rawResults!['total_found'] ?? 0;
 
     final topic = (_rawResults!['topic'] as String?)?.trim() ?? '';
@@ -219,87 +315,80 @@ class _CompareScreenState extends State<CompareScreen> {
           ],
         ),
         const SizedBox(height: 12),
+        _buildBiasTabBar(leftArticles, centreArticles, rightArticles),
+        const SizedBox(height: 8),
         Expanded(
-          child: DefaultTabController(
-            length: 3,
-            child: Column(
-              children: [
-                Container(
-                  decoration: BoxDecoration(
-                    color: Colors.grey[100],
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: TabBar(
-                    labelColor: Colors.white,
-                    unselectedLabelColor: Colors.grey[600],
-                    indicator: BoxDecoration(
-                      borderRadius: BorderRadius.circular(12),
-                      color: Colors.blue[700],
-                    ),
-                    dividerColor: Colors.transparent,
-                    tabs: [
-                      Tab(
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.arrow_back,
-                                size: 14, color: Colors.blue[300]),
-                            const SizedBox(width: 4),
-                            Text(
-                              'Left (${leftArticles?.length ?? 0})',
-                              style: const TextStyle(fontSize: 12),
-                            ),
-                          ],
-                        ),
-                      ),
-                      Tab(
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.horizontal_rule,
-                                size: 14, color: Colors.purple[300]),
-                            const SizedBox(width: 4),
-                            Text(
-                              'Centre (${centreArticles?.length ?? 0})',
-                              style: const TextStyle(fontSize: 12),
-                            ),
-                          ],
-                        ),
-                      ),
-                      Tab(
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.arrow_forward,
-                                size: 14, color: Colors.red[300]),
-                            const SizedBox(width: 4),
-                            Text(
-                              'Right (${rightArticles?.length ?? 0})',
-                              style: const TextStyle(fontSize: 12),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Expanded(
-                  child: TabBarView(
-                    children: [
-                      _buildArticleList(leftArticles),
-                      _buildArticleList(centreArticles),
-                      _buildArticleList(rightArticles),
-                    ],
-                  ),
-                ),
-              ],
-            ),
+          child: TabBarView(
+            controller: _tabController,
+            children: [
+              _buildArticleList(leftArticles),
+              _buildArticleList(centreArticles),
+              _buildArticleList(rightArticles),
+            ],
           ),
         ),
       ],
     );
   }
+
+  // ── Category chips ─────────────────────────────────────────────────────────
+
+  Widget _buildCategoryChips() {
+    return SizedBox(
+      height: 36,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: EdgeInsets.zero,
+        itemCount: _categories.length,
+        separatorBuilder: (_, _) => const SizedBox(width: 8),
+        itemBuilder: (context, index) {
+          final label = _categories[index];
+          final isSelected = (_selectedCategory ?? 'All') == label;
+          return GestureDetector(
+            onTap: () => _onCategorySelected(label),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+              decoration: BoxDecoration(
+                color: isSelected ? Colors.blue[700] : Colors.grey[100],
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: isSelected
+                      ? Colors.blue[700]!
+                      : Colors.grey[300]!,
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (isSelected) ...[
+                    const Icon(Icons.check,
+                        size: 12, color: Colors.white),
+                    const SizedBox(width: 4),
+                  ],
+                  Text(
+                    label,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: isSelected
+                          ? FontWeight.w600
+                          : FontWeight.normal,
+                      color: isSelected
+                          ? Colors.white
+                          : Colors.grey[700],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  // ── AppBar title ───────────────────────────────────────────────────────────
 
   Widget _buildSpectrumTitle() {
     return Row(
@@ -330,7 +419,7 @@ class _CompareScreenState extends State<CompareScreen> {
     );
   }
 
-  // ── Build ─────────────────────────────────────────────────────────────────
+  // ── Build ──────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -362,35 +451,7 @@ class _CompareScreenState extends State<CompareScreen> {
                   ),
                 ),
                 const SizedBox(height: 8),
-                SizedBox(
-                  height: 36,
-                  child: ListView.separated(
-                    scrollDirection: Axis.horizontal,
-                    padding: EdgeInsets.zero,
-                    itemCount: _categories.length,
-                    separatorBuilder: (_, _) => const SizedBox(width: 8),
-                    itemBuilder: (context, index) {
-                      final label = _categories[index];
-                      final isSelected =
-                          (_selectedCategory ?? 'All') == label;
-                      return ChoiceChip(
-                        label: Text(label,
-                            style: const TextStyle(fontSize: 12)),
-                        selected: isSelected,
-                        selectedColor: Colors.blue[700],
-                        labelStyle: TextStyle(
-                          color: isSelected
-                              ? Colors.white
-                              : Colors.grey[700],
-                          fontWeight: isSelected
-                              ? FontWeight.w600
-                              : FontWeight.normal,
-                        ),
-                        onSelected: (_) => _onCategorySelected(label),
-                      );
-                    },
-                  ),
-                ),
+                _buildCategoryChips(),
               ],
             ),
 
@@ -403,7 +464,8 @@ class _CompareScreenState extends State<CompareScreen> {
                   padding: const EdgeInsets.symmetric(horizontal: 12),
                   child: Text(
                     'or refine with a keyword',
-                    style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+                    style:
+                        TextStyle(fontSize: 11, color: Colors.grey[500]),
                   ),
                 ),
                 Expanded(child: Divider(color: Colors.grey[300])),
