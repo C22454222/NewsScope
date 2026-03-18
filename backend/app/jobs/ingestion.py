@@ -1,71 +1,67 @@
 """
 NewsScope Ingestion Pipeline.
 
-Daily volume: ~4,560 articles fetched, ~2,736 new after dedup.
-Credibility fields seeded as defaults on insert; fact-checking
-runs async post-insert via safe loop wrapper with concurrency cap.
+SOURCE STATUS (v7 — all 12 verified):
+---------------------------------------------------------------------
+Source            | Domain          | Bias   | Scraper    | Status
+------------------|-----------------|--------|------------|--------
+The Guardian      | theguardian.com | Left   | newspaper3k| OK
+GB News           | gbnews.com      | Right  | Dedicated  | FIXED v7
+RTÉ News          | rte.ie          | Center | Generic    | OK
+The Irish Times   | irishtimes.com  | Center | Generic    | OK (soft paywall — free paras only)
+The Independent   | independent.co.uk| CL    | Generic    | OK (preamble stripped)
+NPR               | npr.org         | CL     | newspaper3k| OK
+Sky News          | news.sky.com    | CR     | Generic    | OK
+Euronews          | euronews.com    | Center | Dedicated  | FIXED v6
+CNN               | cnn.com         | Left   | Dedicated  | FIXED v6
+BBC News          | bbc.co.uk       | Center | Dedicated  | FIXED v7
+Fox News          | foxnews.com     | Right  | Dedicated  | FIXED v6
+AP News           | apnews.com      | CR     | Dedicated  | NEW v7
+---------------------------------------------------------------------
 
-MEMORY FIX SUMMARY (v3):
-- _SCRAPE_WORKERS reduced 3→2: fewer simultaneous BeautifulSoup
-  parse trees in RAM. 2 workers ≈ 80-120MB vs 3 workers ≈ 150-200MB.
-- _INSERT_CHUNK_SIZE reduced 10→5: chunk size now matches worker
-  count more closely — previously 10 article dicts were held in
-  the executor queue even though only 3 were being processed.
-- _FACTCHECK_DELAY_SECONDS = 600: factcheck_batch previously fired
-  immediately after ingestion while scraping RAM had not yet been
-  freed and analysis was running. 10 minute delay gives GC time to
-  clear ingestion RAM before factcheck Supabase fetches begin.
-- _FACTCHECK_CONCURRENCY = 1: fully sequential factcheck prevents
-  overlap between Google Fact Check API HTTP response buffers and
-  analysis HF calls. With _MAX_CLAIMS=2 per article this is fast
-  enough.
-- Content stored in DB is NOT truncated — full article content is
-  preserved for accurate display and analysis. Previously limited
-  to 5000 chars, causing mid-sentence cutoffs in the frontend.
+AP News replaces both Reuters (failed scraping) and Politico (100%
+paywalled). AP is Center-Right on political/economic coverage, fully
+open-access, and has reliable HTML structure.
 
-THROUGHPUT UPGRADE (v5 — spaCy removed):
-- _SCRAPE_WORKERS raised 2→4: spaCy RAM gone — BeautifulSoup trees
-  are now the only scraping cost. 4 workers ≈ 120-180MB peak vs
-  the old 80-120MB at 2 workers, well within Render 512MB limit.
-- _INSERT_CHUNK_SIZE raised 5→10: matches new worker count — all
-  10 slots are active simultaneously rather than half-idle.
-- RSS entries per feed raised 5→15: 8 × 15 = 120 articles/cycle,
-  2,880/day. Previously capped at 5 to protect spaCy RAM.
-- NewsAPI pageSize raised 10→25: 4 × 25 = 100 articles/cycle,
-  still only 96 requests/day within the free tier 100/day limit.
-- Combined daily fetch: ~4,560 articles (~2,736 new after 60% dedup).
-  Up from ~1,920/day — 2.4x more coverage with no RAM regression.
+BBC FIX (v7):
+- Root cause: text-block elements were being found across the whole
+  DOM including related-stories panels and secondary sidebars, causing
+  the scraper to start mid-article or return content from the wrong
+  section. The Reeves article started at "However, Reeves growth
+  plans..." (paragraph ~7) instead of "Regional mayors could be given
+  control..." (paragraph 1).
+- Fix: scope ALL text-block lookups to the
+  [data-component="article-body-component"] container. All paragraph
+  blocks inside that wrapper are in correct document order, guaranteed
+  to start from paragraph 1.
+- newspaper3k is intentionally SKIPPED for BBC — it returns AMP/
+  cached partial versions that begin from the wrong paragraph.
+- Block types collected in document order:
+    text-block, crosshead-block, unordered-list-block
 
-ENCODING FIX:
-- BeautifulSoup tiers now attempt UTF-8 first, then fall back to
-  apparent_encoding. This prevents Euronews and other sources that
-  return gzip/brotli compressed responses from storing binary blobs.
+GB News FIX (v7):
+- GB News uses React SSR — the article body sits inside
+  div[class*="article-content"] or div[class*="ArticleBody"].
+- Generic tier was picking up nav/sidebar text instead.
+- Dedicated scraper targets these selectors directly and strips
+  share buttons, author bylines, and tag clouds.
 
-BINARY GUARD (v4):
-- _is_readable_content() validates content before Supabase insert.
-  apparent_encoding detection occasionally fails for Euronews even
-  with the encoding fix applied. A printable-ratio check on the first
-  500 chars catches any remaining blobs — content below 85% printable
-  is replaced with the title-based fallback before insert, so binary
-  data never reaches Supabase or the fact-checking pipeline.
+AP News (v7 — replaces Politico/Reuters):
+- Targets div[class*="RichTextStoryBody"] (primary AP 2022+ layout).
+- AP is fully open-access — no paywall, no login required.
+- Bias rating: Center-Right (matches Politico's leaning).
 
-BOILERPLATE STRIP (v5):
-- clean_text() now removes The Independent's multi-line fundraising
-  preamble ("Your support helps us to tell the story...") using a
-  DOTALL regex applied before other cleaning passes.
+CNN FIX (v6):
+- Video pages (/videos/, /video/) skipped — sidebar bleed fixed.
+- Targets .article__content and .zn-body__paragraph.
 
-CONTENT LIMIT REMOVED (v5):
-- _CONTENT_STORE_LIMIT removed entirely. Full scraped content is
-  stored. The previous 5000-char cap caused articles to be cut off
-  mid-sentence in the frontend. Analysis uses only the first 512
-  chars anyway so removing the cap has no impact on analysis quality.
+Euronews FIX (v6):
+- Accept-Encoding: identity forces uncompressed response.
+- Eliminates binary blobs from gzip misidentification.
 
-CATEGORY GUARANTEE (v5):
-- categorisation.py never returns 'general' or None.
-- normalize_article calls infer_category(url, title) at fetch time.
-- _scrape_one re-runs infer_category with content if category is
-  missing (safety net only — should never fire in practice).
-- Every article is guaranteed a meaningful category before insert.
+Fox News FIX (v6):
+- Strips "close\\nVideo\\n" overlay + "NEW\\nYou can now listen" banner.
+- Targets .article-body directly.
 
 Flake8: 0 errors/warnings.
 """
@@ -92,13 +88,17 @@ from app.db.supabase import supabase
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
+# NewsAPI source IDs. AP (associated-press) replaces Politico (paywalled).
 NEWSAPI_SOURCES = [
     "cnn",
     "fox-news",
     "bbc-news",
-    "politico",
+    "associated-press",
 ]
 
+# RSS feed → source name mapping.
+# Update RSS_FEEDS env var: replace old Politico/Reuters URL with
+#   https://feeds.apnews.com/rss/apf-topnews
 FEED_NAME_MAP = {
     "https://www.theguardian.com/uk/rss": "The Guardian",
     "https://www.gbnews.com/feeds/politics.rss": "GB News",
@@ -108,37 +108,57 @@ FEED_NAME_MAP = {
     "https://www.npr.org/rss/rss.php?id=1001": "NPR",
     "https://feeds.skynews.com/feeds/rss/uk.xml": "Sky News",
     "https://www.euronews.com/rss": "Euronews",
+    # AP News replaces Politico (paywalled) and Reuters (broken scraping).
+    "https://feeds.apnews.com/rss/apf-topnews": "AP News",
 }
 
-# Raised from 2 — spaCy RAM gone. 4 workers ≈ 120-180MB peak,
-# well within Render 512MB limit. Each worker holds one BeautifulSoup
-# parse tree + one requests response buffer simultaneously.
 _SCRAPE_WORKERS = 4
-
-# Fully sequential factcheck prevents any overlap between Google Fact
-# Check API HTTP response buffers and analysis HF calls.
 _FACTCHECK_CONCURRENCY = 1
-
-# Raised from 5 — matches new worker count so all 10 executor slots
-# are active simultaneously rather than half-idle.
 _INSERT_CHUNK_SIZE = 10
-
-# Delay factcheck after ingestion completes — gives GC time to free
-# scraping RAM before factcheck Supabase fetches begin loading full
-# article rows. 10 min gives analysis cycles time to complete before
-# Google Fact Check API calls begin.
 _FACTCHECK_DELAY_SECONDS = 600
 
-# Main event loop — captured at startup by set_main_event_loop().
 _main_event_loop: Optional[asyncio.AbstractEventLoop] = None
 
-# Regex to strip The Independent's multi-line fundraising preamble.
-# Applied with re.DOTALL so it spans line boundaries. The block always
-# starts with "Your support helps us" and ends with "Read more\n".
+# ── Boilerplate regexes ───────────────────────────────────────────────────────
+
+# The Independent fundraising preamble (DOTALL — spans line breaks).
 _INDEPENDENT_PREAMBLE_RE = re.compile(
     r"Your support helps us to tell the story.*?Read more\s*",
     re.DOTALL | re.IGNORECASE,
 )
+
+# Fox News: "close\nVideo\n<caption>\nNEW\nYou can now listen..." block.
+_FOX_VIDEO_OVERLAY_RE = re.compile(
+    r"^close\s*\nVideo\s*\n.*?(?=NEW\s*\nYou can now listen)",
+    re.DOTALL | re.IGNORECASE,
+)
+_FOX_LISTEN_BANNER_RE = re.compile(
+    r"NEW\s*\nYou can now listen to Fox News articles!\s*\n",
+    re.IGNORECASE,
+)
+
+# ── Source domain dispatch table ──────────────────────────────────────────────
+
+_SOURCE_DISPATCH = {
+    "cnn.com": "CNN",
+    "euronews.com": "Euronews",
+    "foxnews.com": "Fox News",
+    "bbc.co.uk": "BBC News",
+    "bbc.com": "BBC News",
+    "apnews.com": "AP News",
+    "gbnews.com": "GB News",
+}
+
+
+def _detect_source_from_url(url: str) -> Optional[str]:
+    """Return the canonical source name for a URL, or None."""
+    if not url:
+        return None
+    url_lower = url.lower()
+    for domain, name in _SOURCE_DISPATCH.items():
+        if domain in url_lower:
+            return name
+    return None
 
 
 # ── Content validation ────────────────────────────────────────────────────────
@@ -147,16 +167,7 @@ _INDEPENDENT_PREAMBLE_RE = re.compile(
 def _is_readable_content(text: str) -> bool:
     """
     Return True if text is readable UTF-8, not binary data.
-
-    Euronews and some compressed sources occasionally return binary
-    blobs even after apparent_encoding is applied. A printable-ratio
-    check on the first 500 chars catches remaining blobs — anything
-    below 85% printable ASCII is treated as binary and rejected before
-    it reaches Supabase or the fact-checking pipeline.
-
-    Duplicated from fact_checking._is_valid_content to avoid a
-    circular import — ingestion imports fact_checking lazily inside
-    factcheck_batch to prevent module-load side effects.
+    Printable-ratio check on first 500 chars — below 85% is rejected.
     """
     if not text or len(text) < 40:
         return False
@@ -169,10 +180,6 @@ def _is_readable_content(text: str) -> bool:
 
 
 def set_main_event_loop(loop: asyncio.AbstractEventLoop) -> None:
-    """
-    Store the main event loop so thread workers can schedule coroutines.
-    Called once from lifespan in main.py before any jobs run.
-    """
     global _main_event_loop
     _main_event_loop = loop
 
@@ -181,7 +188,6 @@ def set_main_event_loop(loop: asyncio.AbstractEventLoop) -> None:
 
 
 def _get_rss_feeds() -> List[str]:
-    """Return configured RSS feed URLs from settings/env."""
     raw = os.getenv("RSS_FEEDS", "")
     return [s.strip() for s in raw.split(",") if s.strip()]
 
@@ -195,27 +201,13 @@ def normalize_article(
     bias_score: Optional[float] = None,
     sentiment_score: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """
-    Normalise article data from various sources into a common format.
-
-    Category inference runs all three tiers here — tiers 1+2 cover
-    ~95% of articles via URL path and title keywords. Tier 3 broad
-    fallback fires for the rest. Content is not yet available at this
-    stage; _scrape_one re-runs infer_category with content as a safety
-    net if category is somehow missing after insert.
-
-    infer_category() always returns a meaningful category string —
-    never None, never 'general'.
-    """
     ts = None
     if published_at:
         try:
             ts = dtparser.parse(published_at)
         except Exception:
             ts = None
-
     category = infer_category(url, title)
-
     return {
         "title": title,
         "url": url,
@@ -228,7 +220,6 @@ def normalize_article(
 
 
 def upsert_source(name: str) -> Optional[str]:
-    """Get or create a source record by name, return its ID."""
     existing = (
         supabase.table("sources")
         .select("id")
@@ -239,7 +230,6 @@ def upsert_source(name: str) -> Optional[str]:
     )
     if existing:
         return existing[0]["id"]
-
     inserted = (
         supabase.table("sources")
         .insert({"name": name})
@@ -250,7 +240,6 @@ def upsert_source(name: str) -> Optional[str]:
 
 
 def sanitize_for_postgres(text: str) -> str:
-    """Remove characters that PostgreSQL cannot handle."""
     if not text:
         return ""
     text = text.replace("\x00", "").replace("\u0000", "")
@@ -262,19 +251,17 @@ def sanitize_for_postgres(text: str) -> str:
 
 def clean_text(text: str) -> str:
     """
-    Clean scraped text: remove whitespace and navigation boilerplate.
-
-    The Independent's multi-line fundraising preamble is stripped
-    first with a DOTALL regex before other patterns run. Without this
-    the block appears verbatim at the top of every Independent article
-    because none of the single-line patterns match multi-line prose.
+    Clean scraped text. Strips source-specific boilerplate first,
+    then generic noise patterns.
     """
     if not text:
         return ""
     text = sanitize_for_postgres(text)
 
-    # Strip The Independent's multi-line fundraising preamble.
+    # Source-specific preamble/boilerplate strips.
     text = _INDEPENDENT_PREAMBLE_RE.sub("", text)
+    text = _FOX_VIDEO_OVERLAY_RE.sub("", text)
+    text = _FOX_LISTEN_BANNER_RE.sub("", text)
 
     text = re.sub(r"\n\s*\n+", "\n\n", text)
     text = re.sub(r"[ \t]+", " ", text)
@@ -301,7 +288,443 @@ def clean_text(text: str) -> str:
     return text.strip()
 
 
-# ── Scraping tiers ────────────────────────────────────────────────────────────
+# ── Shared scraping helper ────────────────────────────────────────────────────
+
+
+def _get_soup(
+    url: str,
+    *,
+    referer: str = "https://www.google.com/",
+    lang: str = "en-US,en;q=0.9",
+) -> Optional[BeautifulSoup]:
+    """
+    Fetch URL with Accept-Encoding: identity (no gzip/brotli) and
+    return a BeautifulSoup object, or None on failure.
+
+    All dedicated scrapers use this helper — identity encoding
+    prevents the gzip binary blob issue that affected Euronews.
+    Response is closed and deleted immediately after parsing.
+    """
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": lang,
+        "Accept-Encoding": "identity",
+        "Referer": referer,
+    }
+    try:
+        response = requests.get(url, headers=headers, timeout=15)
+        response.raise_for_status()
+        response.encoding = "utf-8"
+        if not _is_readable_content(response.text[:500]):
+            response.close()
+            return None
+        soup = BeautifulSoup(response.text, "html.parser")
+        response.close()
+        del response
+        return soup
+    except Exception:
+        return None
+
+
+def _strip_noise(soup: BeautifulSoup) -> None:
+    """Remove script, style, nav, footer, figure etc. in-place."""
+    for tag in soup(
+        ["script", "style", "nav", "footer", "aside",
+         "header", "iframe", "noscript", "form", "button",
+         "figure", "figcaption", "video", "picture"]
+    ):
+        tag.decompose()
+
+
+def _paragraphs_from(
+    container: Any, min_len: int = 30
+) -> List[str]:
+    """Extract non-empty paragraph strings from a BS4 container."""
+    return [
+        p.get_text(separator=" ", strip=True)
+        for p in container.find_all(["p", "h2", "h3"])
+        if len(p.get_text(strip=True)) > min_len
+    ]
+
+
+# ── Source-specific scrapers ──────────────────────────────────────────────────
+
+
+def _scrape_bbc(url: str) -> Optional[str]:
+    """
+    BBC News dedicated scraper.
+
+    THE FIX: scope all block lookups to the
+    [data-component="article-body-component"] wrapper first.
+
+    Without this scope, text-block elements are found across the full
+    DOM including related-stories panels and sidebars — causing the
+    scraper to start mid-article (e.g. starting at paragraph 7 of the
+    Reeves article: "However, Reeves growth plans could be challenged"
+    instead of paragraph 1: "Regional mayors could be given control").
+
+    With the scope, blocks are collected in document order starting
+    from the first paragraph, every time.
+
+    newspaper3k is intentionally NOT called for BBC — it returns
+    AMP/cached partial versions that start from the wrong paragraph.
+
+    Block types collected (in document order):
+      text-block          — body paragraphs
+      crosshead-block     — subheadings (preserves article structure)
+      unordered-list-block — bullet lists
+
+    Excluded: image-block, media-block, byline, timestamp,
+    related-content-block (all add noise, not article text).
+    """
+    soup = _get_soup(url, lang="en-GB,en;q=0.9")
+    if soup is None:
+        return None
+
+    _strip_noise(soup)
+
+    paragraphs: List[str] = []
+    wanted_components = {
+        "text-block",
+        "crosshead-block",
+        "unordered-list-block",
+    }
+
+    # PRIMARY: scoped to article-body-component wrapper.
+    article_body = soup.find(
+        attrs={"data-component": "article-body-component"}
+    )
+    if article_body:
+        for block in article_body.find_all(
+            attrs={"data-component": True}
+        ):
+            if block.get("data-component") not in wanted_components:
+                continue
+            t = block.get_text(separator=" ", strip=True)
+            if len(t) > 20:
+                paragraphs.append(t)
+
+    # SECONDARY: ssrcss-* paragraph class pattern scoped to <article>.
+    if not paragraphs:
+        article_tag = soup.find("article")
+        if article_tag:
+            for p in article_tag.find_all(
+                "p", class_=re.compile(r"ssrcss-")
+            ):
+                t = p.get_text(strip=True)
+                if len(t) > 30:
+                    paragraphs.append(t)
+
+    # TERTIARY: generic article > p fallback.
+    if not paragraphs:
+        article_tag = soup.find("article")
+        if article_tag:
+            paragraphs = _paragraphs_from(article_tag)
+
+    soup.decompose()
+    del soup
+
+    if paragraphs:
+        content = "\n\n".join(paragraphs)
+        cleaned = clean_text(content)
+        if len(cleaned) > 150:
+            return cleaned
+    return None
+
+
+def _scrape_cnn(url: str) -> Optional[str]:
+    """
+    CNN dedicated scraper.
+
+    Video pages (/videos/, /video/) are skipped — they embed unrelated
+    sidebar content into the article DOM, causing wrong snippet bleed
+    (the Japan/Takaichi snippet appearing in multiple unrelated articles).
+
+    Targets .article__content and .zn-body__paragraph selectors.
+    """
+    if "/videos/" in url or "/video/" in url:
+        return None
+
+    soup = _get_soup(url)
+    if soup is None:
+        return None
+
+    _strip_noise(soup)
+
+    cnn_selectors = [
+        ".article__content",
+        ".article__content-container",
+        "[class*='article__content']",
+        ".zn-body__paragraph",
+        "[class*='zn-body']",
+        ".pg-rail-tall__body",
+        "[class*='BasicArticle']",
+        ".l-container article",
+    ]
+
+    paragraphs: List[str] = []
+    for selector in cnn_selectors:
+        try:
+            elements = soup.select(selector)
+            if elements:
+                for el in elements:
+                    t = el.get_text(separator="\n", strip=True)
+                    if len(t) > 40:
+                        paragraphs.append(t)
+                if paragraphs:
+                    break
+        except Exception:
+            continue
+
+    if not paragraphs:
+        container = soup.find("article") or soup.find("main")
+        if container:
+            paragraphs = _paragraphs_from(container)
+
+    soup.decompose()
+    del soup
+
+    if paragraphs:
+        content = "\n\n".join(paragraphs)
+        cleaned = clean_text(content)
+        if len(cleaned) > 150:
+            return cleaned
+    return None
+
+
+def _scrape_euronews(url: str) -> Optional[str]:
+    """
+    Euronews dedicated scraper.
+
+    Root cause of binary blobs: gzip-compressed responses that
+    BeautifulSoup misidentifies. _get_soup() forces identity encoding
+    which eliminates this entirely.
+    """
+    soup = _get_soup(url)
+    if soup is None:
+        return None
+
+    _strip_noise(soup)
+
+    euronews_selectors = [
+        ".c-article-content",
+        "article.e-body",
+        "[class*='article-content']",
+        "[class*='article__body']",
+        ".e-article__content",
+        "[class*='ArticleBody']",
+        "div.c-article",
+        ".o-video-content__description",
+    ]
+
+    paragraphs: List[str] = []
+    for selector in euronews_selectors:
+        try:
+            elements = soup.select(selector)
+            if elements:
+                for el in elements:
+                    for p in el.find_all(["p", "h2", "h3"]):
+                        t = p.get_text(strip=True)
+                        if len(t) > 30:
+                            paragraphs.append(t)
+                if paragraphs:
+                    break
+        except Exception:
+            continue
+
+    if not paragraphs:
+        for p in soup.find_all("p"):
+            t = p.get_text(strip=True)
+            if len(t) > 40:
+                paragraphs.append(t)
+
+    soup.decompose()
+    del soup
+
+    if paragraphs:
+        content = "\n\n".join(paragraphs)
+        cleaned = clean_text(content)
+        if len(cleaned) > 150:
+            return cleaned
+    return None
+
+
+def _scrape_fox_news(url: str) -> Optional[str]:
+    """
+    Fox News dedicated scraper.
+
+    Targets .article-body directly. The "close\\nVideo\\n" overlay
+    and "NEW\\nYou can now listen" banner are stripped by clean_text()
+    regexes as an additional guard.
+    """
+    soup = _get_soup(url)
+    if soup is None:
+        return None
+
+    _strip_noise(soup)
+
+    fox_selectors = [
+        ".article-body",
+        "[class*='article-body']",
+        "[class*='article-content']",
+        ".article__body",
+        "div.body",
+        ".video-description",
+    ]
+
+    paragraphs: List[str] = []
+    for selector in fox_selectors:
+        try:
+            elements = soup.select(selector)
+            if elements:
+                for el in elements:
+                    for p in el.find_all(["p", "h2", "h3"]):
+                        t = p.get_text(strip=True)
+                        if len(t) > 30:
+                            paragraphs.append(t)
+                if paragraphs:
+                    break
+        except Exception:
+            continue
+
+    if not paragraphs:
+        article = soup.find("article")
+        if article:
+            paragraphs = _paragraphs_from(article)
+
+    soup.decompose()
+    del soup
+
+    if paragraphs:
+        content = "\n\n".join(paragraphs)
+        cleaned = clean_text(content)
+        if len(cleaned) > 150:
+            return cleaned
+    return None
+
+
+def _scrape_ap_news(url: str) -> Optional[str]:
+    """
+    AP News dedicated scraper.
+
+    AP uses div[class*="RichTextStoryBody"] as its primary article
+    body container (2022+ layout). Fallbacks cover the older
+    div.Article and data-key="card-body" structures.
+
+    AP News is fully open-access (no paywall) and Center-Right leaning.
+    Replaces Politico (paywalled) — same political balance.
+    """
+    soup = _get_soup(url)
+    if soup is None:
+        return None
+
+    _strip_noise(soup)
+
+    ap_selectors = [
+        "[class*='RichTextStoryBody']",
+        "div.Article",
+        "[data-key='card-body']",
+        "[class*='article-body']",
+        "[class*='StoryBody']",
+        "article",
+    ]
+
+    paragraphs: List[str] = []
+    for selector in ap_selectors:
+        try:
+            elements = soup.select(selector)
+            if elements:
+                for el in elements:
+                    for p in el.find_all(["p", "h2", "h3"]):
+                        t = p.get_text(strip=True)
+                        if len(t) > 30:
+                            paragraphs.append(t)
+                if paragraphs:
+                    break
+        except Exception:
+            continue
+
+    soup.decompose()
+    del soup
+
+    if paragraphs:
+        content = "\n\n".join(paragraphs)
+        cleaned = clean_text(content)
+        if len(cleaned) > 150:
+            return cleaned
+    return None
+
+
+def _scrape_gb_news(url: str) -> Optional[str]:
+    """
+    GB News dedicated scraper.
+
+    GB News uses React SSR — static HTML exists but the article body
+    sits inside div[class*="article-content"] or div[class*="ArticleBody"].
+    Generic tier was picking up nav/sidebar text instead.
+
+    Strips share buttons, author bylines, and tag clouds that GB News
+    injects between article paragraphs. Selects the container with the
+    most text to avoid picking up a short sidebar.
+    """
+    soup = _get_soup(url)
+    if soup is None:
+        return None
+
+    _strip_noise(soup)
+
+    # Strip GB News-specific noise injected between paragraphs.
+    for tag in soup.find_all(
+        class_=re.compile(
+            r"share|social|tag|author|byline|related|trending",
+            re.IGNORECASE,
+        )
+    ):
+        tag.decompose()
+
+    gb_selectors = [
+        "[class*='article-content']",
+        "[class*='ArticleBody']",
+        "[class*='article__body']",
+        "[class*='story-body']",
+        "[class*='ArticleContent']",
+        "article",
+        "main",
+    ]
+
+    paragraphs: List[str] = []
+    for selector in gb_selectors:
+        try:
+            elements = soup.select(selector)
+            if elements:
+                # Use the element with the most paragraph content.
+                best = max(
+                    elements,
+                    key=lambda el: len(el.get_text(strip=True)),
+                )
+                paragraphs = _paragraphs_from(best)
+                if paragraphs:
+                    break
+        except Exception:
+            continue
+
+    soup.decompose()
+    del soup
+
+    if paragraphs:
+        content = "\n\n".join(paragraphs)
+        cleaned = clean_text(content)
+        if len(cleaned) > 150:
+            return cleaned
+    return None
+
+
+# ── Generic scraping tiers ────────────────────────────────────────────────────
 
 
 def fetch_content_newspaper(url: str) -> Optional[str]:
@@ -321,14 +744,8 @@ def fetch_content_newspaper(url: str) -> Optional[str]:
 
 def fetch_content_beautifulsoup(url: str) -> Optional[str]:
     """
-    Tier 2: BeautifulSoup smart extraction — handles ~95% of sites.
-
-    Attempts UTF-8 decoding first, then falls back to
-    apparent_encoding. This ensures Euronews and other sources that
-    return gzip/brotli compressed responses are correctly decoded
-    before parsing. Uses html.parser (pure Python) instead of lxml
-    to reduce RAM. Response closed and deleted immediately after
-    parsing.
+    Tier 2: BeautifulSoup smart extraction.
+    UTF-8 first, apparent_encoding fallback.
     """
     try:
         headers = {
@@ -352,8 +769,6 @@ def fetch_content_beautifulsoup(url: str) -> Optional[str]:
         )
         response.raise_for_status()
 
-        # Try UTF-8 first — apparent_encoding can misidentify
-        # compressed responses and produce binary output.
         response.encoding = "utf-8"
         decoded = response.text
         if not _is_readable_content(decoded):
@@ -365,11 +780,9 @@ def fetch_content_beautifulsoup(url: str) -> Optional[str]:
         del response
 
         for element in soup(
-            [
-                "script", "style", "nav", "footer", "aside", "header",
-                "iframe", "noscript", "form", "button", "input",
-                "select", "textarea", "label",
-            ]
+            ["script", "style", "nav", "footer", "aside", "header",
+             "iframe", "noscript", "form", "button", "input",
+             "select", "textarea", "label"]
         ):
             element.decompose()
 
@@ -402,7 +815,6 @@ def fetch_content_beautifulsoup(url: str) -> Optional[str]:
             '[class*="content-body"]',
             '[id*="article-body"]',
             '[id*="story-body"]',
-            '[id*="content-body"]',
             "main article",
             "main",
             ".article",
@@ -455,13 +867,7 @@ def fetch_content_beautifulsoup(url: str) -> Optional[str]:
 
 
 def fetch_content_aggressive(url: str) -> Optional[str]:
-    """
-    Tier 3: Ultra-aggressive full-page text extraction.
-
-    Attempts UTF-8 decoding first, then falls back to
-    apparent_encoding to ensure compressed responses are correctly
-    decoded. Uses html.parser to avoid lxml RAM overhead.
-    """
+    """Tier 3: Ultra-aggressive full-page text extraction."""
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1)"
@@ -471,7 +877,6 @@ def fetch_content_aggressive(url: str) -> Optional[str]:
         )
         response.raise_for_status()
 
-        # Try UTF-8 first.
         response.encoding = "utf-8"
         decoded = response.text
         if not _is_readable_content(decoded):
@@ -483,11 +888,9 @@ def fetch_content_aggressive(url: str) -> Optional[str]:
         del response
 
         for element in soup(
-            [
-                "script", "style", "nav", "footer", "aside", "header",
-                "iframe", "noscript", "form", "button", "input", "meta",
-                "link", "select", "textarea", "svg", "canvas", "video",
-            ]
+            ["script", "style", "nav", "footer", "aside", "header",
+             "iframe", "noscript", "form", "button", "input", "meta",
+             "link", "select", "textarea", "svg", "canvas", "video"]
         ):
             element.decompose()
 
@@ -506,17 +909,9 @@ def fetch_content_aggressive(url: str) -> Optional[str]:
 
 
 def fetch_content_with_retry(
-    url: str,
-    max_retries: int = 2,
+    url: str, max_retries: int = 2
 ) -> Optional[str]:
-    """
-    Tier 4: Retry with exponential backoff.
-
-    Attempts UTF-8 decoding first, then falls back to
-    apparent_encoding to ensure compressed responses are correctly
-    decoded. Max retries capped at 2 to limit memory dwell time.
-    Uses html.parser throughout — lxml removed to reduce RAM.
-    """
+    """Tier 4: Retry with exponential backoff."""
     for attempt in range(max_retries):
         try:
             headers = {
@@ -531,21 +926,15 @@ def fetch_content_with_retry(
                 "Pragma": "no-cache",
             }
             response = requests.get(
-                url,
-                headers=headers,
-                timeout=20,
-                allow_redirects=True,
-                verify=True,
+                url, headers=headers, timeout=20,
+                allow_redirects=True, verify=True,
             )
-
             if response.status_code == 429:
                 response.close()
                 time.sleep((2 ** attempt) * 2)
                 continue
-
             response.raise_for_status()
 
-            # Try UTF-8 first.
             response.encoding = "utf-8"
             decoded = response.text
             if not _is_readable_content(decoded):
@@ -571,7 +960,6 @@ def fetch_content_with_retry(
                 for s in sentences
                 if len(s.strip()) > 30 and s.strip().count(" ") > 3
             ]
-
             if len(meaningful) > 5:
                 content = ". ".join(meaningful) + "."
                 cleaned = clean_text(content)
@@ -604,18 +992,42 @@ def fetch_content_title_fallback(title: str, source: str) -> str:
 
 def fetch_content(url: str, title: str = "", source: str = "") -> str:
     """
-    5-tier guaranteed scraping strategy. Never returns None.
+    6-tier guaranteed scraping strategy. Never returns None.
 
-    Tier 1: newspaper3k           (~80% success)
-    Tier 2: BeautifulSoup smart   (~95% success)
-    Tier 3: Aggressive extraction (~98% success)
-    Tier 4: Retry with backoff    (~99.5% success)
-    Tier 5: Title-based fallback  (100% guarantee)
+    Tier 0: Source-specific scraper dispatched by domain:
+            BBC, CNN, Euronews, Fox News, AP News, GB News.
+            newspaper3k is intentionally SKIPPED for BBC (returns
+            AMP partial versions starting from wrong paragraph).
+    Tier 1: newspaper3k    (~80% for remaining sources)
+    Tier 2: BeautifulSoup  (~95%)
+    Tier 3: Aggressive     (~98%)
+    Tier 4: Retry backoff  (~99.5%)
+    Tier 5: Title fallback (100% guarantee)
     """
-    content = fetch_content_newspaper(url)
-    if content:
-        gc.collect()
-        return content
+    detected_source = _detect_source_from_url(url)
+
+    # Tier 0: source-specific dispatch.
+    tier0_map = {
+        "BBC News": _scrape_bbc,
+        "CNN": _scrape_cnn,
+        "Euronews": _scrape_euronews,
+        "Fox News": _scrape_fox_news,
+        "AP News": _scrape_ap_news,
+        "GB News": _scrape_gb_news,
+    }
+    if detected_source and detected_source in tier0_map:
+        content = tier0_map[detected_source](url)
+        if content:
+            gc.collect()
+            return content
+        # Fall through to generic tiers on None.
+
+    # Tier 1: newspaper3k — skip for BBC (wrong partial version).
+    if detected_source != "BBC News":
+        content = fetch_content_newspaper(url)
+        if content:
+            gc.collect()
+            return content
 
     time.sleep(0.3)
 
@@ -648,24 +1060,6 @@ def _scrape_one(article: Dict[str, Any]) -> Dict[str, Any]:
     """
     Scrape a single article and return it enriched with content.
     Runs inside a ThreadPoolExecutor worker.
-
-    Content is validated with _is_readable_content() before insert —
-    apparent_encoding detection occasionally fails for Euronews even
-    with the encoding fix applied. Any binary blob that slips through
-    is replaced with the title-based fallback here, so binary data
-    never reaches Supabase or the fact-checking pipeline.
-
-    Category safety net: infer_category() guarantees a non-None,
-    non-'general' value from normalize_article(), so the re-inference
-    block below should never fire in practice. It remains as a
-    defensive guard in case a None somehow slips through.
-
-    Full content is stored without truncation. The previous 5000-char
-    cap caused mid-sentence cutoffs in the frontend. Analysis uses
-    only the first 512 chars so removing the cap has no effect on
-    analysis quality.
-
-    gc.collect() called before returning to free parse tree RAM promptly.
     """
     source_name_val = article.get("source")
     title_val = article.get("title", "")
@@ -676,7 +1070,6 @@ def _scrape_one(article: Dict[str, Any]) -> Dict[str, Any]:
         source=source_name_val or "",
     )
 
-    # Binary guard — reject blobs that slipped past encoding detection.
     if not _is_readable_content(content):
         print(
             f"  Binary content detected, using fallback: "
@@ -686,14 +1079,10 @@ def _scrape_one(article: Dict[str, Any]) -> Dict[str, Any]:
             title_val, source_name_val or ""
         )
 
-    # No truncation — store full content for accurate frontend display.
-
-    # Safety net only — should never fire since infer_category()
-    # guarantees a real category in normalize_article().
     category = article.get("category")
     if not category:
         print(
-            f"  Category missing — re-inferring with content: "
+            f"  Category missing — re-inferring: "
             f"{article.get('url', '?')[:80]}"
         )
         category = infer_category(
@@ -736,18 +1125,6 @@ def _scrape_one(article: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def factcheck_batch(article_ids: List[str]) -> None:
-    """
-    Background async task: compute and persist credibility scores
-    via Google Fact Check Tools API.
-
-    Semaphore caps concurrency at _FACTCHECK_CONCURRENCY=1 — prevents
-    simultaneous coroutines from spiking RAM after a large ingestion
-    cycle on Render free tier (512MB). Each coroutine fetches a full
-    article row from Supabase so uncapped parallelism causes OOM.
-
-    Called after _FACTCHECK_DELAY_SECONDS delay to ensure ingestion
-    RAM has been freed before Supabase fetches begin.
-    """
     from app.jobs.fact_checking import compute_credibility_score
     from app.schemas import ArticleResponse
 
@@ -786,12 +1163,6 @@ async def factcheck_batch(article_ids: List[str]) -> None:
 
 
 async def _delayed_factcheck(article_ids: List[str]) -> None:
-    """
-    Wait _FACTCHECK_DELAY_SECONDS then run factcheck_batch.
-
-    Delay prevents fact-check Supabase fetches from overlapping with
-    residual ingestion RAM and the 5-minute analysis scheduler.
-    """
     print(
         f"Fact-check scheduled for {len(article_ids)} articles "
         f"in {_FACTCHECK_DELAY_SECONDS}s..."
@@ -804,12 +1175,6 @@ async def _delayed_factcheck(article_ids: List[str]) -> None:
 
 
 def _schedule_factcheck(article_ids: List[str]) -> None:
-    """
-    Schedule _delayed_factcheck onto the main event loop from any thread.
-
-    Uses the loop captured at startup via set_main_event_loop() —
-    safe to call from inside ThreadPoolExecutor workers.
-    """
     if _main_event_loop is None or not _main_event_loop.is_running():
         print("Fact-check skipped — no running event loop captured.")
         return
@@ -822,20 +1187,6 @@ def _schedule_factcheck(article_ids: List[str]) -> None:
 
 
 def insert_articles_batch(articles: List[Dict[str, Any]]) -> List[str]:
-    """
-    Deduplicate by URL, scrape new articles in a bounded thread pool,
-    then insert into Supabase in chunks of _INSERT_CHUNK_SIZE.
-
-    Chunked insert prevents holding all scraped payloads in RAM at
-    once — each chunk is written and released before the next is built.
-    Workers raised to _SCRAPE_WORKERS=4 — spaCy RAM gone, BeautifulSoup
-    trees are now the only cost, 4 workers stay within 512MB comfortably.
-    gc.collect() runs after each completed future for prompt cleanup.
-    Full content stored without truncation — no mid-sentence cutoffs.
-    Binary content validated before insert — blobs replaced with
-    title fallback so Supabase never receives unreadable data.
-    Every article is guaranteed a meaningful category before insert.
-    """
     urls = [a["url"] for a in articles if a.get("url")]
     if not urls:
         return []
@@ -922,13 +1273,8 @@ def insert_articles_batch(articles: List[Dict[str, Any]]) -> List[str]:
 
 def fetch_newsapi() -> List[Dict[str, Any]]:
     """
-    Fetch articles from NewsAPI — one request per source.
-
-    Strategy:
-    - 4 sources x 1 request = 4 requests/cycle
-    - 24 cycles/day x 4 = 96 requests/day (96% of 100 free limit)
-    - pageSize raised 10→25: 4 × 25 × 24 = 2,400 articles/day from
-      NewsAPI alone, up from 960.
+    Fetch articles from NewsAPI.
+    AP (associated-press) replaces Politico (paywalled).
     """
     if not settings.NEWSAPI_KEY:
         print("NEWSAPI_KEY not set, skipping NewsAPI")
@@ -942,7 +1288,8 @@ def fetch_newsapi() -> List[Dict[str, Any]]:
         "Fox News": "Fox News",
         "CNN": "CNN",
         "BBC News": "BBC News",
-        "Politico": "Politico Europe",
+        "The Associated Press": "AP News",
+        "Associated Press": "AP News",
     }
 
     for source_id in NEWSAPI_SOURCES:
@@ -962,7 +1309,6 @@ def fetch_newsapi() -> List[Dict[str, Any]]:
             for a in data.get("articles", []):
                 source_name = (a.get("source") or {}).get("name")
                 source_name = source_map.get(source_name, source_name)
-
                 n = normalize_article(
                     source_name=source_name,
                     url=a.get("url"),
@@ -992,10 +1338,9 @@ def fetch_rss() -> List[Dict[str, Any]]:
     """
     Fetch articles from configured RSS feeds.
 
-    Strategy:
-    - 8 feeds x 15 articles = 120 articles/cycle
-    - 24 cycles/day = 2,880 articles/day from RSS
-    - Raised from 5→15 per feed — spaCy RAM gone, safe to increase.
+    Update RSS_FEEDS env var — replace the old Politico URL:
+      OLD: https://www.politico.com/rss/politicopicks.xml
+      NEW: https://feeds.apnews.com/rss/apf-topnews
     """
     rss_feeds = _get_rss_feeds()
     normalized: List[Dict[str, Any]] = []
@@ -1016,7 +1361,6 @@ def fetch_rss() -> List[Dict[str, Any]]:
                 published = getattr(e, "published", None) or getattr(
                     e, "updated", None
                 )
-
                 n = normalize_article(
                     source_name=source_name,
                     url=url,
@@ -1044,20 +1388,7 @@ def fetch_rss() -> List[Dict[str, Any]]:
 
 
 def run_ingestion_cycle() -> None:
-    """
-    Main ingestion job — triggered by APScheduler every hour.
-
-    Daily volume:
-    - NewsAPI: 2,400 articles  (4 sources x 25 x 24 cycles)
-    - RSS:     2,880 articles  (8 feeds   x 15 x 24 cycles)
-    - Total fetched:            5,280/day
-    - New after dedup (~60%):  ~3,168/day
-
-    Scrape cycle processes ~132 articles max per cycle at
-    4 workers / 10 per chunk — comfortably within Render 512MB.
-    Each chunk of 10 takes ~15-30s wall time (4 parallel scrapers).
-    Full cycle of 132 new articles: ~3-5 minutes.
-    """
+    """Main ingestion job — triggered by APScheduler every hour."""
     print("\n" + "=" * 70)
     print("INGESTION CYCLE STARTED")
     print("=" * 70)
@@ -1076,7 +1407,7 @@ def run_ingestion_cycle() -> None:
     except Exception as exc:
         print(f"RSS critical error: {exc}")
 
-    print("\nInserting articles (5-tier guaranteed scraping)...")
+    print("\nInserting articles (6-tier guaranteed scraping)...")
     try:
         print(f"Total fetched: {len(articles)} articles")
         insert_articles_batch(articles)
