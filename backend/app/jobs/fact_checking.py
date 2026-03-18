@@ -88,6 +88,21 @@ _STOPWORDS = {
     "up", "out", "about", "into", "than", "us", "can",
 }
 
+# High-frequency proper nouns that appear in nearly every article and
+# provide no discriminating signal for fact-check matching.
+# Without this filter, "Iran" or "Trump" match completely unrelated
+# fact-checks because the API returns results for any mention of the
+# term rather than the specific claim being made.
+_PROPER_NOUN_STOPWORDS = {
+    "iran", "israel", "uk", "us", "usa", "trump", "london",
+    "europe", "china", "russia", "america", "washington", "biden",
+    "parliament", "government", "minister", "president", "police",
+    "court", "people", "country", "world", "state", "war", "new",
+    "says", "told", "year", "years", "also", "after", "first",
+    "last", "two", "three", "four", "five", "six", "seven",
+    "eight", "nine", "ten", "one", "time", "day", "week", "month",
+}
+
 # Boilerplate patterns to skip during keyword extraction.
 _BOILERPLATE_RE = re.compile(
     r"^("
@@ -129,14 +144,18 @@ def _extract_keywords_from_text(text: str, max_words: int = 5) -> List[str]:
     Extract the most meaningful capitalised/numeric terms from text.
 
     Returns a list of individual keyword tokens — not full sentences.
-    Proper nouns are prioritised over common words. Stopwords removed.
+    Proper nouns are prioritised over common words. Both generic
+    stopwords and high-frequency proper nouns (e.g. "Iran", "Trump")
+    are removed to avoid matching unrelated fact-checks.
     Used to build short topic queries for the Google Fact Check API.
     """
     words = re.findall(r"\b[A-Za-z][a-zA-Z'\-]{2,}\b|\b\d{4}\b", text)
     seen: Dict[str, int] = {}
     for w in words:
         lower = w.lower()
-        if lower not in _STOPWORDS and len(lower) > 2:
+        if (
+            lower not in _STOPWORDS and lower not in _PROPER_NOUN_STOPWORDS and len(lower) > 2
+        ):
             seen[lower] = seen.get(lower, 0) + 1
 
     # Prefer capitalised (proper noun) terms, then by frequency.
@@ -158,12 +177,13 @@ def build_search_queries(title: str, content: str) -> List[str]:
 
     Queries are 3-6 words max — matches how the API's search index
     works. Full sentences never return results; short topic phrases do.
+    High-frequency proper nouns filtered out to reduce false matches.
 
     Examples of good queries vs old bad queries:
       OLD: "President Donald Trump's administration has imposed the
             oil blockade on the Cuban government as Washington presses
             for regime change..."  → No match (always)
-      NEW: "Trump Cuba blockade regime"  → matches fact-checker results
+      NEW: "Cuba blockade regime change"  → matches fact-checker results
 
       OLD: "Chelsea have been given a suspended one-year transfer ban,
             and fined a record £10.75m..."  → No match (always)
@@ -341,6 +361,7 @@ async def compute_credibility_score(
 
     Queries are now short keyword phrases (3-6 words) rather than full
     sentences — dramatically improves Google API match rate.
+    High-frequency proper nouns filtered to reduce false matches.
     """
     source = getattr(article, "source", None) or ""
     base_score = _SOURCE_REPUTATION.get(source, 65.0)
@@ -373,7 +394,9 @@ async def compute_credibility_score(
 
     # Adjustment: ±20 points based on fact-check results.
     # Zero adjustment when no valid fact-checks found.
-    adjustment = (sum(scores) / len(scores) - 0.5) * 40 if scores else 0.0
+    adjustment = (
+        (sum(scores) / len(scores) - 0.5) * 40 if scores else 0.0
+    )
     score = round(max(10.0, min(100.0, base_score + adjustment)), 2)
 
     positive = sum(1 for s in scores if s >= 0.7)
@@ -389,9 +412,11 @@ async def compute_credibility_score(
         verdict = "low credibility"
 
     if scores:
+        neg_str = f", {negative} false" if negative else ""
         reason = (
             f"{matched}/{total} queries matched fact-checks. "
-            f"{positive} verified true" + (f", {negative} false" if negative else "") + f". Source: {source or 'unknown'}. Rated {verdict}."
+            f"{positive} verified true{neg_str}. "
+            f"Source: {source or 'unknown'}. Rated {verdict}."
         )
     else:
         reason = (

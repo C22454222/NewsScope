@@ -19,8 +19,21 @@ class ArticleCard extends StatelessWidget {
         '${dt.year}';
   }
 
+  /// Returns a human-readable title, falling back to deriving one from
+  /// the URL path only when the title field itself looks like a raw URL
+  /// (starts with "http") or a bare filename (ends with ".html"/".htm").
+  ///
+  /// The previous check used `title.contains('.html')` which could
+  /// accidentally trigger on a legitimate headline that quotes a URL
+  /// in its text. Checking the full title against the URL prefix and
+  /// the suffix-only case is more precise.
   String _sanitiseTitle(String title, String url) {
-    if (!title.startsWith('http') && !title.contains('.html')) return title;
+    final looksLikeUrl = title.startsWith('http');
+    final looksLikePath =
+        title.endsWith('.html') || title.endsWith('.htm');
+
+    if (!looksLikeUrl && !looksLikePath) return title;
+
     final uri = Uri.tryParse(url);
     if (uri == null || uri.pathSegments.isEmpty) return title;
     return uri.pathSegments.last
@@ -47,7 +60,7 @@ class ArticleCard extends StatelessWidget {
         ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.07), // ← fixed
+            color: Colors.black.withValues(alpha: 0.07),
             blurRadius: 8,
             offset: const Offset(0, 2),
           ),
@@ -81,8 +94,8 @@ class ArticleCard extends StatelessWidget {
                     Expanded(
                       child: Text(
                         article.source,
-                        style:
-                            TextStyle(fontSize: 12, color: Colors.grey[600]),
+                        style: TextStyle(
+                            fontSize: 12, color: Colors.grey[600]),
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
@@ -109,8 +122,8 @@ class ArticleCard extends StatelessWidget {
                     const SizedBox(width: 8),
                     Text(
                       _formatDate(article.publishedAt),
-                      style:
-                          TextStyle(fontSize: 11, color: Colors.grey[500]),
+                      style: TextStyle(
+                          fontSize: 11, color: Colors.grey[500]),
                     ),
                   ],
                 ),

@@ -130,7 +130,6 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
     return 'Good evening';
   }
 
-  // ── AppBar title — single colour, readable on white AppBar ───────────────
   Widget _buildNewsScopeTitle() {
     return Text(
       'NewsScope',
@@ -217,7 +216,7 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
         padding: const EdgeInsets.symmetric(horizontal: 16),
         scrollDirection: Axis.horizontal,
         itemCount: _categories.length,
-        separatorBuilder: (_, _) => const SizedBox(width: 8), // ← fixed
+        separatorBuilder: (_, _) => const SizedBox(width: 8),
         itemBuilder: (context, index) {
           final label = _categories[index];
           final isSelected = (_selectedCategory ?? 'All') == label;
@@ -254,8 +253,7 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                       fontWeight: isSelected
                           ? FontWeight.w600
                           : FontWeight.normal,
-                      color:
-                          isSelected ? Colors.white : Colors.grey[700],
+                      color: isSelected ? Colors.white : Colors.grey[700],
                     ),
                   ),
                 ],
@@ -294,6 +292,27 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
         ],
       ),
     );
+  }
+
+  // ── Date grouping helpers ──────────────────────────────────────────────────
+
+  /// Returns a zero-padded date key — e.g. "2026-03-08" — so that
+  /// string-based sorting produces the same order as date sorting.
+  String _dateKey(DateTime dt) {
+    final y = dt.year.toString();
+    final m = dt.month.toString().padLeft(2, '0');
+    final d = dt.day.toString().padLeft(2, '0');
+    return '$y-$m-$d';
+  }
+
+  /// Converts a zero-padded key back to a display string.
+  String _headerText(String key, String todayKey, String yesterdayKey) {
+    if (key == todayKey) return 'Today';
+    if (key == yesterdayKey) return 'Yesterday';
+    if (key == 'Unknown Date') return 'Unknown Date';
+    // key is "YYYY-MM-DD" — reformat to "DD/MM/YYYY" for display.
+    final parts = key.split('-');
+    return '${parts[2]}/${parts[1]}/${parts[0]}';
   }
 
   // ── Build ──────────────────────────────────────────────────────────────────
@@ -379,31 +398,28 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                 }
 
                 final articles = snapshot.data!;
-                final grouped = <String, List<Article>>{};
+                final now = DateTime.now();
+                final todayKey = _dateKey(now);
+                final yesterdayKey =
+                    _dateKey(now.subtract(const Duration(days: 1)));
 
+                // Group articles by zero-padded date key so string
+                // sort order matches chronological order correctly.
+                final grouped = <String, List<Article>>{};
                 for (final article in articles) {
-                  final date = article.publishedAt;
-                  final key = date != null
-                      ? '${date.year}-${date.month}-${date.day}'
+                  final key = article.publishedAt != null
+                      ? _dateKey(article.publishedAt!)
                       : 'Unknown Date';
                   grouped.putIfAbsent(key, () => []).add(article);
                 }
 
+                // Sort descending — "Unknown Date" always last.
                 final sortedKeys = grouped.keys.toList()
                   ..sort((a, b) {
                     if (a == 'Unknown Date') return 1;
                     if (b == 'Unknown Date') return -1;
-                    final pa = a.split('-');
-                    final pb = b.split('-');
-                    return DateTime(
-                      int.parse(pb[0]),
-                      int.parse(pb[1]),
-                      int.parse(pb[2]),
-                    ).compareTo(DateTime(
-                      int.parse(pa[0]),
-                      int.parse(pa[1]),
-                      int.parse(pa[2]),
-                    ));
+                    // Zero-padded ISO keys sort correctly as strings.
+                    return b.compareTo(a);
                   });
 
                 return RefreshIndicator(
@@ -414,33 +430,13 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                     itemBuilder: (context, i) {
                       final dateKey = sortedKeys[i];
                       final sectionArticles = grouped[dateKey]!;
-
-                      final now = DateTime.now();
-                      final todayKey =
-                          '${now.year}-${now.month}-${now.day}';
-                      final yesterday =
-                          now.subtract(const Duration(days: 1));
-                      final yesterdayKey =
-                          '${yesterday.year}-${yesterday.month}'
-                          '-${yesterday.day}';
-
-                      String headerText;
-                      if (dateKey == todayKey) {
-                        headerText = 'Today';
-                      } else if (dateKey == yesterdayKey) {
-                        headerText = 'Yesterday';
-                      } else if (dateKey == 'Unknown Date') {
-                        headerText = 'Unknown Date';
-                      } else {
-                        final parts = dateKey.split('-');
-                        headerText =
-                            '${parts[2]}/${parts[1]}/${parts[0]}';
-                      }
+                      final header =
+                          _headerText(dateKey, todayKey, yesterdayKey);
 
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          _buildDateHeader(headerText),
+                          _buildDateHeader(header),
                           ...sectionArticles.map(
                             (article) => ArticleCard(
                               article: article,

@@ -18,14 +18,20 @@ String getBiasLabelShort(double? score) {
   return 'Centre';
 }
 
+/// Returns a granular bias label based on score position.
+///
+/// Thresholds:
+///   > 0.3             → Right Wing
+///   > 0.1 to 0.3      → Centre Right
+///   -0.1 to 0.1       → Centre
+///   -0.3 to -0.1      → Centre Left
+///   < -0.3            → Left Wing
 String getBiasLabel(double? score) {
   if (score == null) return 'Unknown';
-  if (score > 0.6) return 'Right Wing';
   if (score > 0.3) return 'Right Wing';
   if (score > 0.1) return 'Centre Right';
   if (score >= -0.1) return 'Centre';
   if (score >= -0.3) return 'Centre Left';
-  if (score >= -0.6) return 'Left Wing';
   return 'Left Wing';
 }
 

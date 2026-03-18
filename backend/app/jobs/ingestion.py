@@ -19,11 +19,9 @@ MEMORY FIX SUMMARY (v3):
   overlap between Google Fact Check API HTTP response buffers and
   analysis HF calls. With _MAX_CLAIMS=2 per article this is fast
   enough.
-- Content stored in DB truncated to _CONTENT_STORE_LIMIT chars:
-  full scraped content (can be 50-200KB per article) was being held
-  in the payload dict until Supabase insert. Truncating to 5000 chars
-  is sufficient for analysis (_TEXT_LIMIT=512) and display purposes
-  while dramatically reducing per-payload RAM during batch insert.
+- Content stored in DB is NOT truncated — full article content is
+  preserved for accurate display and analysis. Previously limited
+  to 5000 chars, causing mid-sentence cutoffs in the frontend.
 
 THROUGHPUT UPGRADE (v5 — spaCy removed):
 - _SCRAPE_WORKERS raised 2→4: spaCy RAM gone — BeautifulSoup trees
@@ -39,10 +37,9 @@ THROUGHPUT UPGRADE (v5 — spaCy removed):
   Up from ~1,920/day — 2.4x more coverage with no RAM regression.
 
 ENCODING FIX:
-- BeautifulSoup tiers now use response.text with apparent_encoding
-  fallback instead of raw response.content bytes. This prevents
-  Euronews and other sources that return gzip/brotli compressed
-  responses from storing binary blobs in the content column.
+- BeautifulSoup tiers now attempt UTF-8 first, then fall back to
+  apparent_encoding. This prevents Euronews and other sources that
+  return gzip/brotli compressed responses from storing binary blobs.
 
 BINARY GUARD (v4):
 - _is_readable_content() validates content before Supabase insert.
@@ -51,6 +48,17 @@ BINARY GUARD (v4):
   500 chars catches any remaining blobs — content below 85% printable
   is replaced with the title-based fallback before insert, so binary
   data never reaches Supabase or the fact-checking pipeline.
+
+BOILERPLATE STRIP (v5):
+- clean_text() now removes The Independent's multi-line fundraising
+  preamble ("Your support helps us to tell the story...") using a
+  DOTALL regex applied before other cleaning passes.
+
+CONTENT LIMIT REMOVED (v5):
+- _CONTENT_STORE_LIMIT removed entirely. Full scraped content is
+  stored. The previous 5000-char cap caused articles to be cut off
+  mid-sentence in the frontend. Analysis uses only the first 512
+  chars anyway so removing the cap has no impact on analysis quality.
 
 CATEGORY GUARANTEE (v5):
 - categorisation.py never returns 'general' or None.
@@ -121,12 +129,16 @@ _INSERT_CHUNK_SIZE = 10
 # Google Fact Check API calls begin.
 _FACTCHECK_DELAY_SECONDS = 600
 
-# Truncate content stored in DB — full scraped content can be 50-200KB
-# per article. Analysis only uses 512 chars; 5000 is ample for display.
-_CONTENT_STORE_LIMIT = 5000
-
 # Main event loop — captured at startup by set_main_event_loop().
 _main_event_loop: Optional[asyncio.AbstractEventLoop] = None
+
+# Regex to strip The Independent's multi-line fundraising preamble.
+# Applied with re.DOTALL so it spans line boundaries. The block always
+# starts with "Your support helps us" and ends with "Read more\n".
+_INDEPENDENT_PREAMBLE_RE = re.compile(
+    r"Your support helps us to tell the story.*?Read more\s*",
+    re.DOTALL | re.IGNORECASE,
+)
 
 
 # ── Content validation ────────────────────────────────────────────────────────
@@ -249,10 +261,21 @@ def sanitize_for_postgres(text: str) -> str:
 
 
 def clean_text(text: str) -> str:
-    """Clean scraped text: remove whitespace and navigation boilerplate."""
+    """
+    Clean scraped text: remove whitespace and navigation boilerplate.
+
+    The Independent's multi-line fundraising preamble is stripped
+    first with a DOTALL regex before other patterns run. Without this
+    the block appears verbatim at the top of every Independent article
+    because none of the single-line patterns match multi-line prose.
+    """
     if not text:
         return ""
     text = sanitize_for_postgres(text)
+
+    # Strip The Independent's multi-line fundraising preamble.
+    text = _INDEPENDENT_PREAMBLE_RE.sub("", text)
+
     text = re.sub(r"\n\s*\n+", "\n\n", text)
     text = re.sub(r"[ \t]+", " ", text)
 
@@ -300,11 +323,12 @@ def fetch_content_beautifulsoup(url: str) -> Optional[str]:
     """
     Tier 2: BeautifulSoup smart extraction — handles ~95% of sites.
 
-    Uses response.text with apparent_encoding fallback to ensure
-    compressed responses (gzip/brotli) are correctly decoded before
-    parsing. Prevents binary byte blobs being stored as article content.
-    Uses html.parser (pure Python) instead of lxml to reduce RAM.
-    Response closed and deleted immediately after parsing.
+    Attempts UTF-8 decoding first, then falls back to
+    apparent_encoding. This ensures Euronews and other sources that
+    return gzip/brotli compressed responses are correctly decoded
+    before parsing. Uses html.parser (pure Python) instead of lxml
+    to reduce RAM. Response closed and deleted immediately after
+    parsing.
     """
     try:
         headers = {
@@ -328,8 +352,15 @@ def fetch_content_beautifulsoup(url: str) -> Optional[str]:
         )
         response.raise_for_status()
 
-        response.encoding = response.apparent_encoding or "utf-8"
-        soup = BeautifulSoup(response.text, "html.parser")
+        # Try UTF-8 first — apparent_encoding can misidentify
+        # compressed responses and produce binary output.
+        response.encoding = "utf-8"
+        decoded = response.text
+        if not _is_readable_content(decoded):
+            response.encoding = response.apparent_encoding or "utf-8"
+            decoded = response.text
+
+        soup = BeautifulSoup(decoded, "html.parser")
         response.close()
         del response
 
@@ -427,9 +458,9 @@ def fetch_content_aggressive(url: str) -> Optional[str]:
     """
     Tier 3: Ultra-aggressive full-page text extraction.
 
-    Uses response.text with apparent_encoding fallback to ensure
-    compressed responses are correctly decoded before parsing.
-    Uses html.parser to avoid lxml RAM overhead.
+    Attempts UTF-8 decoding first, then falls back to
+    apparent_encoding to ensure compressed responses are correctly
+    decoded. Uses html.parser to avoid lxml RAM overhead.
     """
     try:
         headers = {
@@ -440,8 +471,14 @@ def fetch_content_aggressive(url: str) -> Optional[str]:
         )
         response.raise_for_status()
 
-        response.encoding = response.apparent_encoding or "utf-8"
-        soup = BeautifulSoup(response.text, "html.parser")
+        # Try UTF-8 first.
+        response.encoding = "utf-8"
+        decoded = response.text
+        if not _is_readable_content(decoded):
+            response.encoding = response.apparent_encoding or "utf-8"
+            decoded = response.text
+
+        soup = BeautifulSoup(decoded, "html.parser")
         response.close()
         del response
 
@@ -475,9 +512,9 @@ def fetch_content_with_retry(
     """
     Tier 4: Retry with exponential backoff.
 
-    Uses response.text with apparent_encoding fallback to ensure
-    compressed responses are correctly decoded before parsing.
-    Max retries capped at 2 to limit memory dwell time.
+    Attempts UTF-8 decoding first, then falls back to
+    apparent_encoding to ensure compressed responses are correctly
+    decoded. Max retries capped at 2 to limit memory dwell time.
     Uses html.parser throughout — lxml removed to reduce RAM.
     """
     for attempt in range(max_retries):
@@ -508,8 +545,14 @@ def fetch_content_with_retry(
 
             response.raise_for_status()
 
-            response.encoding = response.apparent_encoding or "utf-8"
-            soup = BeautifulSoup(response.text, "html.parser")
+            # Try UTF-8 first.
+            response.encoding = "utf-8"
+            decoded = response.text
+            if not _is_readable_content(decoded):
+                response.encoding = response.apparent_encoding or "utf-8"
+                decoded = response.text
+
+            soup = BeautifulSoup(decoded, "html.parser")
             response.close()
             del response
 
@@ -617,8 +660,10 @@ def _scrape_one(article: Dict[str, Any]) -> Dict[str, Any]:
     block below should never fire in practice. It remains as a
     defensive guard in case a None somehow slips through.
 
-    Content is truncated to _CONTENT_STORE_LIMIT before building
-    the result dict to reduce per-payload RAM during batch insert.
+    Full content is stored without truncation. The previous 5000-char
+    cap caused mid-sentence cutoffs in the frontend. Analysis uses
+    only the first 512 chars so removing the cap has no effect on
+    analysis quality.
 
     gc.collect() called before returning to free parse tree RAM promptly.
     """
@@ -641,7 +686,7 @@ def _scrape_one(article: Dict[str, Any]) -> Dict[str, Any]:
             title_val, source_name_val or ""
         )
 
-    content = content[:_CONTENT_STORE_LIMIT]
+    # No truncation — store full content for accurate frontend display.
 
     # Safety net only — should never fire since infer_category()
     # guarantees a real category in normalize_article().
@@ -786,7 +831,7 @@ def insert_articles_batch(articles: List[Dict[str, Any]]) -> List[str]:
     Workers raised to _SCRAPE_WORKERS=4 — spaCy RAM gone, BeautifulSoup
     trees are now the only cost, 4 workers stay within 512MB comfortably.
     gc.collect() runs after each completed future for prompt cleanup.
-    Content truncated to _CONTENT_STORE_LIMIT per article before insert.
+    Full content stored without truncation — no mid-sentence cutoffs.
     Binary content validated before insert — blobs replaced with
     title fallback so Supabase never receives unreadable data.
     Every article is guaranteed a meaningful category before insert.
