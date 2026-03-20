@@ -106,33 +106,45 @@ class _SignInScreenState extends State<SignInScreen> {
                     decoration: BoxDecoration(
                       color: const Color(0xFF0D1B3E),
                       borderRadius: BorderRadius.circular(20),
-                      boxShadow: [BoxShadow(color: Colors.black.withAlpha(60),
-                          blurRadius: 12, offset: const Offset(0, 4))],
+                      boxShadow: [
+                        BoxShadow(color: Colors.black.withAlpha(60),
+                            blurRadius: 12, offset: const Offset(0, 4))
+                      ],
                     ),
-                    child: const Icon(Icons.newspaper, size: 44, color: Colors.white),
+                    child: const Icon(Icons.newspaper,
+                        size: 44, color: Colors.white),
                   ),
                 ),
                 const SizedBox(height: 24),
 
-                // ── Heading — News(black) + Scope(blue) ───────────────────
+                // ── Title — News(black87) + Scope(blue[800]) ──────────────
                 RichText(
                   textAlign: TextAlign.center,
                   text: TextSpan(
-                    style: const TextStyle(fontSize: 28,
-                        fontWeight: FontWeight.bold, letterSpacing: 0.5),
+                    style: const TextStyle(
+                        fontSize: 28,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 0.5),
                     children: [
-                      const TextSpan(text: 'News',
+                      const TextSpan(
+                          text: 'News',
                           style: TextStyle(color: Colors.black87)),
-                      TextSpan(text: 'Scope',
+                      TextSpan(
+                          text: 'Scope',
                           style: TextStyle(color: Colors.blue[800])),
                     ],
                   ),
                 ),
                 const SizedBox(height: 8),
-                Text('Stay informed. Stay balanced.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 14, color: Colors.grey[500],
-                        letterSpacing: 0.3)),
+                Text(
+                  // UPDATED: Beta branding
+                  'Bias-aware news analysis · Beta',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                      fontSize: 13,
+                      color: Colors.grey[500],
+                      letterSpacing: 0.3),
+                ),
                 const SizedBox(height: 40),
 
                 // ── Fields ────────────────────────────────────────────────
@@ -140,11 +152,14 @@ class _SignInScreenState extends State<SignInScreen> {
                   controller: _emailController,
                   decoration: InputDecoration(
                     labelText: 'Email',
-                    prefixIcon: Icon(Icons.email_outlined, color: Colors.blue[700]),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                    prefixIcon:
+                        Icon(Icons.email_outlined, color: Colors.blue[700]),
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10)),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(10),
-                      borderSide: BorderSide(color: Colors.blue[700]!, width: 2),
+                      borderSide:
+                          BorderSide(color: Colors.blue[700]!, width: 2),
                     ),
                   ),
                   keyboardType: TextInputType.emailAddress,
@@ -156,20 +171,25 @@ class _SignInScreenState extends State<SignInScreen> {
                   obscureText: _obscurePassword,
                   decoration: InputDecoration(
                     labelText: 'Password',
-                    prefixIcon: Icon(Icons.lock_outline, color: Colors.blue[700]),
+                    prefixIcon:
+                        Icon(Icons.lock_outline, color: Colors.blue[700]),
                     suffixIcon: IconButton(
                       icon: Icon(
-                        _obscurePassword ? Icons.visibility_off_outlined
+                        _obscurePassword
+                            ? Icons.visibility_off_outlined
                             : Icons.visibility_outlined,
-                        color: Colors.grey[500], size: 20,
+                        color: Colors.grey[500],
+                        size: 20,
                       ),
-                      onPressed: () =>
-                          setState(() => _obscurePassword = !_obscurePassword),
+                      onPressed: () => setState(
+                          () => _obscurePassword = !_obscurePassword),
                     ),
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                    border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10)),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(10),
-                      borderSide: BorderSide(color: Colors.blue[700]!, width: 2),
+                      borderSide:
+                          BorderSide(color: Colors.blue[700]!, width: 2),
                     ),
                   ),
                   onSubmitted: (_) => _signInWithEmail(),
@@ -197,7 +217,8 @@ class _SignInScreenState extends State<SignInScreen> {
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.blue[700],
                           foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 15),
+                          padding:
+                              const EdgeInsets.symmetric(vertical: 15),
                           shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(10)),
                           textStyle: const TextStyle(
@@ -211,8 +232,9 @@ class _SignInScreenState extends State<SignInScreen> {
                   Expanded(child: Divider(color: Colors.grey[300])),
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 12),
-                    child: Text('or', style: TextStyle(
-                        fontSize: 13, color: Colors.grey[500])),
+                    child: Text('or',
+                        style: TextStyle(
+                            fontSize: 13, color: Colors.grey[500])),
                   ),
                   Expanded(child: Divider(color: Colors.grey[300])),
                 ]),
@@ -229,20 +251,24 @@ class _SignInScreenState extends State<SignInScreen> {
                     shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(10)),
                     textStyle: const TextStyle(
-                        fontSize: 15, fontWeight: FontWeight.w500),
+                        fontSize: 15, fontWeight: FontWeight.w600),
                   ),
                 ),
                 const SizedBox(height: 32),
 
                 Row(mainAxisAlignment: MainAxisAlignment.center, children: [
                   Text("Don't have an account?",
-                      style: TextStyle(color: Colors.grey[600], fontSize: 14)),
+                      style: TextStyle(
+                          color: Colors.grey[600], fontSize: 14)),
                   TextButton(
-                    onPressed: () => Navigator.push(context,
-                        MaterialPageRoute(builder: (_) => const SignUpScreen())),
+                    onPressed: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => const SignUpScreen())),
                     style: TextButton.styleFrom(
                         foregroundColor: Colors.blue[700],
-                        padding: const EdgeInsets.symmetric(horizontal: 6)),
+                        padding:
+                            const EdgeInsets.symmetric(horizontal: 6)),
                     child: const Text('Sign Up',
                         style: TextStyle(fontWeight: FontWeight.w600)),
                   ),

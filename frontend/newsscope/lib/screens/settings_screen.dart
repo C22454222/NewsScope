@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class SettingsScreen extends StatefulWidget {
@@ -31,14 +33,69 @@ class _SettingsScreenState extends State<SettingsScreen> {
     });
   }
 
+  // ── Notifications — FCM permission + topic subscription ───────────────────
+
   Future<void> _setNotifications(bool value) async {
+    if (value) {
+      // Request FCM permission (Android 13+ requires explicit grant)
+      final settings = await FirebaseMessaging.instance.requestPermission(
+        alert: true,
+        badge: true,
+        sound: true,
+      );
+
+      final granted = settings.authorizationStatus == AuthorizationStatus.authorized
+          || settings.authorizationStatus == AuthorizationStatus.provisional;
+
+      if (!granted) {
+        if (!mounted) return;
+        // Show dialog offering to open device notification settings
+        final openSettings = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16)),
+            title: const Text('Notifications Blocked'),
+            content: const Text(
+              'NewsScope needs notification permission to send you '
+              'breaking news alerts. Open Settings to enable it.',
+              style: TextStyle(height: 1.5),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: Text('Open Settings',
+                    style: TextStyle(color: Colors.blue[700])),
+              ),
+            ],
+          ),
+        );
+        if (openSettings == true) await openAppSettings();
+        return; // Don't enable the toggle — permission wasn't granted
+      }
+
+      // Permission granted — subscribe to FCM topic
+      await FirebaseMessaging.instance
+          .subscribeToTopic('news_updates');
+    } else {
+      // Unsubscribe from FCM topic
+      await FirebaseMessaging.instance
+          .unsubscribeFromTopic('news_updates');
+    }
+
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('notifications_enabled', value);
     if (!mounted) return;
     setState(() => _notificationsEnabled = value);
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(value ? 'Notifications enabled' : 'Notifications disabled'),
-      duration: const Duration(seconds: 1),
+      content: Text(value
+          ? 'Notifications enabled — you\'ll be alerted when new articles are ready'
+          : 'Notifications disabled'),
+      duration: const Duration(seconds: 2),
       behavior: SnackBarBehavior.floating,
     ));
   }
@@ -79,7 +136,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     try {
       await user?.updateDisplayName(result);
-      await user?.reload();
+      await FirebaseAuth.instance.currentUser?.reload();
       if (!mounted) return;
       setState(() => _displayName = result);
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -149,8 +206,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 Icon(Icons.privacy_tip_outlined, color: Colors.blue[700]),
                 const SizedBox(width: 10),
                 Text('Privacy Policy',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold,
-                        color: Colors.grey[800])),
+                    style: TextStyle(fontSize: 18,
+                        fontWeight: FontWeight.bold, color: Colors.grey[800])),
               ]),
             ),
             const Divider(),
@@ -167,10 +224,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       'Your account data is retained for as long as your account is active. You may delete your account at any time from the Account Actions section of Settings, which permanently removes all associated data.'),
                   _privacySection('Third-Party Services',
                       'NewsScope uses Firebase for authentication and Supabase for data storage. These services have their own privacy policies. Article content is sourced from third-party news providers.'),
+                  _privacySection('Notifications',
+                      'If you enable notifications, NewsScope uses Firebase Cloud Messaging (FCM) to send alerts when new articles are analysed. You can disable this at any time in Settings or in your device notification preferences.'),
                   _privacySection('Contact',
                       'For any privacy-related queries, please contact the developer via Technological University Dublin.'),
                   const SizedBox(height: 8),
-                  Text('Last updated: March 2026 · NewsScope v1.0.0',
+                  // UPDATED: version → Beta
+                  Text('Last updated: March 2026 · NewsScope v1.0.0 Beta',
                       style: TextStyle(fontSize: 11, color: Colors.grey[400]),
                       textAlign: TextAlign.center),
                 ],
@@ -191,7 +251,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 color: Colors.blue[800])),
         const SizedBox(height: 6),
         Text(body,
-            style: TextStyle(fontSize: 13, color: Colors.grey[700], height: 1.5)),
+            style: TextStyle(
+                fontSize: 13, color: Colors.grey[700], height: 1.5)),
       ]),
     );
   }
@@ -211,7 +272,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Sign Out', style: TextStyle(color: Colors.red)),
+            child: const Text('Sign Out',
+                style: TextStyle(color: Colors.red)),
           ),
         ],
       ),
@@ -245,7 +307,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           TextButton(
             onPressed: () => Navigator.pop(context, true),
             child: const Text('Delete',
-                style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
+                style: TextStyle(
+                    color: Colors.red, fontWeight: FontWeight.bold)),
           ),
         ],
       ),
@@ -282,7 +345,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
       child: Text(
         title.toUpperCase(),
-        style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold,
+        style: TextStyle(
+            fontSize: 11, fontWeight: FontWeight.bold,
             color: Colors.blue[700], letterSpacing: 1.2),
       ),
     );
@@ -388,7 +452,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         leading: CircleAvatar(
           radius: 18,
           backgroundColor: Colors.blue[700]!.withAlpha(25),
-          child: Icon(Icons.menu_book_outlined, size: 18, color: Colors.blue[700]),
+          child: Icon(Icons.menu_book_outlined,
+              size: 18, color: Colors.blue[700]),
         ),
         title: Text('Glossary',
             style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500,
@@ -451,7 +516,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           Card(
             margin: const EdgeInsets.symmetric(horizontal: 16),
             elevation: 1,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12)),
             child: Column(children: [
               _buildTile(
                 icon: Icons.person_outline,
@@ -483,7 +549,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           Card(
             margin: const EdgeInsets.symmetric(horizontal: 16),
             elevation: 1,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12)),
             child: SwitchListTile(
               secondary: CircleAvatar(
                 radius: 18,
@@ -494,7 +561,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
               title: Text('Notifications',
                   style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500,
                       color: Colors.grey[800])),
-              subtitle: Text('Breaking news alerts',
+              // UPDATED: more descriptive subtitle
+              subtitle: Text(
+                  _notificationsEnabled
+                      ? 'Alerts when new articles are analysed'
+                      : 'Tap to enable breaking news alerts',
                   style: TextStyle(fontSize: 12, color: Colors.grey[500])),
               activeThumbColor: Colors.blue[700],
               activeTrackColor: Colors.blue[300],
@@ -508,27 +579,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
           Card(
             margin: const EdgeInsets.symmetric(horizontal: 16),
             elevation: 1,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12)),
             child: Column(children: [
+              // UPDATED: version → 1.0.0 Beta, REMOVED NewsScope bio tile
               _buildTile(
                 icon: Icons.info_outline,
                 title: 'App Version',
-                subtitle: '1.0.0 — Final Year Demo',
-                trailing: const SizedBox.shrink(),
-              ),
-              const Divider(height: 1, indent: 56),
-              _buildTile(
-                icon: Icons.newspaper,
-                title: 'NewsScope',
-                subtitle: 'Bias-aware news aggregation for everyone.',
+                subtitle: '1.0.0 Beta — Final Year Project',
                 trailing: const SizedBox.shrink(),
               ),
               const Divider(height: 1, indent: 56),
               _buildTile(
                 icon: Icons.privacy_tip_outlined,
                 title: 'Privacy Policy',
-                trailing: Icon(Icons.open_in_new, size: 16,
-                    color: Colors.grey[400]),
+                trailing: Icon(Icons.open_in_new,
+                    size: 16, color: Colors.grey[400]),
                 onTap: _showPrivacyPolicy,
               ),
             ]),
@@ -543,7 +609,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           Card(
             margin: const EdgeInsets.symmetric(horizontal: 16),
             elevation: 1,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12)),
             child: Column(children: [
               _buildTile(
                 icon: Icons.logout,

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:fl_chart/fl_chart.dart';
@@ -16,7 +18,10 @@ class ProfileScreen extends StatefulWidget {
 
 class _ProfileScreenState extends State<ProfileScreen> {
   final ApiService _apiService = ApiService();
-  final user = FirebaseAuth.instance.currentUser;
+
+  // FIX: live stream so display name updates instantly after Settings edit
+  User? _user;
+  StreamSubscription<User?>? _userSub;
 
   BiasProfile? _profile;
   bool _loading = true;
@@ -26,7 +31,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
   @override
   void initState() {
     super.initState();
+    _user = FirebaseAuth.instance.currentUser;
+    _userSub = FirebaseAuth.instance.userChanges().listen((u) {
+      if (mounted) setState(() => _user = u);
+    });
     _loadProfile();
+  }
+
+  @override
+  void dispose() {
+    _userSub?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadProfile() async {
@@ -90,7 +105,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
               const SizedBox(height: 16),
               Text(_errorMessage!),
               const SizedBox(height: 16),
-              ElevatedButton(onPressed: _loadProfile, child: const Text('Retry')),
+              ElevatedButton(
+                  onPressed: _loadProfile, child: const Text('Retry')),
             ],
           ),
         ),
@@ -121,7 +137,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
               const SizedBox(height: 8),
               Text(
                 'Start reading articles to build\nyour personal bias breakdown.',
-                style: TextStyle(fontSize: 14, color: Colors.grey.shade500, height: 1.5),
+                style: TextStyle(
+                    fontSize: 14,
+                    color: Colors.grey.shade500,
+                    height: 1.5),
                 textAlign: TextAlign.center,
               ),
             ],
@@ -163,7 +182,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
               const SizedBox(height: 12),
               _buildSourceBarChart(),
               const SizedBox(height: 24),
-              _buildSectionTitle('Detailed Breakdown', Icons.analytics_outlined),
+              _buildSectionTitle(
+                  'Detailed Breakdown', Icons.analytics_outlined),
               const SizedBox(height: 12),
               _buildDetailsCards(),
             ],
@@ -173,11 +193,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  // ── REDESIGNED User header ────────────────────────────────────────────────
-  // Replaced blue gradient blob with a structured navy card with inline stats row
+  // ── User header ───────────────────────────────────────────────────────────
 
   Widget _buildUserHeader() {
-    final name = user?.displayName ?? 'Reader';
+    final name = _user?.displayName ?? 'Reader';
     final initial = name[0].toUpperCase();
     final p = _profile!;
 
@@ -206,7 +225,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(12),
                   color: Colors.white.withAlpha(18),
-                  border: Border.all(color: Colors.white.withAlpha(50), width: 1.5),
+                  border:
+                      Border.all(color: Colors.white.withAlpha(50), width: 1.5),
                 ),
                 child: Center(
                   child: Text(
@@ -232,9 +252,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         color: Colors.white,
                       ),
                     ),
-                    if (user?.email != null)
+                    if (_user?.email != null)
                       Text(
-                        user!.email!,
+                        _user!.email!,
                         style: TextStyle(
                           color: Colors.white.withAlpha(150),
                           fontSize: 12,
@@ -288,10 +308,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Widget _buildStatCards() {
     final p = _profile!;
     final sentimentColor = p.sentimentLabel == 'Positive'
-        ? Colors.green[600]!
+        ? Colors.green[700]!
         : p.sentimentLabel == 'Negative'
-            ? Colors.red[600]!
-            : Colors.orange[600]!;
+            ? Colors.deepOrange[600]!
+            : Colors.amber[600]!;
 
     return Row(
       children: [
@@ -316,7 +336,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  Widget _buildStatCard(String title, String value, Color color, IconData icon) {
+  Widget _buildStatCard(
+      String title, String value, Color color, IconData icon) {
     return Card(
       elevation: 2,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -358,7 +379,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   // ── Pie chart ─────────────────────────────────────────────────────────────
-  // FIX: sectionsSpace changed from 3 → 0 to remove gaps between slices
 
   Widget _buildPieChart() {
     final dist = _profile!.biasDistribution;
@@ -379,7 +399,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               height: 210,
               child: PieChart(
                 PieChartData(
-                  sectionsSpace: 0, // FIX: was 3, caused visible gaps
+                  sectionsSpace: 0,
                   centerSpaceRadius: 50,
                   startDegreeOffset: -90,
                   sections: [
@@ -387,7 +407,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       PieChartSectionData(
                         value: left,
                         title: '${left.toInt()}%',
-                        color: Colors.blue[700]!,
+                        color: Colors.blue[800]!,
                         radius: 55,
                         titleStyle: const TextStyle(
                           fontSize: 13,
@@ -399,7 +419,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       PieChartSectionData(
                         value: center,
                         title: '${center.toInt()}%',
-                        color: Colors.purple[400]!,
+                        color: Colors.teal[600]!,
                         radius: 55,
                         titleStyle: const TextStyle(
                           fontSize: 13,
@@ -411,7 +431,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       PieChartSectionData(
                         value: right,
                         title: '${right.toInt()}%',
-                        color: Colors.red[700]!,
+                        color: Colors.red[800]!,
                         radius: 55,
                         titleStyle: const TextStyle(
                           fontSize: 13,
@@ -427,11 +447,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                _buildLegendItem('Left Wing', Colors.blue[700]!),
+                _buildLegendItem('Left Wing', Colors.blue[800]!),
                 const SizedBox(width: 20),
-                _buildLegendItem('Centre', Colors.purple[400]!),
+                _buildLegendItem('Centre', Colors.teal[600]!),
                 const SizedBox(width: 20),
-                _buildLegendItem('Right Wing', Colors.red[700]!),
+                _buildLegendItem('Right Wing', Colors.red[800]!),
               ],
             ),
           ],
@@ -465,18 +485,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Color _sourceBarColor(int index, int total) {
     final palette = [
-      Colors.blue[700]!,
-      Colors.blue[500]!,
+      Colors.blue[800]!,
+      Colors.blue[600]!,
       Colors.cyan[600]!,
-      Colors.purple[400]!,
-      Colors.purple[600]!,
-      Colors.indigo[500]!,
       Colors.teal[500]!,
+      Colors.teal[700]!,
+      Colors.indigo[500]!,
+      Colors.purple[400]!,
       Colors.orange[600]!,
       Colors.orange[400]!,
       Colors.red[400]!,
-      Colors.red[600]!,
-      Colors.red[800]!,
+      Colors.red[700]!,
+      Colors.red[900]!,
     ];
     return palette[index % palette.length];
   }
@@ -493,12 +513,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
       );
     }
 
-    final sorted = raw.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+    final sorted = raw.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
     final sources = sorted.take(12).toList();
     final maxVal = sources.first.value.toDouble();
+    final interval =
+        (maxVal / 4).ceilToDouble().clamp(1.0, double.infinity);
 
-    // FIX: interval calculated to avoid fractional ticks causing duplicate labels
-    final interval = (maxVal / 4).ceilToDouble().clamp(1.0, double.infinity);
+    // Fixed width per bar so labels always have room
+    const double barAreaWidth = 56.0;
+    final double chartWidth = sources.length * barAreaWidth;
 
     return Card(
       elevation: 2,
@@ -510,136 +534,198 @@ class _ProfileScreenState extends State<ProfileScreen> {
           children: [
             SizedBox(
               height: 240,
-              child: BarChart(
-                BarChartData(
-                  alignment: BarChartAlignment.spaceAround,
-                  maxY: maxVal * 1.25,
-                  barTouchData: BarTouchData(
-                    touchCallback: (FlTouchEvent event, BarTouchResponse? response) {
-                      setState(() {
-                        if (response == null ||
-                            response.spot == null ||
-                            event is FlTapUpEvent == false) {
-                          _touchedBarIndex = -1;
-                          return;
-                        }
-                        _touchedBarIndex = response.spot!.touchedBarGroupIndex;
-                      });
-                    },
-                    touchTooltipData: BarTouchTooltipData(
-                      getTooltipColor: (_) => Colors.blueGrey.shade800,
-                      getTooltipItem: (group, groupIndex, rod, rodIndex) {
-                        final s = sources[groupIndex];
-                        return BarTooltipItem(
-                          '${s.key}\n',
-                          const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 12,
-                          ),
-                          children: [
-                            TextSpan(
-                              text: '${s.value} article${s.value == 1 ? '' : 's'}',
-                              style: const TextStyle(
-                                color: Colors.white70,
-                                fontSize: 11,
-                                fontWeight: FontWeight.normal,
-                              ),
+              child: Row(
+                children: [
+                  // ── Fixed Y-axis (does not scroll) ─────────────────────
+                  SizedBox(
+                    width: 28,
+                    child: BarChart(
+                      BarChartData(
+                        maxY: maxVal * 1.25,
+                        titlesData: FlTitlesData(
+                          leftTitles: AxisTitles(
+                            sideTitles: SideTitles(
+                              showTitles: true,
+                              reservedSize: 28,
+                              interval: interval,
+                              getTitlesWidget: (value, meta) {
+                                if (value == meta.max) {
+                                  return const SizedBox.shrink();
+                                }
+                                return Text(
+                                  value.toInt().toString(),
+                                  style: TextStyle(
+                                      fontSize: 10,
+                                      color: Colors.grey[500]),
+                                );
+                              },
                             ),
-                          ],
-                        );
-                      },
+                          ),
+                          bottomTitles: const AxisTitles(
+                              sideTitles: SideTitles(showTitles: false)),
+                          topTitles: const AxisTitles(
+                              sideTitles: SideTitles(showTitles: false)),
+                          rightTitles: const AxisTitles(
+                              sideTitles: SideTitles(showTitles: false)),
+                        ),
+                        borderData: FlBorderData(show: false),
+                        gridData: const FlGridData(show: false),
+                        barGroups: const [],
+                      ),
                     ),
                   ),
-                  titlesData: FlTitlesData(
-                    bottomTitles: AxisTitles(
-                      sideTitles: SideTitles(
-                        showTitles: true,
-                        reservedSize: 44,
-                        getTitlesWidget: (value, meta) {
-                          final i = value.toInt();
-                          if (i < 0 || i >= sources.length) return const SizedBox.shrink();
-                          final name = sources[i].key;
-                          final short = name.split(' ').first;
-                          final abbr = short.length > 7 ? '${short.substring(0, 6)}…' : short;
-                          return Padding(
-                            padding: const EdgeInsets.only(top: 6),
-                            child: Transform.rotate(
-                              angle: -0.45,
-                              child: Text(
-                                abbr,
-                                style: TextStyle(
-                                  fontSize: 10,
-                                  fontWeight: i == _touchedBarIndex
-                                      ? FontWeight.bold
-                                      : FontWeight.normal,
-                                  color: i == _touchedBarIndex
-                                      ? Colors.blue[700]
-                                      : Colors.grey[600],
+
+                  // ── Horizontally scrollable bars + labels ───────────────
+                  Expanded(
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: SizedBox(
+                        width: chartWidth,
+                        child: BarChart(
+                          BarChartData(
+                            alignment: BarChartAlignment.spaceAround,
+                            maxY: maxVal * 1.25,
+                            barTouchData: BarTouchData(
+                              touchCallback: (FlTouchEvent event,
+                                  BarTouchResponse? response) {
+                                setState(() {
+                                  if (response == null ||
+                                      response.spot == null ||
+                                      event is FlTapUpEvent == false) {
+                                    _touchedBarIndex = -1;
+                                    return;
+                                  }
+                                  _touchedBarIndex =
+                                      response.spot!.touchedBarGroupIndex;
+                                });
+                              },
+                              touchTooltipData: BarTouchTooltipData(
+                                getTooltipColor: (_) =>
+                                    Colors.blueGrey.shade800,
+                                getTooltipItem:
+                                    (group, groupIndex, rod, rodIndex) {
+                                  final s = sources[groupIndex];
+                                  return BarTooltipItem(
+                                    '${s.key}\n',
+                                    const TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 12,
+                                    ),
+                                    children: [
+                                      TextSpan(
+                                        text:
+                                            '${s.value} article${s.value == 1 ? '' : 's'}',
+                                        style: const TextStyle(
+                                          color: Colors.white70,
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.normal,
+                                        ),
+                                      ),
+                                    ],
+                                  );
+                                },
+                              ),
+                            ),
+                            titlesData: FlTitlesData(
+                              bottomTitles: AxisTitles(
+                                sideTitles: SideTitles(
+                                  showTitles: true,
+                                  reservedSize: 52,
+                                  getTitlesWidget: (value, meta) {
+                                    final i = value.toInt();
+                                    if (i < 0 || i >= sources.length) {
+                                      return const SizedBox.shrink();
+                                    }
+                                    final name = sources[i].key;
+                                    // Show up to two words on two lines
+                                    final words = name.split(' ');
+                                    final label = words.length > 1
+                                        ? '${words[0]}\n${words[1]}'
+                                        : words[0];
+                                    return Padding(
+                                      padding:
+                                          const EdgeInsets.only(top: 6),
+                                      child: Text(
+                                        label,
+                                        textAlign: TextAlign.center,
+                                        style: TextStyle(
+                                          fontSize: 10,
+                                          fontWeight: i == _touchedBarIndex
+                                              ? FontWeight.bold
+                                              : FontWeight.normal,
+                                          color: i == _touchedBarIndex
+                                              ? Colors.blue[700]
+                                              : Colors.grey[600],
+                                        ),
+                                      ),
+                                    );
+                                  },
                                 ),
                               ),
+                              leftTitles: const AxisTitles(
+                                  sideTitles:
+                                      SideTitles(showTitles: false)),
+                              topTitles: const AxisTitles(
+                                  sideTitles:
+                                      SideTitles(showTitles: false)),
+                              rightTitles: const AxisTitles(
+                                  sideTitles:
+                                      SideTitles(showTitles: false)),
                             ),
-                          );
-                        },
-                      ),
-                    ),
-                    leftTitles: AxisTitles(
-                      sideTitles: SideTitles(
-                        showTitles: true,
-                        reservedSize: 28,
-                        interval: interval,
-                        getTitlesWidget: (value, meta) {
-                          // FIX: skip meta.max (= maxY = maxVal*1.25) which rendered
-                          // as the same int as the last real tick, causing the duplicate
-                          if (value == meta.max) return const SizedBox.shrink();
-                          return Text(
-                            value.toInt().toString(),
-                            style: TextStyle(fontSize: 10, color: Colors.grey[500]),
-                          );
-                        },
-                      ),
-                    ),
-                    topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                    rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                  ),
-                  gridData: FlGridData(
-                    show: true,
-                    drawVerticalLine: false,
-                    horizontalInterval: interval,
-                    getDrawingHorizontalLine: (_) => FlLine(
-                      color: Colors.grey.withValues(alpha: 0.15),
-                      strokeWidth: 1,
-                    ),
-                  ),
-                  borderData: FlBorderData(show: false),
-                  barGroups: sources.asMap().entries.map((entry) {
-                    final i = entry.key;
-                    final isTouched = i == _touchedBarIndex;
-                    return BarChartGroupData(
-                      x: i,
-                      barRods: [
-                        BarChartRodData(
-                          toY: entry.value.value.toDouble(),
-                          color: isTouched
-                              ? _sourceBarColor(i, sources.length).withValues(alpha: 1.0)
-                              : _sourceBarColor(i, sources.length).withValues(alpha: 0.82),
-                          width: sources.length > 8 ? 14 : 18,
-                          borderRadius: const BorderRadius.vertical(top: Radius.circular(6)),
-                          backDrawRodData: BackgroundBarChartRodData(
-                            show: true,
-                            toY: maxVal * 1.25,
-                            color: Colors.grey.withValues(alpha: 0.05),
+                            gridData: FlGridData(
+                              show: true,
+                              drawVerticalLine: false,
+                              horizontalInterval: interval,
+                              getDrawingHorizontalLine: (_) => FlLine(
+                                color:
+                                    Colors.grey.withValues(alpha: 0.15),
+                                strokeWidth: 1,
+                              ),
+                            ),
+                            borderData: FlBorderData(show: false),
+                            barGroups:
+                                sources.asMap().entries.map((entry) {
+                              final i = entry.key;
+                              final isTouched = i == _touchedBarIndex;
+                              return BarChartGroupData(
+                                x: i,
+                                barRods: [
+                                  BarChartRodData(
+                                    toY: entry.value.value.toDouble(),
+                                    color: isTouched
+                                        ? _sourceBarColor(
+                                                i, sources.length)
+                                            .withValues(alpha: 1.0)
+                                        : _sourceBarColor(
+                                                i, sources.length)
+                                            .withValues(alpha: 0.82),
+                                    width: 22,
+                                    borderRadius:
+                                        const BorderRadius.vertical(
+                                            top: Radius.circular(6)),
+                                    backDrawRodData:
+                                        BackgroundBarChartRodData(
+                                      show: true,
+                                      toY: maxVal * 1.25,
+                                      color: Colors.grey
+                                          .withValues(alpha: 0.05),
+                                    ),
+                                  ),
+                                ],
+                              );
+                            }).toList(),
                           ),
                         ),
-                      ],
-                    );
-                  }).toList(),
-                ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
             const SizedBox(height: 8),
             Text(
-              'Tap a bar for details · showing top ${sources.length} sources',
+              'Scroll to see all · tap a bar for details · top ${sources.length} sources',
               style: TextStyle(fontSize: 10, color: Colors.grey[400]),
             ),
           ],
@@ -654,18 +740,26 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final p = _profile!;
     return Column(
       children: [
-        _buildDetailCard('Left Wing articles', '${p.leftCount}', Colors.blue[700]!, Icons.trending_down),
-        _buildDetailCard('Centre articles', '${p.centerCount}', Colors.purple[400]!, Icons.trending_flat),
-        _buildDetailCard('Right Wing articles', '${p.rightCount}', Colors.red[700]!, Icons.trending_up),
-        _buildDetailCard('Positive articles', '${p.positiveCount}', Colors.green[600]!, Icons.sentiment_satisfied),
-        _buildDetailCard('Negative articles', '${p.negativeCount}', Colors.red[600]!, Icons.sentiment_dissatisfied),
-        if (_profile!.sourceBreakdown == null || _profile!.sourceBreakdown!.isEmpty)
-          _buildDetailCard('Most read source', p.mostReadSource, Colors.indigo[600]!, Icons.bookmark),
+        _buildDetailCard('Left Wing articles', '${p.leftCount}',
+            Colors.blue[800]!, Icons.trending_down),
+        _buildDetailCard('Centre articles', '${p.centerCount}',
+            Colors.teal[600]!, Icons.trending_flat),
+        _buildDetailCard('Right Wing articles', '${p.rightCount}',
+            Colors.red[800]!, Icons.trending_up),
+        _buildDetailCard('Positive articles', '${p.positiveCount}',
+            Colors.green[700]!, Icons.sentiment_satisfied),
+        _buildDetailCard('Negative articles', '${p.negativeCount}',
+            Colors.deepOrange[600]!, Icons.sentiment_dissatisfied),
+        if (_profile!.sourceBreakdown == null ||
+            _profile!.sourceBreakdown!.isEmpty)
+          _buildDetailCard('Most read source', p.mostReadSource,
+              Colors.indigo[600]!, Icons.bookmark),
       ],
     );
   }
 
-  Widget _buildDetailCard(String label, String value, Color color, IconData icon) {
+  Widget _buildDetailCard(
+      String label, String value, Color color, IconData icon) {
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
       elevation: 1,
@@ -675,10 +769,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
           backgroundColor: color.withAlpha(40),
           child: Icon(icon, color: color, size: 20),
         ),
-        title: Text(label, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
+        title: Text(label,
+            style: const TextStyle(
+                fontSize: 14, fontWeight: FontWeight.w500)),
         trailing: Text(
           value,
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: color),
+          style: TextStyle(
+              fontSize: 18, fontWeight: FontWeight.bold, color: color),
         ),
       ),
     );
@@ -691,7 +788,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
         const SizedBox(width: 8),
         Text(
           title,
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.grey[800]),
+          style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: Colors.grey[800]),
         ),
       ],
     );

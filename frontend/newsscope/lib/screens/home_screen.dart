@@ -57,7 +57,10 @@ class _HomeScreenState extends State<HomeScreen> {
         items: const [
           BottomNavigationBarItem(icon: Icon(Icons.home), label: 'Home'),
           BottomNavigationBarItem(
-              icon: Icon(Icons.compare_arrows), label: 'Spectrum'),
+            // RENAMED: Spectrum → Compare
+            icon: Icon(Icons.compare_arrows),
+            label: 'Compare',
+          ),
           BottomNavigationBarItem(icon: Icon(Icons.person), label: 'Profile'),
         ],
         onTap: _onTabTapped,
@@ -78,8 +81,6 @@ class HomeFeedTab extends StatefulWidget {
 }
 
 class _HomeFeedTabState extends State<HomeFeedTab> {
-  // FIX: use live stream instead of currentUser snapshot so display name
-  // updates immediately after editing in Settings without a sign-out.
   User? _user;
   StreamSubscription<User?>? _userSub;
 
@@ -134,13 +135,23 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
   }
 
   Widget _buildNewsScopeTitle() {
-    return Text(
-      'NewsScope',
-      style: TextStyle(
-        fontSize: 22,
-        fontWeight: FontWeight.bold,
-        letterSpacing: 0.5,
-        color: Colors.blue[800],
+    return RichText(
+      text: TextSpan(
+        style: const TextStyle(
+          fontSize: 22,
+          fontWeight: FontWeight.bold,
+          letterSpacing: 0.5,
+        ),
+        children: [
+          const TextSpan(
+            text: 'News',
+            style: TextStyle(color: Colors.black87),
+          ),
+          TextSpan(
+            text: 'Scope',
+            style: TextStyle(color: Colors.blue[800]),
+          ),
+        ],
       ),
     );
   }
@@ -181,7 +192,8 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  '$_timeOfDayGreeting, $name 👋',
+                  // REMOVED: 👋 emoji
+                  '$_timeOfDayGreeting, $name',
                   style: const TextStyle(
                     fontSize: 17,
                     fontWeight: FontWeight.bold,
@@ -190,7 +202,8 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                 ),
                 const SizedBox(height: 5),
                 Text(
-                  "Here's the latest from across the spectrum.",
+                  // UPDATED: subtitle text
+                  "Today's news, AI-analysed for bias and sentiment.",
                   style: TextStyle(
                     color: Colors.white.withAlpha(160),
                     fontSize: 12,
@@ -309,7 +322,8 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
   }
 
   String _dateKey(DateTime dt) {
-    return '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
+    return '${dt.year}-${dt.month.toString().padLeft(2, '0')}-'
+        '${dt.day.toString().padLeft(2, '0')}';
   }
 
   String _headerText(String key, String todayKey, String yesterdayKey) {
@@ -328,13 +342,15 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
         title: _buildNewsScopeTitle(),
         actions: [
           IconButton(
-              icon: const Icon(Icons.refresh),
-              onPressed: _refreshArticles,
-              tooltip: 'Refresh'),
+            icon: const Icon(Icons.refresh),
+            onPressed: _refreshArticles,
+            tooltip: 'Refresh',
+          ),
           IconButton(
-              icon: const Icon(Icons.logout),
-              onPressed: _handleLogout,
-              tooltip: 'Sign Out'),
+            icon: const Icon(Icons.logout),
+            onPressed: _handleLogout,
+            tooltip: 'Sign Out',
+          ),
         ],
       ),
       body: Column(
@@ -365,8 +381,9 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                             textAlign: TextAlign.center),
                         const SizedBox(height: 16),
                         ElevatedButton(
-                            onPressed: _refreshArticles,
-                            child: const Text('Retry')),
+                          onPressed: _refreshArticles,
+                          child: const Text('Retry'),
+                        ),
                       ],
                     ),
                   );
@@ -383,8 +400,9 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                             style: TextStyle(color: Colors.grey[500])),
                         const SizedBox(height: 16),
                         ElevatedButton(
-                            onPressed: _refreshArticles,
-                            child: const Text('Refresh')),
+                          onPressed: _refreshArticles,
+                          child: const Text('Refresh'),
+                        ),
                       ],
                     ),
                   );
@@ -433,7 +451,8 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                                   context,
                                   MaterialPageRoute(
                                     builder: (_) =>
-                                        ArticleDetailScreen.fromArticle(article),
+                                        ArticleDetailScreen.fromArticle(
+                                            article),
                                   ),
                                 );
                                 widget.onArticleRead();
