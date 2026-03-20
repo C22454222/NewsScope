@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
@@ -55,13 +57,8 @@ class _HomeScreenState extends State<HomeScreen> {
         items: const [
           BottomNavigationBarItem(icon: Icon(Icons.home), label: 'Home'),
           BottomNavigationBarItem(
-            icon: Icon(Icons.compare_arrows),
-            label: 'Spectrum',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.person),
-            label: 'Profile',
-          ),
+              icon: Icon(Icons.compare_arrows), label: 'Spectrum'),
+          BottomNavigationBarItem(icon: Icon(Icons.person), label: 'Profile'),
         ],
         onTap: _onTabTapped,
       ),
@@ -81,28 +78,34 @@ class HomeFeedTab extends StatefulWidget {
 }
 
 class _HomeFeedTabState extends State<HomeFeedTab> {
-  final user = FirebaseAuth.instance.currentUser;
-  final ApiService _apiService = ApiService();
+  // FIX: use live stream instead of currentUser snapshot so display name
+  // updates immediately after editing in Settings without a sign-out.
+  User? _user;
+  StreamSubscription<User?>? _userSub;
 
+  final ApiService _apiService = ApiService();
   late Future<List<Article>> _articlesFuture;
 
   String? _selectedCategory;
   final List<String> _categories = const [
-    'All',
-    'Politics',
-    'World',
-    'Business',
-    'Tech',
-    'Sport',
-    'Entertainment',
-    'Health',
-    'Science',
+    'All', 'Politics', 'World', 'Business',
+    'Tech', 'Sport', 'Entertainment', 'Health', 'Science',
   ];
 
   @override
   void initState() {
     super.initState();
+    _user = FirebaseAuth.instance.currentUser;
+    _userSub = FirebaseAuth.instance.userChanges().listen((u) {
+      if (mounted) setState(() => _user = u);
+    });
     _articlesFuture = _apiService.getArticles();
+  }
+
+  @override
+  void dispose() {
+    _userSub?.cancel();
+    super.dispose();
   }
 
   void _loadArticles() {
@@ -143,71 +146,87 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
   }
 
   Widget _buildGreetingCard() {
-    final name = user?.displayName ?? 'Reader';
-    final initial = name[0].toUpperCase();
+    final name = _user?.displayName ?? 'Reader';
+    final now = DateTime.now();
+    final dayNames = [
+      'Monday', 'Tuesday', 'Wednesday', 'Thursday',
+      'Friday', 'Saturday', 'Sunday'
+    ];
+    final monthNames = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+    ];
+    final dayName = dayNames[now.weekday - 1];
+    final monthName = monthNames[now.month - 1];
 
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 18),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [Colors.blue.shade800, Colors.blue.shade500],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
+        color: const Color(0xFF0D1B3E),
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: Colors.blue.shade200.withAlpha(120),
+            color: Colors.black.withAlpha(50),
             blurRadius: 12,
             offset: const Offset(0, 4),
           ),
         ],
       ),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  '$_timeOfDayGreeting, $name! 👋',
+                  '$_timeOfDayGreeting, $name 👋',
                   style: const TextStyle(
-                    fontSize: 20,
+                    fontSize: 17,
                     fontWeight: FontWeight.bold,
                     color: Colors.white,
                   ),
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(height: 5),
                 Text(
                   "Here's the latest from across the spectrum.",
                   style: TextStyle(
-                    color: Colors.white.withAlpha(210),
-                    fontSize: 13,
+                    color: Colors.white.withAlpha(160),
+                    fontSize: 12,
                   ),
                 ),
               ],
             ),
           ),
-          const SizedBox(width: 12),
-          CircleAvatar(
-            radius: 26,
-            backgroundColor: Colors.white.withAlpha(50),
-            child: Text(
-              initial,
-              style: const TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.bold,
-                color: Colors.white,
+          const SizedBox(width: 16),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Text(
+                dayName.toUpperCase(),
+                style: TextStyle(
+                  color: Colors.white.withAlpha(130),
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 1.0,
+                ),
               ),
-            ),
+              const SizedBox(height: 2),
+              Text(
+                '${now.day} $monthName',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
           ),
         ],
       ),
     );
   }
-
-  // ── Category chips ─────────────────────────────────────────────────────────
 
   Widget _buildCategoryChips() {
     return SizedBox(
@@ -229,14 +248,12 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
             },
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 180),
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
               decoration: BoxDecoration(
                 color: isSelected ? Colors.blue[700] : Colors.grey[100],
                 borderRadius: BorderRadius.circular(20),
                 border: Border.all(
-                  color:
-                      isSelected ? Colors.blue[700]! : Colors.grey[300]!,
+                  color: isSelected ? Colors.blue[700]! : Colors.grey[300]!,
                 ),
               ),
               child: Row(
@@ -250,9 +267,8 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                     label,
                     style: TextStyle(
                       fontSize: 12,
-                      fontWeight: isSelected
-                          ? FontWeight.w600
-                          : FontWeight.normal,
+                      fontWeight:
+                          isSelected ? FontWeight.w600 : FontWeight.normal,
                       color: isSelected ? Colors.white : Colors.grey[700],
                     ),
                   ),
@@ -264,8 +280,6 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
       ),
     );
   }
-
-  // ── Date section header ────────────────────────────────────────────────────
 
   Widget _buildDateHeader(String headerText) {
     return Padding(
@@ -294,28 +308,17 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
     );
   }
 
-  // ── Date grouping helpers ──────────────────────────────────────────────────
-
-  /// Returns a zero-padded date key — e.g. "2026-03-08" — so that
-  /// string-based sorting produces the same order as date sorting.
   String _dateKey(DateTime dt) {
-    final y = dt.year.toString();
-    final m = dt.month.toString().padLeft(2, '0');
-    final d = dt.day.toString().padLeft(2, '0');
-    return '$y-$m-$d';
+    return '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
   }
 
-  /// Converts a zero-padded key back to a display string.
   String _headerText(String key, String todayKey, String yesterdayKey) {
     if (key == todayKey) return 'Today';
     if (key == yesterdayKey) return 'Yesterday';
     if (key == 'Unknown Date') return 'Unknown Date';
-    // key is "YYYY-MM-DD" — reformat to "DD/MM/YYYY" for display.
     final parts = key.split('-');
     return '${parts[2]}/${parts[1]}/${parts[0]}';
   }
-
-  // ── Build ──────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -325,15 +328,13 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
         title: _buildNewsScopeTitle(),
         actions: [
           IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _refreshArticles,
-            tooltip: 'Refresh',
-          ),
+              icon: const Icon(Icons.refresh),
+              onPressed: _refreshArticles,
+              tooltip: 'Refresh'),
           IconButton(
-            icon: const Icon(Icons.logout),
-            onPressed: _handleLogout,
-            tooltip: 'Sign Out',
-          ),
+              icon: const Icon(Icons.logout),
+              onPressed: _handleLogout,
+              tooltip: 'Sign Out'),
         ],
       ),
       body: Column(
@@ -352,7 +353,6 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                 if (snapshot.connectionState == ConnectionState.waiting) {
                   return const Center(child: CircularProgressIndicator());
                 }
-
                 if (snapshot.hasError) {
                   return Center(
                     child: Column(
@@ -361,20 +361,16 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                         const Icon(Icons.error_outline,
                             size: 64, color: Colors.red),
                         const SizedBox(height: 16),
-                        Text(
-                          'Error: ${snapshot.error}',
-                          textAlign: TextAlign.center,
-                        ),
+                        Text('Error: ${snapshot.error}',
+                            textAlign: TextAlign.center),
                         const SizedBox(height: 16),
                         ElevatedButton(
-                          onPressed: _refreshArticles,
-                          child: const Text('Retry'),
-                        ),
+                            onPressed: _refreshArticles,
+                            child: const Text('Retry')),
                       ],
                     ),
                   );
                 }
-
                 if (!snapshot.hasData || snapshot.data!.isEmpty) {
                   return Center(
                     child: Column(
@@ -383,15 +379,12 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                         Icon(Icons.article_outlined,
                             size: 64, color: Colors.grey.shade300),
                         const SizedBox(height: 16),
-                        Text(
-                          'No articles found.',
-                          style: TextStyle(color: Colors.grey[500]),
-                        ),
+                        Text('No articles found.',
+                            style: TextStyle(color: Colors.grey[500])),
                         const SizedBox(height: 16),
                         ElevatedButton(
-                          onPressed: _refreshArticles,
-                          child: const Text('Refresh'),
-                        ),
+                            onPressed: _refreshArticles,
+                            child: const Text('Refresh')),
                       ],
                     ),
                   );
@@ -403,8 +396,6 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                 final yesterdayKey =
                     _dateKey(now.subtract(const Duration(days: 1)));
 
-                // Group articles by zero-padded date key so string
-                // sort order matches chronological order correctly.
                 final grouped = <String, List<Article>>{};
                 for (final article in articles) {
                   final key = article.publishedAt != null
@@ -413,12 +404,10 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                   grouped.putIfAbsent(key, () => []).add(article);
                 }
 
-                // Sort descending — "Unknown Date" always last.
                 final sortedKeys = grouped.keys.toList()
                   ..sort((a, b) {
                     if (a == 'Unknown Date') return 1;
                     if (b == 'Unknown Date') return -1;
-                    // Zero-padded ISO keys sort correctly as strings.
                     return b.compareTo(a);
                   });
 
@@ -432,7 +421,6 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                       final sectionArticles = grouped[dateKey]!;
                       final header =
                           _headerText(dateKey, todayKey, yesterdayKey);
-
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -445,9 +433,7 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                                   context,
                                   MaterialPageRoute(
                                     builder: (_) =>
-                                        ArticleDetailScreen.fromArticle(
-                                      article,
-                                    ),
+                                        ArticleDetailScreen.fromArticle(article),
                                   ),
                                 );
                                 widget.onArticleRead();

@@ -34,25 +34,19 @@ class _SignUpScreenState extends State<SignUpScreen> {
       _showError('Password must be at least 6 characters');
       return;
     }
-
     setState(() => _isLoading = true);
     try {
-      final userCred = await FirebaseAuth.instance
-          .createUserWithEmailAndPassword(
+      final userCred = await FirebaseAuth.instance.createUserWithEmailAndPassword(
         email: _emailController.text.trim(),
         password: _passwordController.text.trim(),
       );
-      await userCred.user?.updateDisplayName(
-        _usernameController.text.trim(),
-      );
+      await userCred.user?.updateDisplayName(_usernameController.text.trim());
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('Account created! Please sign in.'),
-          backgroundColor: Colors.green[700],
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: const Text('Account created! Please sign in.'),
+        backgroundColor: Colors.green[700],
+        behavior: SnackBarBehavior.floating,
+      ));
       Navigator.pop(context);
     } on FirebaseAuthException catch (e) {
       _showError(e.message ?? 'Registration failed');
@@ -63,37 +57,25 @@ class _SignUpScreenState extends State<SignUpScreen> {
 
   void _showError(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: Colors.red[700],
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(message),
+      backgroundColor: Colors.red[700],
+      behavior: SnackBarBehavior.floating,
+    ));
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      // FIX: white AppBar with blue[800] title — matches all other screens
       appBar: AppBar(
         centerTitle: true,
-        title: RichText(
-          text: TextSpan(
-            style: const TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
-              letterSpacing: 0.3,
-            ),
-            children: [
-              const TextSpan(
-                text: 'Create ',
-                style: TextStyle(color: Colors.white),
-              ),
-              TextSpan(
-                text: 'Account',
-                style: TextStyle(color: Colors.blue[200]),
-              ),
-            ],
+        title: Text(
+          'Create Account',
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+            color: Colors.blue[800],
           ),
         ),
       ),
@@ -104,55 +86,28 @@ class _SignUpScreenState extends State<SignUpScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // ── Header ────────────────────────────────────────────────
+                // ── Header banner ─────────────────────────────────────────
                 Container(
                   width: double.infinity,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 20,
-                    vertical: 20,
-                  ),
+                  padding: const EdgeInsets.fromLTRB(20, 18, 20, 18),
                   decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [
-                        Colors.blue.shade800,
-                        Colors.blue.shade500,
-                      ],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
+                    color: const Color(0xFF0D1B3E),
                     borderRadius: BorderRadius.circular(16),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.blue.shade200.withAlpha(120),
-                        blurRadius: 12,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
+                    boxShadow: [BoxShadow(color: Colors.black.withAlpha(50),
+                        blurRadius: 12, offset: const Offset(0, 4))],
                   ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Join NewsScope',
-                        style: TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        'Track media bias and analyse news\nacross the political spectrum.',
-                        style: TextStyle(
-                          color: Colors.white.withAlpha(210),
-                          fontSize: 13,
-                          height: 1.4,
-                        ),
-                      ),
-                    ],
-                  ),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    const Text('Join NewsScope',
+                        style: TextStyle(fontSize: 22,
+                            fontWeight: FontWeight.bold, color: Colors.white)),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Track media bias and analyse news\nacross the political spectrum.',
+                      style: TextStyle(color: Colors.white.withAlpha(180),
+                          fontSize: 13, height: 1.4),
+                    ),
+                  ]),
                 ),
-
                 const SizedBox(height: 32),
 
                 // ── Fields ────────────────────────────────────────────────
@@ -160,19 +115,11 @@ class _SignUpScreenState extends State<SignUpScreen> {
                   controller: _usernameController,
                   decoration: InputDecoration(
                     labelText: 'Display Name',
-                    prefixIcon: Icon(
-                      Icons.person_outline,
-                      color: Colors.blue[700],
-                    ),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10),
-                    ),
+                    prefixIcon: Icon(Icons.person_outline, color: Colors.blue[700]),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(10),
-                      borderSide: BorderSide(
-                        color: Colors.blue[700]!,
-                        width: 2,
-                      ),
+                      borderSide: BorderSide(color: Colors.blue[700]!, width: 2),
                     ),
                   ),
                   textCapitalization: TextCapitalization.words,
@@ -183,19 +130,11 @@ class _SignUpScreenState extends State<SignUpScreen> {
                   controller: _emailController,
                   decoration: InputDecoration(
                     labelText: 'Email',
-                    prefixIcon: Icon(
-                      Icons.email_outlined,
-                      color: Colors.blue[700],
-                    ),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10),
-                    ),
+                    prefixIcon: Icon(Icons.email_outlined, color: Colors.blue[700]),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(10),
-                      borderSide: BorderSide(
-                        color: Colors.blue[700]!,
-                        width: 2,
-                      ),
+                      borderSide: BorderSide(color: Colors.blue[700]!, width: 2),
                     ),
                   ),
                   keyboardType: TextInputType.emailAddress,
@@ -208,38 +147,27 @@ class _SignUpScreenState extends State<SignUpScreen> {
                   decoration: InputDecoration(
                     labelText: 'Password',
                     helperText: 'At least 6 characters',
-                    prefixIcon: Icon(
-                      Icons.lock_outline,
-                      color: Colors.blue[700],
-                    ),
+                    prefixIcon: Icon(Icons.lock_outline, color: Colors.blue[700]),
                     suffixIcon: IconButton(
                       icon: Icon(
-                        _obscurePassword
-                            ? Icons.visibility_off_outlined
+                        _obscurePassword ? Icons.visibility_off_outlined
                             : Icons.visibility_outlined,
-                        color: Colors.grey[500],
-                        size: 20,
+                        color: Colors.grey[500], size: 20,
                       ),
-                      onPressed: () => setState(
-                        () => _obscurePassword = !_obscurePassword,
-                      ),
+                      onPressed: () =>
+                          setState(() => _obscurePassword = !_obscurePassword),
                     ),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10),
-                    ),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(10),
-                      borderSide: BorderSide(
-                        color: Colors.blue[700]!,
-                        width: 2,
-                      ),
+                      borderSide: BorderSide(color: Colors.blue[700]!, width: 2),
                     ),
                   ),
                   onSubmitted: (_) => _signUp(),
                 ),
                 const SizedBox(height: 28),
 
-                // ── Sign up button ────────────────────────────────────────
+                // ── Button ────────────────────────────────────────────────
                 _isLoading
                     ? const Center(child: CircularProgressIndicator())
                     : ElevatedButton(
@@ -249,42 +177,26 @@ class _SignUpScreenState extends State<SignUpScreen> {
                           foregroundColor: Colors.white,
                           padding: const EdgeInsets.symmetric(vertical: 15),
                           shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10),
-                          ),
+                              borderRadius: BorderRadius.circular(10)),
                           textStyle: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                          ),
+                              fontSize: 16, fontWeight: FontWeight.w600),
                         ),
                         child: const Text('Create Account'),
                       ),
                 const SizedBox(height: 20),
 
-                // ── Back to sign in ───────────────────────────────────────
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      'Already have an account?',
-                      style: TextStyle(
-                        color: Colors.grey[600],
-                        fontSize: 14,
-                      ),
-                    ),
-                    TextButton(
-                      onPressed: () => Navigator.pop(context),
-                      style: TextButton.styleFrom(
+                Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                  Text('Already have an account?',
+                      style: TextStyle(color: Colors.grey[600], fontSize: 14)),
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    style: TextButton.styleFrom(
                         foregroundColor: Colors.blue[700],
-                        padding:
-                            const EdgeInsets.symmetric(horizontal: 6),
-                      ),
-                      child: const Text(
-                        'Sign In',
-                        style: TextStyle(fontWeight: FontWeight.w600),
-                      ),
-                    ),
-                  ],
-                ),
+                        padding: const EdgeInsets.symmetric(horizontal: 6)),
+                    child: const Text('Sign In',
+                        style: TextStyle(fontWeight: FontWeight.w600)),
+                  ),
+                ]),
               ],
             ),
           ),

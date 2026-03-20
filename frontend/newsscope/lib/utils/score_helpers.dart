@@ -1,14 +1,14 @@
 import 'package:flutter/material.dart';
 
 // ── Bias ──────────────────────────────────────────────────────────────────────
-// blue[700] / purple[400] / red[700] — matches pie chart exactly.
-// Centre changed from green (sentiment colour) → purple for clear distinction.
+// Stronger blue for left, teal for centre (fully distinct from both sides),
+// stronger red for right.
 
 Color getBiasColor(double? score) {
   if (score == null) return Colors.grey.shade500;
-  if (score > 0.3) return Colors.red[700]!;
-  if (score < -0.3) return Colors.blue[700]!;
-  return Colors.purple[400]!;
+  if (score > 0.3) return Colors.red[800]!;
+  if (score < -0.3) return Colors.blue[800]!;
+  return Colors.teal[600]!;
 }
 
 String getBiasLabelShort(double? score) {
@@ -18,14 +18,6 @@ String getBiasLabelShort(double? score) {
   return 'Centre';
 }
 
-/// Returns a granular bias label based on score position.
-///
-/// Thresholds:
-///   > 0.3             → Right Wing
-///   > 0.1 to 0.3      → Centre Right
-///   -0.1 to 0.1       → Centre
-///   -0.3 to -0.1      → Centre Left
-///   < -0.3            → Left Wing
 String getBiasLabel(double? score) {
   if (score == null) return 'Unknown';
   if (score > 0.3) return 'Right Wing';
@@ -36,13 +28,14 @@ String getBiasLabel(double? score) {
 }
 
 // ── Sentiment ─────────────────────────────────────────────────────────────────
-// green[600] / orange[600] / red[600] — never overlaps with bias colours.
+// Strong green for positive, deep orange for negative (distinct from red/right),
+// amber for neutral.
 
 Color getSentimentColor(double? score) {
   if (score == null) return Colors.grey.shade500;
-  if (score > 0.1) return Colors.green[600]!;
-  if (score < -0.1) return Colors.red[600]!;
-  return Colors.orange[600]!;
+  if (score > 0.1) return Colors.green[700]!;
+  if (score < -0.1) return Colors.deepOrange[600]!;
+  return Colors.amber[600]!;
 }
 
 String getSentimentLabel(double? score) {
@@ -53,8 +46,6 @@ String getSentimentLabel(double? score) {
 }
 
 // ── Credibility ───────────────────────────────────────────────────────────────
-// green[700] / amber[700] / red[800] — stronger shades than sentiment
-// so credibility chips are visually distinct even when adjacent.
 
 Color getCredibilityColor(double? score) {
   if (score == null) return Colors.grey.shade500;

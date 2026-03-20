@@ -19,21 +19,10 @@ class ArticleCard extends StatelessWidget {
         '${dt.year}';
   }
 
-  /// Returns a human-readable title, falling back to deriving one from
-  /// the URL path only when the title field itself looks like a raw URL
-  /// (starts with "http") or a bare filename (ends with ".html"/".htm").
-  ///
-  /// The previous check used `title.contains('.html')` which could
-  /// accidentally trigger on a legitimate headline that quotes a URL
-  /// in its text. Checking the full title against the URL prefix and
-  /// the suffix-only case is more precise.
   String _sanitiseTitle(String title, String url) {
     final looksLikeUrl = title.startsWith('http');
-    final looksLikePath =
-        title.endsWith('.html') || title.endsWith('.htm');
-
+    final looksLikePath = title.endsWith('.html') || title.endsWith('.htm');
     if (!looksLikeUrl && !looksLikePath) return title;
-
     final uri = Uri.tryParse(url);
     if (uri == null || uri.pathSegments.isEmpty) return title;
     return uri.pathSegments.last
@@ -55,9 +44,7 @@ class ArticleCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: Theme.of(context).cardColor,
         borderRadius: BorderRadius.circular(12),
-        border: Border(
-          left: BorderSide(color: biasColor, width: 4),
-        ),
+        border: Border(left: BorderSide(color: biasColor, width: 4)),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.07),
@@ -94,17 +81,14 @@ class ArticleCard extends StatelessWidget {
                     Expanded(
                       child: Text(
                         article.source,
-                        style: TextStyle(
-                            fontSize: 12, color: Colors.grey[600]),
+                        style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
-                    if (article.category != null &&
-                        article.category!.isNotEmpty) ...[
+                    if (article.category != null && article.category!.isNotEmpty) ...[
                       const SizedBox(width: 8),
                       Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 7, vertical: 2),
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                         decoration: BoxDecoration(
                           color: Colors.blue[50],
                           borderRadius: BorderRadius.circular(6),
@@ -122,8 +106,7 @@ class ArticleCard extends StatelessWidget {
                     const SizedBox(width: 8),
                     Text(
                       _formatDate(article.publishedAt),
-                      style: TextStyle(
-                          fontSize: 11, color: Colors.grey[500]),
+                      style: TextStyle(fontSize: 11, color: Colors.grey[500]),
                     ),
                   ],
                 ),
@@ -134,13 +117,13 @@ class ArticleCard extends StatelessWidget {
                   children: [
                     if (article.biasScore != null)
                       _ScorePill(
-                        label: getBiasLabelShort(article.biasScore),
+                        label: 'Political Leaning: ${getBiasLabelShort(article.biasScore)}',
                         color: biasColor,
-                        icon: null,
+                        icon: Icons.balance,
                       ),
                     if (article.sentimentScore != null)
                       _ScorePill(
-                        label: getSentimentLabel(article.sentimentScore),
+                        label: 'Sentiment: ${getSentimentLabel(article.sentimentScore)}',
                         color: sentimentColor,
                         icon: (article.sentimentScore ?? 0) > 0
                             ? Icons.sentiment_satisfied
@@ -148,17 +131,19 @@ class ArticleCard extends StatelessWidget {
                       ),
                     if (article.credibilityScore != null)
                       _ScorePill(
-                        label:
-                            '${article.credibilityScore!.round()}% credible',
+                        label: '${article.credibilityScore!.round()}% credible',
                         color: credibilityColor,
                         icon: Icons.fact_check_outlined,
                       ),
-                    if (article.biasIntensity != null)
+                    if (article.generalBias != null)
                       _ScorePill(
-                        label:
-                            '${(article.biasIntensity! * 100).round()}% biased',
-                        color: Colors.grey.shade500,
-                        icon: null,
+                        label: article.generalBias == 'BIASED' ? 'Biased' : 'Unbiased',
+                        color: article.generalBias == 'BIASED'
+                            ? Colors.orange[700]!
+                            : Colors.green[700]!,
+                        icon: article.generalBias == 'BIASED'
+                            ? Icons.warning_amber
+                            : Icons.check_circle_outline,
                       ),
                   ],
                 ),

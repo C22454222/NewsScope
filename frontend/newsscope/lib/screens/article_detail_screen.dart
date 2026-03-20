@@ -88,8 +88,6 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
     super.dispose();
   }
 
-  // ── Reading tracking ──────────────────────────────────────────────────────
-
   Future<void> _trackReadingTime() async {
     if (_secondsSpent < 3 || _hasTracked) return;
     _hasTracked = true;
@@ -103,8 +101,6 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
           name: 'ArticleDetailScreen', error: e);
     }
   }
-
-  // ── Fact-check loading ────────────────────────────────────────────────────
 
   Future<void> _loadFactChecks() async {
     if (_loadedFactChecks != null && _loadedFactChecks!.isNotEmpty) return;
@@ -124,8 +120,6 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
     }
   }
 
-  // ── Fact-check URL launch ─────────────────────────────────────────────────
-
   void _launchFactCheckURL(String url) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -133,19 +127,17 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
     );
   }
 
-  // ── Spectrum bar ──────────────────────────────────────────────────────────
-
   double _biasScoreToPosition(double? score) {
     if (score == null) return 0.5;
     return ((score.clamp(-1.0, 1.0) + 1.0) / 2.0);
   }
 
   Color _positionToColor(double position) {
-    if (position < 0.2) return Colors.blue[700]!;
+    if (position < 0.2) return Colors.blue[800]!;
     if (position < 0.4) return Colors.cyan[600]!;
-    if (position < 0.6) return Colors.purple[400]!;
+    if (position < 0.6) return Colors.teal[600]!;
     if (position < 0.8) return Colors.orange[600]!;
-    return Colors.red[700]!;
+    return Colors.red[800]!;
   }
 
   Widget _buildSpectrumBar() {
@@ -171,8 +163,7 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
                 ),
                 const Spacer(),
                 Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                   decoration: BoxDecoration(
                     color: markerColor.withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(20),
@@ -207,11 +198,11 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
                             decoration: BoxDecoration(
                               gradient: LinearGradient(
                                 colors: [
-                                  Colors.blue[700]!,
+                                  Colors.blue[800]!,
                                   Colors.cyan[600]!,
-                                  Colors.purple[400]!,
+                                  Colors.teal[600]!,
                                   Colors.orange[600]!,
-                                  Colors.red[700]!,
+                                  Colors.red[800]!,
                                 ],
                               ),
                             ),
@@ -227,8 +218,7 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
                             decoration: BoxDecoration(
                               color: Colors.white,
                               shape: BoxShape.circle,
-                              border: Border.all(
-                                  color: markerColor, width: 2.5),
+                              border: Border.all(color: markerColor, width: 2.5),
                               boxShadow: const [
                                 BoxShadow(
                                   color: Colors.black26,
@@ -245,55 +235,13 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text('Left',
-                            style: TextStyle(
-                                fontSize: 10, color: Colors.blue[700])),
-                        Text('C-Left',
-                            style: TextStyle(
-                                fontSize: 10, color: Colors.cyan[600])),
-                        Text('Centre',
-                            style: TextStyle(
-                                fontSize: 10, color: Colors.purple[400])),
-                        Text('C-Right',
-                            style: TextStyle(
-                                fontSize: 10, color: Colors.orange[600])),
-                        Text('Right',
-                            style: TextStyle(
-                                fontSize: 10, color: Colors.red[700])),
+                        Text('Left', style: TextStyle(fontSize: 10, color: Colors.blue[800])),
+                        Text('C-Left', style: TextStyle(fontSize: 10, color: Colors.cyan[600])),
+                        Text('Centre', style: TextStyle(fontSize: 10, color: Colors.teal[600])),
+                        Text('C-Right', style: TextStyle(fontSize: 10, color: Colors.orange[600])),
+                        Text('Right', style: TextStyle(fontSize: 10, color: Colors.red[800])),
                       ],
                     ),
-                    if (widget.biasIntensity != null) ...[
-                      const SizedBox(height: 8),
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(4),
-                        child: LinearProgressIndicator(
-                          value: widget.biasIntensity!.clamp(0.0, 1.0),
-                          minHeight: 6,
-                          backgroundColor: Colors.grey.shade200,
-                          valueColor:
-                              AlwaysStoppedAnimation<Color>(markerColor),
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            'Bias intensity',
-                            style: TextStyle(
-                                fontSize: 10, color: Colors.grey[500]),
-                          ),
-                          Text(
-                            '${(widget.biasIntensity! * 100).round()}%',
-                            style: TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.bold,
-                              color: markerColor,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
                   ],
                 );
               },
@@ -303,8 +251,6 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
       ),
     );
   }
-
-  // ── Credibility card ──────────────────────────────────────────────────────
 
   Widget _buildCredibilityCard() {
     final score = widget.credibilityScore;
@@ -343,18 +289,15 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
                       fontSize: 16,
                     ),
                   ),
-                  if (widget.claimsChecked != null &&
-                      widget.claimsChecked! > 0)
+                  if (widget.claimsChecked != null && widget.claimsChecked! > 0)
                     Text(
                       '${widget.claimsChecked} claim(s) verified',
-                      style: TextStyle(
-                          color: Colors.grey[600], fontSize: 13),
+                      style: TextStyle(color: Colors.grey[600], fontSize: 13),
                     ),
                   if (widget.credibilityReason != null)
                     Text(
                       widget.credibilityReason!,
-                      style: TextStyle(
-                          color: Colors.grey[500], fontSize: 12),
+                      style: TextStyle(color: Colors.grey[500], fontSize: 12),
                     ),
                 ],
               ),
@@ -365,15 +308,11 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
     );
   }
 
-  // ── Fact-check section ────────────────────────────────────────────────────
-
   Widget _buildFactCheckSection() {
     return ExpansionTile(
       leading: const Icon(Icons.fact_check_outlined),
-      title: const Text(
-        'Fact Checks',
-        style: TextStyle(fontWeight: FontWeight.w600),
-      ),
+      title: const Text('Fact Checks',
+          style: TextStyle(fontWeight: FontWeight.w600)),
       subtitle: Text(
         _loadedFactChecks != null && _loadedFactChecks!.isNotEmpty
             ? '${_loadedFactChecks!.length} claim(s) checked'
@@ -420,25 +359,19 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
         children: [
           Text(
             claim,
-            style:
-                const TextStyle(fontStyle: FontStyle.italic, fontSize: 13),
+            style: const TextStyle(fontStyle: FontStyle.italic, fontSize: 13),
             maxLines: 3,
             overflow: TextOverflow.ellipsis,
           ),
           const SizedBox(height: 4),
           Row(
             children: [
-              Text(
-                '$emoji $ruling',
-                style: const TextStyle(fontWeight: FontWeight.w600),
-              ),
+              Text('$emoji $ruling',
+                  style: const TextStyle(fontWeight: FontWeight.w600)),
               if (speaker != null && speaker != 'N/A') ...[
                 const SizedBox(width: 8),
-                Text(
-                  '— $speaker',
-                  style:
-                      TextStyle(color: Colors.grey[600], fontSize: 12),
-                ),
+                Text('— $speaker',
+                    style: TextStyle(color: Colors.grey[600], fontSize: 12)),
               ],
               if (url != null) ...[
                 const Spacer(),
@@ -462,8 +395,6 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
     );
   }
 
-  // ── Article content card ──────────────────────────────────────────────────
-
   Widget _buildArticleContentCard() {
     final wordCount = widget.content!.trim().split(RegExp(r'\s+')).length;
     final readingMins = (wordCount / 200).ceil();
@@ -483,7 +414,6 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // ── Card header ───────────────────────────────────────────────
               Row(
                 children: [
                   Icon(Icons.article, size: 16, color: Colors.blue[700]),
@@ -499,8 +429,7 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
                   ),
                   const Spacer(),
                   Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 8, vertical: 3),
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                     decoration: BoxDecoration(
                       color: Colors.grey[100],
                       borderRadius: BorderRadius.circular(8),
@@ -519,8 +448,6 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
               const SizedBox(height: 12),
               const Divider(height: 1),
               const SizedBox(height: 18),
-
-              // ── Article body — full content, no truncation ────────────────
               SelectableText(
                 widget.content!,
                 style: Theme.of(context).textTheme.bodyLarge?.copyWith(
@@ -537,8 +464,6 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
     );
   }
 
-  // ── Build ─────────────────────────────────────────────────────────────────
-
   @override
   Widget build(BuildContext context) {
     return PopScope(
@@ -547,19 +472,14 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
         if (didPop && !_hasTracked) await _trackReadingTime();
       },
       child: Scaffold(
-        // No actions — browser button removed.
-        appBar: AppBar(
-          title: const Text('Article'),
-        ),
+        appBar: AppBar(title: const Text('Article')),
         body: SingleChildScrollView(
           padding: const EdgeInsets.all(16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // ── Source badge ──────────────────────────────────────────────
               Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 12, vertical: 6),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 decoration: BoxDecoration(
                   color: Colors.blue.shade50,
                   borderRadius: BorderRadius.circular(16),
@@ -573,8 +493,6 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
                 ),
               ),
               const SizedBox(height: 12),
-
-              // ── Title ─────────────────────────────────────────────────────
               Text(
                 widget.title,
                 style: Theme.of(context)
@@ -583,19 +501,16 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
                     ?.copyWith(fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 16),
-
-              // ── Chips ─────────────────────────────────────────────────────
+              // ── Chips ─────────────────────────────────────────────────
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
                 children: [
                   Chip(
-                    avatar: Icon(
-                      Icons.balance,
-                      size: 16,
-                      color: getBiasColor(widget.biasScore),
-                    ),
-                    label: Text(getBiasLabel(widget.biasScore)),
+                    avatar: Icon(Icons.balance, size: 16,
+                        color: getBiasColor(widget.biasScore)),
+                    label: Text(
+                        'Political Leaning: ${getBiasLabel(widget.biasScore)}'),
                     backgroundColor: getBiasColor(widget.biasScore)
                         .withAlpha((255 * 0.2).round()),
                   ),
@@ -610,11 +525,10 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
                         size: 16,
                         color: getSentimentColor(widget.sentimentScore),
                       ),
-                      label:
-                          Text(getSentimentLabel(widget.sentimentScore)),
-                      backgroundColor:
-                          getSentimentColor(widget.sentimentScore)
-                              .withAlpha((255 * 0.2).round()),
+                      label: Text(
+                          'Sentiment: ${getSentimentLabel(widget.sentimentScore)}'),
+                      backgroundColor: getSentimentColor(widget.sentimentScore)
+                          .withAlpha((255 * 0.2).round()),
                     ),
                   if (widget.generalBias != null)
                     Chip(
@@ -627,14 +541,15 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
                             ? Colors.orange[700]
                             : Colors.green[700],
                       ),
-                      label: Text(widget.generalBias!),
+                      label: Text(
+                        widget.generalBias == 'BIASED' ? 'Biased' : 'Unbiased',
+                      ),
                       backgroundColor: widget.generalBias == 'BIASED'
                           ? Colors.orange.withAlpha(40)
                           : Colors.green.withAlpha(40),
                     ),
                 ],
               ),
-
               const SizedBox(height: 16),
               _buildSpectrumBar(),
               const SizedBox(height: 12),
@@ -642,8 +557,6 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
               const SizedBox(height: 8),
               _buildFactCheckSection(),
               const SizedBox(height: 16),
-
-              // ── Article content ───────────────────────────────────────────
               if (widget.content != null && widget.content!.isNotEmpty)
                 _buildArticleContentCard()
               else
@@ -653,14 +566,11 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
                       const Icon(Icons.article_outlined,
                           size: 64, color: Colors.grey),
                       const SizedBox(height: 16),
-                      Text(
-                        'Content not yet available.',
-                        style: TextStyle(color: Colors.grey[500]),
-                      ),
+                      Text('Content not yet available.',
+                          style: TextStyle(color: Colors.grey[500])),
                     ],
                   ),
                 ),
-
               const SizedBox(height: 24),
             ],
           ),
