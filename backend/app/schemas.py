@@ -210,14 +210,17 @@ class ComparisonRequest(BaseModel):
     """
     Request payload for comparing coverage across outlets.
 
-    limit field removed — no row cap applied. With a 72h article
-    window the total result set is well under 1,000 in practice.
-    category field added — backend filters by category before
-    returning so the Flutter client receives pre-filtered results.
+    source field added — filters results to a single outlet so the
+    Flutter compare screen can combine category + outlet + keyword.
+    category field filters by article category before returning so
+    the Flutter client receives pre-filtered results.
+    No row cap — with a 72h article window results are well under
+    1,000 in practice.
     """
 
     topic: str
     category: Optional[str] = None
+    source: Optional[str] = None  # FIX: added for outlet filtering
 
 
 class ComparisonResponse(BaseModel):

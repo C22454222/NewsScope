@@ -601,7 +601,7 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
                 positive_count=0,
                 neutral_count=0,
                 negative_count=0,
-                source_breakdown={},  # ← added
+                source_breakdown={},
             )
 
         total_time = sum(h["time_spent_seconds"] for h in history)
@@ -650,11 +650,13 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
         neu = len(history) - pos - neg
 
         sources = [h["source"] for h in history if h.get("source")]
-        source_counter = Counter(sources)                              # ← added
+        source_counter = Counter(sources)
         most_read = (
-            source_counter.most_common(1)[0][0] if source_counter else "N/A"
+            source_counter.most_common(1)[0][0]
+            if source_counter
+            else "N/A"
         )
-        source_breakdown = dict(source_counter.most_common(12))       # ← added
+        source_breakdown = dict(source_counter.most_common(12))
 
         total_reads = len(history)
         distribution = {
@@ -662,7 +664,9 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
                 round(left / total_reads * 100, 1) if total_reads else 0.0
             ),
             "center": (
-                round(center / total_reads * 100, 1) if total_reads else 0.0
+                round(center / total_reads * 100, 1)
+                if total_reads
+                else 0.0
             ),
             "right": (
                 round(right / total_reads * 100, 1) if total_reads else 0.0
@@ -682,7 +686,7 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
             positive_count=pos,
             neutral_count=neu,
             negative_count=neg,
-            source_breakdown=source_breakdown,                        # ← added
+            source_breakdown=source_breakdown,
         )
     except Exception as exc:
         print(f"Error fetching bias profile: {exc}")
@@ -694,43 +698,57 @@ async def compare_articles(request: ComparisonRequest):
     """
     Find articles on the same topic grouped by political bias.
 
-    No row limit — Supabase default of 1000 overridden with 10000.
-    With a 72h article window total results are well under 1,000
-    in practice, but the cap is set high to never silently truncate.
+    Splits into left/centre/right using bias_score thresholds —
+    does not rely on general_bias string values so casing is irrelevant.
 
-    Category filter applied server-side when provided — Flutter client
-    receives pre-filtered results without client-side post-processing.
+    Filters applied in order:
+      1. topic  — OR search across title and content
+      2. category — exact match (resolving sub-categories is done
+                    client-side via CATEGORY_GROUP_MAP in articles.py)
+      3. source — exact match against the source column
+
+    No row cap — with a 30d article window results are well under
+    1,000 in practice, but limit is set high to never silently truncate.
     """
     try:
         query = (
             supabase.table("articles")
             .select("*")
-            .or_(
-                f"title.ilike.%{request.topic}%,"
-                f"content.ilike.%{request.topic}%"
-            )
             .not_.is_("bias_score", "null")
             .order("published_at", desc=True)
         )
 
+        # FIX: search title AND content — content may be empty for many rows
+        if request.topic:
+            query = query.or_(
+                f"title.ilike.%{request.topic}%,"
+                f"content.ilike.%{request.topic}%"
+            )
+
         if request.category:
             query = query.eq("category", request.category)
+
+        # FIX: source filter now wired up from ComparisonRequest
+        if request.source:
+            query = query.eq("source", request.source)
 
         articles_data = query.limit(10000).execute().data
 
         left = [
-            a for a in articles_data if a.get("bias_score", 0) < -0.3
+            a for a in articles_data
+            if a.get("bias_score", 0) < -0.3
         ]
         center = [
             a for a in articles_data
             if -0.3 <= a.get("bias_score", 0) <= 0.3
         ]
         right = [
-            a for a in articles_data if a.get("bias_score", 0) > 0.3
+            a for a in articles_data
+            if a.get("bias_score", 0) > 0.3
         ]
 
         return ComparisonResponse(
-            topic=request.topic,
+            topic=request.topic or "",
             left_articles=left,
             center_articles=center,
             right_articles=right,

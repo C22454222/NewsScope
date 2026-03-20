@@ -172,39 +172,25 @@ class ApiService {
     String? source,
   }) async {
     try {
-      final params = <String, String>{'limit': '$limit'};
-      if (topic.isNotEmpty) params['topic'] = topic;
+      // POST to /api/articles/compare — splits by bias_score server-side
+      // so left/centre/right are always correct regardless of general_bias
+      // casing or null values in the DB.
+      final body = <String, dynamic>{'topic': topic};
       if (category != null && category.isNotEmpty) {
-        params['category'] = category.toLowerCase();
+        body['category'] = category.toLowerCase();
       }
       if (source != null && source.isNotEmpty) {
-        params['source'] = source;
+        body['source'] = source;
       }
 
-      final uri = Uri.parse('$_baseUrl/articles/compare')
-          .replace(queryParameters: params);
-
-      final response = await http.get(
-        uri,
+      final response = await http.post(
+        Uri.parse('$_baseUrl/api/articles/compare'),
         headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(body),
       );
 
       if (response.statusCode == 200) {
-        // Backend returns a flat list — split by general_bias for
-        // the left / centre / right column layout in CompareScreen
-        final List<dynamic> articles = jsonDecode(response.body);
-        return {
-          'left_articles': articles
-              .where((a) => a['general_bias'] == 'left')
-              .toList(),
-          'center_articles': articles
-              .where((a) => a['general_bias'] == 'center')
-              .toList(),
-          'right_articles': articles
-              .where((a) => a['general_bias'] == 'right')
-              .toList(),
-          'total_found': articles.length,
-        };
+        return jsonDecode(response.body) as Map<String, dynamic>;
       } else {
         debugPrint(
             'Failed to compare articles: ${response.statusCode}');
