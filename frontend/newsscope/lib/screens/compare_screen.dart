@@ -27,12 +27,35 @@ class _CompareScreenState extends State<CompareScreen>
   int _activeTab = 0;
 
   String? _selectedCategory;
-  final List<String> _categories = const [
+  String? _selectedSource;
+
+  static const List<String> _categories = [
     'All', 'Politics', 'World', 'Business',
     'Tech', 'Sport', 'Entertainment', 'Health', 'Science',
   ];
 
-  // UPDATED: Centre colour changed to teal[600] to match new palette
+  // Display label → exact source value stored in DB
+  static const Map<String, String> _sourceMap = {
+    'BBC':          'BBC News',
+    'RTÉ':          'RTÉ News',
+    'Guardian':     'The Guardian',
+    'CNN':          'CNN',
+    'Irish Times':  'The Irish Times',
+    'AP News':      'AP News',
+    'Sky News':     'Sky News',
+    'Independent':  'The Independent',
+    'NPR':          'NPR',
+    'DW':           'Deutsche Welle',
+    'GB News':      'GB News',
+    'Fox News':     'Fox News',
+  };
+
+  static const List<String> _sourceLabels = [
+    'All', 'BBC', 'RTÉ', 'Guardian', 'CNN', 'Irish Times',
+    'AP News', 'Sky News', 'Independent', 'NPR', 'DW',
+    'GB News', 'Fox News',
+  ];
+
   static const _tabColors = [
     Color(0xFF1565C0), // Left   — blue[800]
     Color(0xFF00796B), // Centre — teal[600]
@@ -60,10 +83,13 @@ class _CompareScreenState extends State<CompareScreen>
 
   // ── Search ────────────────────────────────────────────────────────────────
 
-  Future<void> _searchTopic() async {
-    final topic = _searchController.text.trim();
+  bool get _hasAnyFilter =>
+      _searchController.text.trim().isNotEmpty ||
+      _selectedCategory != null ||
+      _selectedSource != null;
 
-    if (topic.isEmpty && _selectedCategory == null) {
+  Future<void> _searchTopic() async {
+    if (!_hasAnyFilter) {
       setState(() {
         _errorMessage = null;
         _rawResults = null;
@@ -79,8 +105,9 @@ class _CompareScreenState extends State<CompareScreen>
 
     try {
       final results = await _apiService.compareArticles(
-        topic,
+        _searchController.text.trim(),
         category: _selectedCategory?.toLowerCase(),
+        source: _selectedSource,
       );
       if (!mounted) return;
       setState(() {
@@ -99,20 +126,122 @@ class _CompareScreenState extends State<CompareScreen>
   }
 
   void _onCategorySelected(String label) {
-    final newCategory = label == 'All' ? null : label;
-    final hasTopic = _searchController.text.trim().isNotEmpty;
-
     setState(() {
-      _selectedCategory = newCategory;
-      if (newCategory == null && !hasTopic) {
+      _selectedCategory = label == 'All' ? null : label;
+      if (!_hasAnyFilter) {
         _rawResults = null;
         _errorMessage = null;
       }
     });
+    if (_hasAnyFilter) _searchTopic();
+  }
 
-    if (newCategory != null || hasTopic) {
-      _searchTopic();
-    }
+  void _onSourceSelected(String label) {
+    setState(() {
+      _selectedSource = label == 'All' ? null : _sourceMap[label];
+      if (!_hasAnyFilter) {
+        _rawResults = null;
+        _errorMessage = null;
+      }
+    });
+    if (_hasAnyFilter) _searchTopic();
+  }
+
+  // ── Shared chip builder ───────────────────────────────────────────────────
+
+  Widget _buildFilterLabel(String label) {
+    return Text(
+      label,
+      style: TextStyle(
+        fontSize: 10,
+        fontWeight: FontWeight.bold,
+        color: Colors.blue[700],
+        letterSpacing: 1.2,
+      ),
+    );
+  }
+
+  Widget _buildChip({
+    required String label,
+    required bool isSelected,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+        decoration: BoxDecoration(
+          color: isSelected ? Colors.blue[700] : Colors.grey[100],
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: isSelected ? Colors.blue[700]! : Colors.grey[300]!,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (isSelected) ...[
+              const Icon(Icons.check, size: 12, color: Colors.white),
+              const SizedBox(width: 4),
+            ],
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight:
+                    isSelected ? FontWeight.w600 : FontWeight.normal,
+                color: isSelected ? Colors.white : Colors.grey[700],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCategoryChips() {
+    return SizedBox(
+      height: 36,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: EdgeInsets.zero,
+        itemCount: _categories.length,
+        separatorBuilder: (_, _) => const SizedBox(width: 8),
+        itemBuilder: (context, index) {
+          final label = _categories[index];
+          final isSelected = (_selectedCategory ?? 'All') == label;
+          return _buildChip(
+            label: label,
+            isSelected: isSelected,
+            onTap: () => _onCategorySelected(label),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildSourceChips() {
+    return SizedBox(
+      height: 36,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: EdgeInsets.zero,
+        itemCount: _sourceLabels.length,
+        separatorBuilder: (_, _) => const SizedBox(width: 8),
+        itemBuilder: (context, index) {
+          final label = _sourceLabels[index];
+          final isSelected = label == 'All'
+              ? _selectedSource == null
+              : _sourceMap[label] == _selectedSource;
+          return _buildChip(
+            label: label,
+            isSelected: isSelected,
+            onTap: () => _onSourceSelected(label),
+          );
+        },
+      ),
+    );
   }
 
   // ── Article list ──────────────────────────────────────────────────────────
@@ -135,12 +264,14 @@ class _CompareScreenState extends State<CompareScreen>
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(Icons.article_outlined, size: 48, color: Colors.grey[300]),
+              Icon(Icons.article_outlined,
+                  size: 48, color: Colors.grey[300]),
               const SizedBox(height: 12),
               Text(
                 'No articles found in this band.',
                 textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.grey[500], fontSize: 14),
+                style:
+                    TextStyle(color: Colors.grey[500], fontSize: 14),
               ),
             ],
           ),
@@ -159,7 +290,8 @@ class _CompareScreenState extends State<CompareScreen>
             await Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => ArticleDetailScreen.fromArticle(article),
+                builder: (_) =>
+                    ArticleDetailScreen.fromArticle(article),
               ),
             );
             widget.onArticleRead();
@@ -226,7 +358,8 @@ class _CompareScreenState extends State<CompareScreen>
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(icon, size: 14, color: isSelected ? Colors.white : iconColor),
+          Icon(icon,
+              size: 14, color: isSelected ? Colors.white : iconColor),
           const SizedBox(width: 4),
           Text(label, style: const TextStyle(fontSize: 12)),
         ],
@@ -245,30 +378,43 @@ class _CompareScreenState extends State<CompareScreen>
             Icon(Icons.compare_arrows, size: 64, color: Colors.grey[300]),
             const SizedBox(height: 16),
             Text(
-              // UPDATED: empty state text
-              'Pick a category or enter a topic\nto compare how outlets cover it\nacross the political spectrum.',
+              'Pick a category, outlet, or keyword\n'
+              'to compare how the story is covered\n'
+              'across the political spectrum.',
               textAlign: TextAlign.center,
               style: TextStyle(
-                color: Colors.grey[500],
-                fontSize: 14,
-                height: 1.6,
-              ),
+                  color: Colors.grey[500], fontSize: 14, height: 1.6),
             ),
           ],
         ),
       );
     }
 
-    final leftArticles = _rawResults!['left_articles'] as List<dynamic>?;
-    final centreArticles = _rawResults!['center_articles'] as List<dynamic>?;
-    final rightArticles = _rawResults!['right_articles'] as List<dynamic>?;
+    final leftArticles =
+        _rawResults!['left_articles'] as List<dynamic>?;
+    final centreArticles =
+        _rawResults!['center_articles'] as List<dynamic>?;
+    final rightArticles =
+        _rawResults!['right_articles'] as List<dynamic>?;
     final total = _rawResults!['total_found'] ?? 0;
 
-    final topic = (_rawResults!['topic'] as String?)?.trim() ?? '';
-    final isCategoryOnly = topic.isEmpty;
-    final headerText = isCategoryOnly
-        ? '${_selectedCategory ?? 'All'} — all coverage'
-        : '"$topic"${_selectedCategory != null ? ' · $_selectedCategory' : ''}';
+    // Build a human-readable header from active filters
+    final topic = _searchController.text.trim();
+    final headerParts = <String>[];
+    if (topic.isNotEmpty) headerParts.add('"$topic"');
+    if (_selectedCategory != null) headerParts.add(_selectedCategory!);
+    if (_selectedSource != null) {
+      final sourceLabel = _sourceMap.entries
+          .firstWhere(
+            (e) => e.value == _selectedSource,
+            orElse: () => MapEntry(_selectedSource!, _selectedSource!),
+          )
+          .key;
+      headerParts.add(sourceLabel);
+    }
+    final headerText = headerParts.isEmpty
+        ? 'All articles'
+        : headerParts.join(' · ');
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -280,10 +426,12 @@ class _CompareScreenState extends State<CompareScreen>
                 headerText,
                 style: const TextStyle(
                     fontSize: 15, fontWeight: FontWeight.bold),
+                overflow: TextOverflow.ellipsis,
               ),
             ),
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 10, vertical: 4),
               decoration: BoxDecoration(
                 color: Colors.blue[50],
                 borderRadius: BorderRadius.circular(12),
@@ -317,120 +465,59 @@ class _CompareScreenState extends State<CompareScreen>
     );
   }
 
-  // ── Category chips ────────────────────────────────────────────────────────
-
-  Widget _buildCategoryChips() {
-    return SizedBox(
-      height: 36,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        padding: EdgeInsets.zero,
-        itemCount: _categories.length,
-        separatorBuilder: (_, _) => const SizedBox(width: 8),
-        itemBuilder: (context, index) {
-          final label = _categories[index];
-          final isSelected = (_selectedCategory ?? 'All') == label;
-          return GestureDetector(
-            onTap: () => _onCategorySelected(label),
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 180),
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-              decoration: BoxDecoration(
-                color: isSelected ? Colors.blue[700] : Colors.grey[100],
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(
-                  color: isSelected ? Colors.blue[700]! : Colors.grey[300]!,
-                ),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (isSelected) ...[
-                    const Icon(Icons.check, size: 12, color: Colors.white),
-                    const SizedBox(width: 4),
-                  ],
-                  Text(
-                    label,
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight:
-                          isSelected ? FontWeight.w600 : FontWeight.normal,
-                      color: isSelected ? Colors.white : Colors.grey[700],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          );
-        },
-      ),
-    );
-  }
-
-  // RENAMED: "The Spectrum" → "Story Comparison"
-  Widget _buildPageTitle() {
-    return Text(
-      'Story Comparison',
-      style: TextStyle(
-        fontSize: 20,
-        fontWeight: FontWeight.bold,
-        letterSpacing: 0.3,
-        color: Colors.blue[800],
-      ),
-    );
-  }
-
   // ── Build ─────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
     final hasTopic = _searchController.text.trim().isNotEmpty;
-    // UPDATED: button label
-    final buttonLabel = (!hasTopic && _selectedCategory != null)
-        ? 'Browse $_selectedCategory'
+    final buttonLabel = (!hasTopic && _hasAnyFilter)
+        ? 'Browse${_selectedCategory != null ? ' $_selectedCategory' : ''}${_selectedSource != null ? ' · ${_sourceMap.entries.firstWhere((e) => e.value == _selectedSource, orElse: () => MapEntry(_selectedSource!, _selectedSource!)).key}' : ''}'
         : 'Compare Coverage';
 
     return Scaffold(
       appBar: AppBar(
         centerTitle: true,
-        title: _buildPageTitle(),
+        title: Text(
+          'Story Comparison',
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+            letterSpacing: 0.3,
+            color: Colors.blue[800],
+          ),
+        ),
       ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(
-              'Filter by category',
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: Colors.grey[600],
-                letterSpacing: 0.5,
-              ),
-            ),
-            const SizedBox(height: 8),
+            _buildFilterLabel('CATEGORY'),
+            const SizedBox(height: 6),
             _buildCategoryChips(),
+            const SizedBox(height: 10),
+            _buildFilterLabel('OUTLET'),
+            const SizedBox(height: 6),
+            _buildSourceChips(),
             const SizedBox(height: 16),
-            Row(
-              children: [
-                Expanded(child: Divider(color: Colors.grey[300])),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  child: Text(
-                    'or refine with a keyword',
-                    style: TextStyle(fontSize: 11, color: Colors.grey[500]),
-                  ),
+            Row(children: [
+              Expanded(child: Divider(color: Colors.grey[300])),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Text(
+                  'or refine with a keyword',
+                  style:
+                      TextStyle(fontSize: 11, color: Colors.grey[500]),
                 ),
-                Expanded(child: Divider(color: Colors.grey[300])),
-              ],
-            ),
+              ),
+              Expanded(child: Divider(color: Colors.grey[300])),
+            ]),
             const SizedBox(height: 12),
             TextField(
               controller: _searchController,
               decoration: InputDecoration(
-                labelText: _selectedCategory != null
-                    ? 'Filter by keyword (optional)'
+                labelText: _hasAnyFilter
+                    ? 'Add a keyword (optional)'
                     : 'Enter a topic to compare',
                 hintText: 'e.g., climate, housing, election',
                 prefixIcon: const Icon(Icons.search),
@@ -441,7 +528,8 @@ class _CompareScreenState extends State<CompareScreen>
                         onPressed: () {
                           _searchController.clear();
                           setState(() {});
-                          if (_selectedCategory != null) {
+                          if (_selectedCategory != null ||
+                              _selectedSource != null) {
                             _searchTopic();
                           } else {
                             setState(() {
@@ -466,9 +554,7 @@ class _CompareScreenState extends State<CompareScreen>
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(vertical: 14),
                 textStyle: const TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
-                ),
+                    fontSize: 15, fontWeight: FontWeight.w600),
               ),
             ),
             const SizedBox(height: 16),

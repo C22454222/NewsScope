@@ -57,14 +57,15 @@ CATEGORY_GROUP_MAP: dict = {
 @router.get("")
 def get_articles(
     category: Optional[str] = Query(default=None),
+    source: Optional[str] = Query(default=None),
 ) -> List[dict]:
     """
-    Recent articles (30d), optionally filtered by category.
+    Recent articles (30d), optionally filtered by category and/or source.
 
-    When a category is provided, resolves it to all sub-categories
-    via CATEGORY_GROUP_MAP so sub-categorised articles are included.
-    E.g. ?category=sport returns articles tagged sport, football,
-    rugby, gaa, and cricket.
+    Category resolves sub-categories via CATEGORY_GROUP_MAP so
+    ?category=sport returns articles tagged sport, football, rugby etc.
+    Source matches the exact source name stored in the articles table,
+    e.g. ?source=BBC+News or ?source=RTÉ+News.
     """
     cutoff = (
         datetime.now(timezone.utc) - timedelta(days=30)
@@ -77,12 +78,13 @@ def get_articles(
     )
 
     if category:
-        # Build list of all sub-categories that map to this parent,
-        # plus the parent itself.
         related = [
             k for k, v in CATEGORY_GROUP_MAP.items() if v == category
         ] + [category]
         query = query.in_("category", related)
+
+    if source:
+        query = query.eq("source", source)
 
     return (
         query.order("published_at", desc=True).limit(1000).execute().data
@@ -93,11 +95,15 @@ def get_articles(
 def get_comparison_articles(
     topic: Optional[str] = Query(default=None),
     category: Optional[str] = Query(default=None),
+    source: Optional[str] = Query(default=None),
 ) -> List[dict]:
     """
-    Articles for comparison view, filtered by topic and/or category.
+    Articles for comparison view, filtered by topic, category, and/or source.
 
-    Category filter also resolves sub-categories via CATEGORY_GROUP_MAP.
+    Topic searches both title and content so articles with empty content
+    fields are still matched by title.
+    Category resolves sub-categories via CATEGORY_GROUP_MAP.
+    Source matches the exact source name stored in the articles table.
     """
     cutoff = (
         datetime.now(timezone.utc) - timedelta(days=30)
@@ -110,13 +116,19 @@ def get_comparison_articles(
     )
 
     if topic:
-        query = query.ilike("content", f"%{topic}%")
+        # Search title and content — catches articles with empty content
+        query = query.or_(
+            f"title.ilike.%{topic}%,content.ilike.%{topic}%"
+        )
 
     if category:
         related = [
             k for k, v in CATEGORY_GROUP_MAP.items() if v == category
         ] + [category]
         query = query.in_("category", related)
+
+    if source:
+        query = query.eq("source", source)
 
     return (
         query.order("published_at", desc=True).limit(30).execute().data

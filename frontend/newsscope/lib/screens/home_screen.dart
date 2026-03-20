@@ -20,7 +20,6 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   int _currentIndex = 0;
   int _profileKey = 0;
-
   late List<Widget> _screens;
 
   @override
@@ -57,11 +56,11 @@ class _HomeScreenState extends State<HomeScreen> {
         items: const [
           BottomNavigationBarItem(icon: Icon(Icons.home), label: 'Home'),
           BottomNavigationBarItem(
-            // RENAMED: Spectrum → Compare
             icon: Icon(Icons.compare_arrows),
             label: 'Compare',
           ),
-          BottomNavigationBarItem(icon: Icon(Icons.person), label: 'Profile'),
+          BottomNavigationBarItem(
+              icon: Icon(Icons.person), label: 'Profile'),
         ],
         onTap: _onTabTapped,
       ),
@@ -88,9 +87,33 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
   late Future<List<Article>> _articlesFuture;
 
   String? _selectedCategory;
-  final List<String> _categories = const [
+  String? _selectedSource;
+
+  static const List<String> _categories = [
     'All', 'Politics', 'World', 'Business',
     'Tech', 'Sport', 'Entertainment', 'Health', 'Science',
+  ];
+
+  // Display label → exact source value stored in DB
+  static const Map<String, String> _sourceMap = {
+    'BBC':          'BBC News',
+    'RTÉ':          'RTÉ News',
+    'Guardian':     'The Guardian',
+    'CNN':          'CNN',
+    'Irish Times':  'The Irish Times',
+    'AP News':      'AP News',
+    'Sky News':     'Sky News',
+    'Independent':  'The Independent',
+    'NPR':          'NPR',
+    'DW':           'Deutsche Welle',
+    'GB News':      'GB News',
+    'Fox News':     'Fox News',
+  };
+
+  static const List<String> _sourceLabels = [
+    'All', 'BBC', 'RTÉ', 'Guardian', 'CNN', 'Irish Times',
+    'AP News', 'Sky News', 'Independent', 'NPR', 'DW',
+    'GB News', 'Fox News',
   ];
 
   @override
@@ -114,7 +137,10 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
         (_selectedCategory == null || _selectedCategory == 'All')
             ? null
             : _selectedCategory!.toLowerCase();
-    _articlesFuture = _apiService.getArticles(category: backendCategory);
+    _articlesFuture = _apiService.getArticles(
+      category: backendCategory,
+      source: _selectedSource,
+    );
   }
 
   Future<void> _refreshArticles() async {
@@ -134,6 +160,119 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
     return 'Good evening';
   }
 
+  // ── Shared helpers ────────────────────────────────────────────────────────
+
+  Widget _buildFilterLabel(String label) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 10,
+          fontWeight: FontWeight.bold,
+          color: Colors.blue[700],
+          letterSpacing: 1.2,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildChip({
+    required String label,
+    required bool isSelected,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+        decoration: BoxDecoration(
+          color: isSelected ? Colors.blue[700] : Colors.grey[100],
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: isSelected ? Colors.blue[700]! : Colors.grey[300]!,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (isSelected) ...[
+              const Icon(Icons.check, size: 12, color: Colors.white),
+              const SizedBox(width: 4),
+            ],
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight:
+                    isSelected ? FontWeight.w600 : FontWeight.normal,
+                color: isSelected ? Colors.white : Colors.grey[700],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── Category chips ────────────────────────────────────────────────────────
+
+  Widget _buildCategoryChips() {
+    return SizedBox(
+      height: 36,
+      child: ListView.separated(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        scrollDirection: Axis.horizontal,
+        itemCount: _categories.length,
+        separatorBuilder: (_, _) => const SizedBox(width: 8),
+        itemBuilder: (context, index) {
+          final label = _categories[index];
+          final isSelected = (_selectedCategory ?? 'All') == label;
+          return _buildChip(
+            label: label,
+            isSelected: isSelected,
+            onTap: () => setState(() {
+              _selectedCategory = label == 'All' ? null : label;
+              _loadArticles();
+            }),
+          );
+        },
+      ),
+    );
+  }
+
+  // ── Source / outlet chips ─────────────────────────────────────────────────
+
+  Widget _buildSourceChips() {
+    return SizedBox(
+      height: 36,
+      child: ListView.separated(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        scrollDirection: Axis.horizontal,
+        itemCount: _sourceLabels.length,
+        separatorBuilder: (_, _) => const SizedBox(width: 8),
+        itemBuilder: (context, index) {
+          final label = _sourceLabels[index];
+          final value = label == 'All' ? null : _sourceMap[label];
+          final isSelected = label == 'All'
+              ? _selectedSource == null
+              : _sourceMap[label] == _selectedSource;
+          return _buildChip(
+            label: label,
+            isSelected: isSelected,
+            onTap: () => setState(() {
+              _selectedSource = value;
+              _loadArticles();
+            }),
+          );
+        },
+      ),
+    );
+  }
+
+  // ── AppBar title ──────────────────────────────────────────────────────────
+
   Widget _buildNewsScopeTitle() {
     return RichText(
       text: TextSpan(
@@ -144,28 +283,27 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
         ),
         children: [
           const TextSpan(
-            text: 'News',
-            style: TextStyle(color: Colors.black87),
-          ),
+              text: 'News', style: TextStyle(color: Colors.black87)),
           TextSpan(
-            text: 'Scope',
-            style: TextStyle(color: Colors.blue[800]),
-          ),
+              text: 'Scope',
+              style: TextStyle(color: Colors.blue[800])),
         ],
       ),
     );
   }
 
+  // ── Greeting card ─────────────────────────────────────────────────────────
+
   Widget _buildGreetingCard() {
     final name = _user?.displayName ?? 'Reader';
     final now = DateTime.now();
-    final dayNames = [
+    const dayNames = [
       'Monday', 'Tuesday', 'Wednesday', 'Thursday',
-      'Friday', 'Saturday', 'Sunday'
+      'Friday', 'Saturday', 'Sunday',
     ];
-    final monthNames = [
+    const monthNames = [
       'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
     ];
     final dayName = dayNames[now.weekday - 1];
     final monthName = monthNames[now.month - 1];
@@ -192,7 +330,6 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  // REMOVED: 👋 emoji
                   '$_timeOfDayGreeting, $name',
                   style: const TextStyle(
                     fontSize: 17,
@@ -202,12 +339,9 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                 ),
                 const SizedBox(height: 5),
                 Text(
-                  // UPDATED: subtitle text
                   "Today's news, AI-analysed for bias and sentiment.",
                   style: TextStyle(
-                    color: Colors.white.withAlpha(160),
-                    fontSize: 12,
-                  ),
+                      color: Colors.white.withAlpha(160), fontSize: 12),
                 ),
               ],
             ),
@@ -241,58 +375,7 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
     );
   }
 
-  Widget _buildCategoryChips() {
-    return SizedBox(
-      height: 36,
-      child: ListView.separated(
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        scrollDirection: Axis.horizontal,
-        itemCount: _categories.length,
-        separatorBuilder: (_, _) => const SizedBox(width: 8),
-        itemBuilder: (context, index) {
-          final label = _categories[index];
-          final isSelected = (_selectedCategory ?? 'All') == label;
-          return GestureDetector(
-            onTap: () {
-              setState(() {
-                _selectedCategory = label == 'All' ? null : label;
-                _loadArticles();
-              });
-            },
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 180),
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-              decoration: BoxDecoration(
-                color: isSelected ? Colors.blue[700] : Colors.grey[100],
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(
-                  color: isSelected ? Colors.blue[700]! : Colors.grey[300]!,
-                ),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (isSelected) ...[
-                    const Icon(Icons.check, size: 12, color: Colors.white),
-                    const SizedBox(width: 4),
-                  ],
-                  Text(
-                    label,
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight:
-                          isSelected ? FontWeight.w600 : FontWeight.normal,
-                      color: isSelected ? Colors.white : Colors.grey[700],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          );
-        },
-      ),
-    );
-  }
+  // ── Date headers ──────────────────────────────────────────────────────────
 
   Widget _buildDateHeader(String headerText) {
     return Padding(
@@ -321,10 +404,9 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
     );
   }
 
-  String _dateKey(DateTime dt) {
-    return '${dt.year}-${dt.month.toString().padLeft(2, '0')}-'
-        '${dt.day.toString().padLeft(2, '0')}';
-  }
+  String _dateKey(DateTime dt) =>
+      '${dt.year}-${dt.month.toString().padLeft(2, '0')}-'
+      '${dt.day.toString().padLeft(2, '0')}';
 
   String _headerText(String key, String todayKey, String yesterdayKey) {
     if (key == todayKey) return 'Today';
@@ -333,6 +415,8 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
     final parts = key.split('-');
     return '${parts[2]}/${parts[1]}/${parts[0]}';
   }
+
+  // ── Build ─────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -360,14 +444,19 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
             child: _buildGreetingCard(),
           ),
+          _buildFilterLabel('CATEGORY'),
           _buildCategoryChips(),
+          const SizedBox(height: 10),
+          _buildFilterLabel('OUTLET'),
+          _buildSourceChips(),
           const SizedBox(height: 8),
           Expanded(
             child: FutureBuilder<List<Article>>(
               future: _articlesFuture,
               builder: (context, snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
+                  return const Center(
+                      child: CircularProgressIndicator());
                 }
                 if (snapshot.hasError) {
                   return Center(
@@ -432,13 +521,14 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                 return RefreshIndicator(
                   onRefresh: _refreshArticles,
                   child: ListView.builder(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 16),
                     itemCount: sortedKeys.length,
                     itemBuilder: (context, i) {
                       final dateKey = sortedKeys[i];
                       final sectionArticles = grouped[dateKey]!;
-                      final header =
-                          _headerText(dateKey, todayKey, yesterdayKey);
+                      final header = _headerText(
+                          dateKey, todayKey, yesterdayKey);
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -451,8 +541,8 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                                   context,
                                   MaterialPageRoute(
                                     builder: (_) =>
-                                        ArticleDetailScreen.fromArticle(
-                                            article),
+                                        ArticleDetailScreen
+                                            .fromArticle(article),
                                   ),
                                 );
                                 widget.onArticleRead();

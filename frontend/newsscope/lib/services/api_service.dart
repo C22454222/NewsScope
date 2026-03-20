@@ -48,13 +48,24 @@ class ApiService {
 
   // ── Articles ──────────────────────────────────────────────────────────────
 
-  Future<List<Article>> getArticles({String? category}) async {
+  Future<List<Article>> getArticles({
+    String? category,
+    String? source,
+  }) async {
     try {
-      final uri = Uri.parse(
-        category == null || category.isEmpty
-            ? '$_baseUrl/articles'
-            : '$_baseUrl/articles?category=$category',
-      );
+      final params = <String, String>{};
+      if (category != null && category.isNotEmpty) {
+        params['category'] = category;
+      }
+      if (source != null && source.isNotEmpty) {
+        params['source'] = source;
+      }
+
+      final uri = params.isEmpty
+          ? Uri.parse('$_baseUrl/articles')
+          : Uri.parse('$_baseUrl/articles')
+              .replace(queryParameters: params);
+
       final response = await http.get(
         uri,
         headers: {'Content-Type': 'application/json'},
@@ -63,7 +74,8 @@ class ApiService {
         final List<dynamic> data = json.decode(response.body);
         return data.map((j) => Article.fromJson(j)).toList();
       } else {
-        throw Exception('Failed to load articles: ${response.statusCode}');
+        throw Exception(
+            'Failed to load articles: ${response.statusCode}');
       }
     } catch (e) {
       throw Exception('Error connecting to backend: $e');
@@ -113,7 +125,8 @@ class ApiService {
       if (response.statusCode != 200) {
         debugPrint('Failed to track reading: ${response.statusCode}');
       } else {
-        debugPrint('Reading tracked: $articleId for ${timeSpentSeconds}s');
+        debugPrint(
+            'Reading tracked: $articleId for ${timeSpentSeconds}s');
       }
     } catch (e) {
       debugPrint('Error tracking reading: $e');
@@ -122,8 +135,6 @@ class ApiService {
 
   // ── Bias profile ──────────────────────────────────────────────────────────
 
-  /// Returns a typed [BiasProfile] parsed from /api/bias-profile.
-  /// Returns null if unauthenticated or on network failure.
   Future<BiasProfile?> getBiasProfile() async {
     final token = await _getToken();
     if (token == null) {
@@ -140,11 +151,11 @@ class ApiService {
           jsonDecode(response.body) as Map<String, dynamic>,
         );
         debugPrint(
-          'Profile loaded: ${profile.totalArticlesRead} articles',
-        );
+            'Profile loaded: ${profile.totalArticlesRead} articles');
         return profile;
       } else {
-        debugPrint('Failed to load bias profile: ${response.statusCode}');
+        debugPrint(
+            'Failed to load bias profile: ${response.statusCode}');
       }
     } catch (e) {
       debugPrint('Error fetching bias profile: $e');
@@ -158,17 +169,45 @@ class ApiService {
     String topic, {
     int limit = 5,
     String? category,
+    String? source,
   }) async {
     try {
-      final response = await http.post(
-        Uri.parse('$_baseUrl/api/articles/compare'),
+      final params = <String, String>{'limit': '$limit'};
+      if (topic.isNotEmpty) params['topic'] = topic;
+      if (category != null && category.isNotEmpty) {
+        params['category'] = category.toLowerCase();
+      }
+      if (source != null && source.isNotEmpty) {
+        params['source'] = source;
+      }
+
+      final uri = Uri.parse('$_baseUrl/articles/compare')
+          .replace(queryParameters: params);
+
+      final response = await http.get(
+        uri,
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'topic': topic, 'limit': limit}),
       );
+
       if (response.statusCode == 200) {
-        return jsonDecode(response.body) as Map<String, dynamic>;
+        // Backend returns a flat list — split by general_bias for
+        // the left / centre / right column layout in CompareScreen
+        final List<dynamic> articles = jsonDecode(response.body);
+        return {
+          'left_articles': articles
+              .where((a) => a['general_bias'] == 'left')
+              .toList(),
+          'center_articles': articles
+              .where((a) => a['general_bias'] == 'center')
+              .toList(),
+          'right_articles': articles
+              .where((a) => a['general_bias'] == 'right')
+              .toList(),
+          'total_found': articles.length,
+        };
       } else {
-        debugPrint('Failed to compare articles: ${response.statusCode}');
+        debugPrint(
+            'Failed to compare articles: ${response.statusCode}');
       }
     } catch (e) {
       debugPrint('Error comparing articles: $e');
@@ -178,7 +217,8 @@ class ApiService {
 
   // ── Fact-checks ───────────────────────────────────────────────────────────
 
-  Future<Map<String, dynamic>?> triggerFactCheck(String articleId) async {
+  Future<Map<String, dynamic>?> triggerFactCheck(
+      String articleId) async {
     try {
       final response = await http.post(
         Uri.parse('$_baseUrl/articles/$articleId/factcheck'),
@@ -187,7 +227,8 @@ class ApiService {
       if (response.statusCode == 200) {
         return jsonDecode(response.body) as Map<String, dynamic>;
       } else {
-        debugPrint('Fact-check trigger failed: ${response.statusCode}');
+        debugPrint(
+            'Fact-check trigger failed: ${response.statusCode}');
       }
     } catch (e) {
       debugPrint('Error triggering fact-check: $e');

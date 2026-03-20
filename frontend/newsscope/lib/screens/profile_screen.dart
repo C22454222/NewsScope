@@ -19,7 +19,6 @@ class ProfileScreen extends StatefulWidget {
 class _ProfileScreenState extends State<ProfileScreen> {
   final ApiService _apiService = ApiService();
 
-  // FIX: live stream so display name updates instantly after Settings edit
   User? _user;
   StreamSubscription<User?>? _userSub;
 
@@ -225,8 +224,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(12),
                   color: Colors.white.withAlpha(18),
-                  border:
-                      Border.all(color: Colors.white.withAlpha(50), width: 1.5),
+                  border: Border.all(
+                      color: Colors.white.withAlpha(50), width: 1.5),
                 ),
                 child: Center(
                   child: Text(
@@ -272,9 +271,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
               _buildHeaderStat('${p.totalArticlesRead}', 'Articles Read'),
-              Container(width: 1, height: 32, color: Colors.white.withAlpha(25)),
-              _buildHeaderStat('${p.readingTimeTotalMinutes}m', 'Read Time'),
-              Container(width: 1, height: 32, color: Colors.white.withAlpha(25)),
+              Container(
+                  width: 1, height: 32, color: Colors.white.withAlpha(25)),
+              _buildHeaderStat(
+                  '${p.readingTimeTotalMinutes}m', 'Read Time'),
+              Container(
+                  width: 1, height: 32, color: Colors.white.withAlpha(25)),
               _buildHeaderStat(getBiasLabel(p.avgBias), 'Leaning'),
             ],
           ),
@@ -297,7 +299,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
         const SizedBox(height: 3),
         Text(
           label,
-          style: TextStyle(fontSize: 11, color: Colors.white.withAlpha(150)),
+          style:
+              TextStyle(fontSize: 11, color: Colors.white.withAlpha(150)),
         ),
       ],
     );
@@ -520,7 +523,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final interval =
         (maxVal / 4).ceilToDouble().clamp(1.0, double.infinity);
 
-    // Fixed width per bar so labels always have room
     const double barAreaWidth = 56.0;
     final double chartWidth = sources.length * barAreaWidth;
 
@@ -562,11 +564,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             ),
                           ),
                           bottomTitles: const AxisTitles(
-                              sideTitles: SideTitles(showTitles: false)),
+                              sideTitles:
+                                  SideTitles(showTitles: false)),
                           topTitles: const AxisTitles(
-                              sideTitles: SideTitles(showTitles: false)),
+                              sideTitles:
+                                  SideTitles(showTitles: false)),
                           rightTitles: const AxisTitles(
-                              sideTitles: SideTitles(showTitles: false)),
+                              sideTitles:
+                                  SideTitles(showTitles: false)),
                         ),
                         borderData: FlBorderData(show: false),
                         gridData: const FlGridData(show: false),
@@ -595,15 +600,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                     _touchedBarIndex = -1;
                                     return;
                                   }
-                                  _touchedBarIndex =
-                                      response.spot!.touchedBarGroupIndex;
+                                  _touchedBarIndex = response
+                                      .spot!.touchedBarGroupIndex;
                                 });
                               },
                               touchTooltipData: BarTouchTooltipData(
                                 getTooltipColor: (_) =>
                                     Colors.blueGrey.shade800,
-                                getTooltipItem:
-                                    (group, groupIndex, rod, rodIndex) {
+                                // FIX: prevent tooltip escaping screen edges
+                                fitInsideHorizontally: true,
+                                fitInsideVertically: true,
+                                getTooltipItem: (group, groupIndex,
+                                    rod, rodIndex) {
                                   final s = sources[groupIndex];
                                   return BarTooltipItem(
                                     '${s.key}\n',
@@ -619,7 +627,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                         style: const TextStyle(
                                           color: Colors.white70,
                                           fontSize: 11,
-                                          fontWeight: FontWeight.normal,
+                                          fontWeight:
+                                              FontWeight.normal,
                                         ),
                                       ),
                                     ],
@@ -634,26 +643,27 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                   reservedSize: 52,
                                   getTitlesWidget: (value, meta) {
                                     final i = value.toInt();
-                                    if (i < 0 || i >= sources.length) {
+                                    if (i < 0 ||
+                                        i >= sources.length) {
                                       return const SizedBox.shrink();
                                     }
                                     final name = sources[i].key;
-                                    // Show up to two words on two lines
                                     final words = name.split(' ');
                                     final label = words.length > 1
                                         ? '${words[0]}\n${words[1]}'
                                         : words[0];
                                     return Padding(
-                                      padding:
-                                          const EdgeInsets.only(top: 6),
+                                      padding: const EdgeInsets.only(
+                                          top: 6),
                                       child: Text(
                                         label,
                                         textAlign: TextAlign.center,
                                         style: TextStyle(
                                           fontSize: 10,
-                                          fontWeight: i == _touchedBarIndex
-                                              ? FontWeight.bold
-                                              : FontWeight.normal,
+                                          fontWeight:
+                                              i == _touchedBarIndex
+                                                  ? FontWeight.bold
+                                                  : FontWeight.normal,
                                           color: i == _touchedBarIndex
                                               ? Colors.blue[700]
                                               : Colors.grey[600],
@@ -678,14 +688,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               drawVerticalLine: false,
                               horizontalInterval: interval,
                               getDrawingHorizontalLine: (_) => FlLine(
-                                color:
-                                    Colors.grey.withValues(alpha: 0.15),
+                                color: Colors.grey
+                                    .withValues(alpha: 0.15),
                                 strokeWidth: 1,
                               ),
                             ),
                             borderData: FlBorderData(show: false),
-                            barGroups:
-                                sources.asMap().entries.map((entry) {
+                            barGroups: sources.asMap().entries
+                                .map((entry) {
                               final i = entry.key;
                               final isTouched = i == _touchedBarIndex;
                               return BarChartGroupData(
@@ -740,12 +750,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final p = _profile!;
     return Column(
       children: [
+        // UPDATED icons: west/balance/east — directional and meaningful
         _buildDetailCard('Left Wing articles', '${p.leftCount}',
-            Colors.blue[800]!, Icons.trending_down),
+            Colors.blue[800]!, Icons.west),
         _buildDetailCard('Centre articles', '${p.centerCount}',
-            Colors.teal[600]!, Icons.trending_flat),
+            Colors.teal[600]!, Icons.balance),
         _buildDetailCard('Right Wing articles', '${p.rightCount}',
-            Colors.red[800]!, Icons.trending_up),
+            Colors.red[800]!, Icons.east),
         _buildDetailCard('Positive articles', '${p.positiveCount}',
             Colors.green[700]!, Icons.sentiment_satisfied),
         _buildDetailCard('Negative articles', '${p.negativeCount}',
