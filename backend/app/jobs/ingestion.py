@@ -1107,7 +1107,7 @@ def insert_articles_batch(articles: List[Dict[str, Any]]) -> List[str]:
     # This prevents scraping work for articles already in the DB —
     # the biggest avoidable RAM and time cost in high-volume cycles.
     existing_urls: set = set()
-    batch_size = 500
+    batch_size = 50
     for i in range(0, len(urls), batch_size):
         url_batch = urls[i:i + batch_size]
         try:
