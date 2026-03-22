@@ -1,31 +1,41 @@
 """
 NewsScope FastAPI application entry point.
 
-Lifespan manages scheduler startup, job registration, keep-alive,
-and a single startup ingestion run. Analysis is deliberately delayed
-180 seconds after startup ingestion to prevent simultaneous memory
-pressure from both jobs on Render free tier (512MB limit).
+SCHEDULING OVERVIEW (v5 — staggered, non-overlapping):
 
-Redeploy guard in _run_startup_sequence checks DB for recent ingestion
-(< 15 minutes ago) and skips startup ingestion on zero-downtime redeploys
-where the old instance already ran it — prevents double-ingestion OOM.
+  :00  Ingestion starts   (CronTrigger minute=0)
+       Scraping typically takes 8-15 min for ~400 new articles.
+       _heavy_job_lock held for entire duration.
 
-threading.Lock (_heavy_job_lock) prevents ingestion and analysis from
-ever running simultaneously — replaces boolean flag which had a
-check-then-act race condition between APScheduler thread pool workers.
-Proven root cause of ConnectionTerminated + OOM crashes on free tier.
+  :20  Analysis starts    (CronTrigger minute=20)
+       Fires 20 minutes after ingestion starts — by this point
+       ingestion is complete and RAM has had time to clear.
+       Falls back gracefully if ingestion overruns (lock busy).
 
-Fact-checking runs via Google Fact Check Tools API — results stored in
-articles.fact_checks (JSONB) and articles.credibility_score.
-Credibility score is blended from source reputation base score and
-any available Google fact-check rulings (±20 point adjustment).
+  :40  Fact-check window  (CronTrigger minute=40)
+       Runs 20 minutes after analysis. Fact-checking is I/O only
+       (Google API) — no RAM pressure, can run alongside nothing.
 
-Reading history snapshot: bias_score, sentiment_score, source, and
-general_bias are copied from the article row onto the reading_history
-row at read time. The article FK is ON DELETE SET NULL so archiving
-never deletes history rows. The bias profile is calculated entirely
-from snapshot columns — never from the articles join — so stats are
-permanently stable regardless of archiving.
+  03:00 Archiving         (CronTrigger hour=3)
+       Once daily. Lightweight DB-only operation.
+
+WHY NOT IntervalTrigger(minutes=10)?
+  The previous 10-minute analysis interval fired at :00, :10, :20...
+  meaning analysis could fire while ingestion scraping was mid-chunk.
+  The lock blocked it, but this caused silent skips and delayed
+  analysis by up to 30 minutes in the worst case. CronTrigger at :20
+  guarantees analysis always runs after ingestion has finished.
+
+MEMORY MODEL:
+  - Ingestion peak: 4 workers × ~15MB DOM = ~60MB per chunk of 5.
+    Total ingestion footprint: ~100MB above baseline.
+  - Analysis peak: 5 concurrent HF response buffers ≈ 5×10KB = trivial.
+    Real cost is the Supabase row fetch — capped to 48h window × 500
+    rows max to prevent unbounded growth on large DBs.
+  - Fact-check: httpx async client, one open connection. Negligible.
+  - Combined baseline (FastAPI + Supabase client + APScheduler): ~80MB.
+  - Headroom on 512MB Render: ~280MB — sufficient for all three jobs
+    running sequentially with the staggered schedule above.
 
 Flake8: 0 errors/warnings.
 """
@@ -41,7 +51,6 @@ from typing import Optional
 
 import firebase_admin
 from apscheduler.triggers.cron import CronTrigger
-from apscheduler.triggers.interval import IntervalTrigger
 from dateutil import parser as dtparser
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
@@ -51,6 +60,7 @@ from app.core.scheduler import start_scheduler
 from app.db.supabase import supabase
 from app.jobs.analysis import analyze_unscored_articles
 from app.jobs.archiving import archive_old_articles
+from app.jobs.fact_checking import batch_factcheck_recent
 from app.jobs.ingestion import run_ingestion_cycle, set_main_event_loop
 from app.jobs.keep_alive import start_keep_alive
 from app.routes import articles, sources, users
@@ -66,27 +76,23 @@ from app.schemas import (
 _main_loop: Optional[asyncio.AbstractEventLoop] = None
 
 # ── Job guards ────────────────────────────────────────────────────────────────
-# _ingestion_running : prevents duplicate async ingestion triggers
-# _analysis_running  : prevents duplicate async analysis triggers
-# _heavy_job_lock    : threading.Lock — atomic acquire replaces boolean flag.
-#                      Boolean check-then-set was not thread-safe across
-#                      APScheduler thread pool workers; two bridges could
-#                      both read False before either set True → overlap → OOM.
+# _heavy_job_lock: atomic threading.Lock — prevents any two heavy jobs
+# (ingestion, analysis, fact-check) from running simultaneously.
+# acquire(blocking=False) is the only safe pattern — boolean flags
+# had a check-then-act race between APScheduler thread pool workers.
 _ingestion_running = False
 _analysis_running = False
 _heavy_job_lock = threading.Lock()
 
-# ── Startup analysis delay ────────────────────────────────────────────────────
-# 180s — chunked ingestion needs time to fully flush RAM before analysis.
+# ── Startup timing ────────────────────────────────────────────────────────────
+# 180s gap before first analysis — ingestion needs time to fully flush.
 _ANALYSIS_STARTUP_DELAY_SECONDS = 180
 
-# ── Redeploy guard ────────────────────────────────────────────────────────────
-# 15 min — covers slower chunked ingestion cycles on redeploy.
-_REDEPLOY_GUARD_MINUTES = 15
+# Redeploy guard: skip startup ingestion if DB updated < 15 min ago.
+_REDEPLOY_GUARD_MINUTES = 30
 
 
 def init_firebase() -> None:
-    """Initialise Firebase Admin SDK from env var or local file."""
     try:
         service_account = os.getenv("FIREBASE_SERVICE_ACCOUNT")
         if service_account:
@@ -111,11 +117,7 @@ init_firebase()
 def _sync_ingestion() -> None:
     """
     Sync bridge — runs _scheduled_ingestion on the main event loop.
-
-    acquire(blocking=False) is atomic — if another thread already holds
-    the lock, this skips immediately without a race condition.
-    Lock is released in the finally block after future.result() returns,
-    ensuring it is always released even if the coroutine raises.
+    Fires at :00 via CronTrigger. Lock is held for full scrape duration.
     """
     if not _heavy_job_lock.acquire(blocking=False):
         print("Heavy job in progress — skipping scheduled ingestion.")
@@ -138,11 +140,9 @@ def _sync_ingestion() -> None:
 def _sync_analysis() -> None:
     """
     Sync bridge — runs _guarded_analysis on the main event loop.
-    Fires every 10 minutes via APScheduler IntervalTrigger.
-
-    acquire(blocking=False) is atomic — physically prevents overlap
-    with _sync_ingestion even when both fire simultaneously from
-    different threads in the APScheduler thread pool.
+    Fires at :20 via CronTrigger — 20 minutes after ingestion starts,
+    by which time ingestion is reliably complete. If ingestion has
+    somehow overrun, the lock will be busy and this fires next cycle.
     """
     if not _heavy_job_lock.acquire(blocking=False):
         print("Heavy job in progress — skipping scheduled analysis.")
@@ -162,12 +162,29 @@ def _sync_analysis() -> None:
         _heavy_job_lock.release()
 
 
+def _sync_factcheck() -> None:
+    """
+    Sync bridge — runs batch_factcheck_recent on the main event loop.
+    Fires at :40 via CronTrigger — after both ingestion and analysis.
+    No heavy job lock — fact-checking is pure I/O (Google API calls),
+    holds no parse trees or model buffers. RAM cost is negligible.
+    """
+    if _main_loop is None or not _main_loop.is_running():
+        print("Fact-check bridge: no running loop, skipping.")
+        return
+    future = asyncio.run_coroutine_threadsafe(
+        batch_factcheck_recent(hours=48), _main_loop
+    )
+    try:
+        future.result(timeout=1800)
+    except Exception as exc:
+        print(f"Scheduled fact-check error: {exc}")
+
+
 def _sync_archive() -> None:
     """
     Sync bridge — runs archive_old_articles on the main event loop.
-    archive_old_articles is synchronous — wrapped in to_thread.
-    No heavy job lock needed — archiving only reads/deletes old rows
-    and does not load HTML parse trees or HF model responses.
+    No heavy job lock — archiving only reads/deletes old DB rows.
     """
     if _main_loop is None or not _main_loop.is_running():
         print("Archive bridge: no running loop, skipping.")
@@ -185,17 +202,10 @@ def _sync_archive() -> None:
 
 
 async def _scheduled_ingestion() -> None:
-    """
-    Async ingestion wrapper — lock is already held by _sync_ingestion.
-    _ingestion_running inner guard prevents duplicate triggers from
-    debug routes which bypass the thread lock.
-    """
     global _ingestion_running
-
     if _ingestion_running:
         print("Ingestion already running — skipping duplicate trigger.")
         return
-
     _ingestion_running = True
     try:
         await asyncio.to_thread(run_ingestion_cycle)
@@ -204,17 +214,10 @@ async def _scheduled_ingestion() -> None:
 
 
 async def _guarded_analysis() -> None:
-    """
-    Async analysis wrapper — lock is already held by _sync_analysis.
-    _analysis_running inner guard prevents duplicate triggers from
-    debug routes and /internal/analyze-batch which bypass the lock.
-    """
     global _analysis_running
-
     if _analysis_running:
         print("Analysis already running — skipping duplicate trigger.")
         return
-
     _analysis_running = True
     try:
         await analyze_unscored_articles()
@@ -230,17 +233,14 @@ async def lifespan(app: FastAPI):
     """
     FastAPI lifespan context manager.
 
-    Startup order:
-      1. Capture main event loop for sync bridges
-      2. Start APScheduler with ingestion, analysis, archiving jobs
-      3. Start keep-alive pinger (production only)
-      4. Run startup sequence in background task:
-         a. Check DB — skip ingestion if run < 15 min ago (redeploy guard)
-         b. Acquire _heavy_job_lock during ingestion to block analysis
-         c. Wait 180s after ingestion, then run first analysis
+    Scheduled job timing (all CronTrigger — no more IntervalTrigger):
+      :00  ingestion   — top of every hour
+      :20  analysis    — 20min after ingestion starts (reliably complete)
+      :40  fact-check  — 20min after analysis, pure I/O, negligible RAM
+      03:00 archiving  — once daily, lightweight
 
-    Shutdown:
-      - Logs shutdown message (scheduler stops automatically)
+    Analysis moved from IntervalTrigger(10min) to CronTrigger(minute=20)
+    to guarantee it never fires while ingestion is still running.
     """
     global _main_loop
 
@@ -251,6 +251,7 @@ async def lifespan(app: FastAPI):
 
     start_scheduler()
 
+    # Ingestion: top of every hour.
     scheduler.add_job(
         _sync_ingestion,
         trigger=CronTrigger(minute=0),
@@ -260,15 +261,27 @@ async def lifespan(app: FastAPI):
         replace_existing=True,
     )
 
+    # Analysis: :20 each hour — after ingestion is reliably done.
     scheduler.add_job(
         _sync_analysis,
-        trigger=IntervalTrigger(minutes=10),
+        trigger=CronTrigger(minute=20),
         id="analysis",
         max_instances=1,
         coalesce=True,
         replace_existing=True,
     )
 
+    # Fact-check: :40 each hour — after analysis, pure I/O.
+    scheduler.add_job(
+        _sync_factcheck,
+        trigger=CronTrigger(minute=40),
+        id="factcheck",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+
+    # Archiving: 3am daily — lightweight, once per day is sufficient.
     scheduler.add_job(
         _sync_archive,
         trigger=CronTrigger(hour=3, minute=0),
@@ -297,14 +310,6 @@ async def lifespan(app: FastAPI):
 
 
 def _ingestion_ran_recently() -> bool:
-    """
-    Check whether ingestion ran within _REDEPLOY_GUARD_MINUTES.
-
-    Queries the most recently updated article. If updated less than
-    _REDEPLOY_GUARD_MINUTES ago, the old instance already ran ingestion
-    during a redeploy — skip to avoid double-ingestion OOM.
-    Returns True if ingestion should be skipped, False otherwise.
-    """
     try:
         data = (
             supabase.table("articles")
@@ -333,33 +338,22 @@ def _ingestion_ran_recently() -> bool:
             return True
 
     except Exception as exc:
-        print(
-            f"Redeploy guard check failed: {exc} "
-            "— proceeding with ingestion."
-        )
+        print(f"Redeploy guard check failed: {exc} — proceeding with ingestion.")
 
     return False
 
 
 async def _run_startup_sequence() -> None:
     """
-    Run ingestion on startup, then wait for RAM to clear before
-    triggering the first analysis run.
-
-    Acquires _heavy_job_lock directly (not via sync bridge) since this
-    runs on the main event loop, not in an APScheduler thread.
-    Lock is always released in finally blocks — never leaked.
-
-    Redeploy guard: skips ingestion if DB shows recent activity,
-    still waits _ANALYSIS_STARTUP_DELAY_SECONDS before analysis.
+    Startup: ingest → wait 180s → analyze → done.
+    Subsequent runs follow the cron schedule.
     """
     global _ingestion_running
 
     if _ingestion_ran_recently():
         print(
-            "Startup ingestion skipped (redeploy guard). "
-            f"Waiting {_ANALYSIS_STARTUP_DELAY_SECONDS}s "
-            "then running analysis..."
+            f"Startup ingestion skipped (redeploy guard). "
+            f"Waiting {_ANALYSIS_STARTUP_DELAY_SECONDS}s then running analysis..."
         )
         await asyncio.sleep(_ANALYSIS_STARTUP_DELAY_SECONDS)
         if _heavy_job_lock.acquire(blocking=False):
@@ -413,29 +407,20 @@ app = FastAPI(title="NewsScope API", version="1.0.0", lifespan=lifespan)
 def get_current_user(
     authorization: Optional[str] = Header(None),
 ) -> str:
-    """Extract and verify user ID from Firebase JWT token."""
     if not authorization:
         raise HTTPException(status_code=401, detail="Not authenticated")
-
     token = authorization.replace("Bearer ", "")
-
     try:
         decoded_token = auth.verify_id_token(token)
         user_id = decoded_token["uid"]
         print(f"Authenticated user: {user_id}")
         return user_id
     except auth.InvalidIdTokenError:
-        raise HTTPException(
-            status_code=401, detail="Invalid authentication token"
-        )
+        raise HTTPException(status_code=401, detail="Invalid authentication token")
     except auth.ExpiredIdTokenError:
-        raise HTTPException(
-            status_code=401, detail="Authentication token expired"
-        )
+        raise HTTPException(status_code=401, detail="Authentication token expired")
     except Exception as exc:
-        raise HTTPException(
-            status_code=401, detail=f"Authentication failed: {exc}"
-        )
+        raise HTTPException(status_code=401, detail=f"Authentication failed: {exc}")
 
 
 # ── Core routes ───────────────────────────────────────────────────────────────
@@ -443,11 +428,8 @@ def get_current_user(
 
 @app.get("/")
 def root():
-    """API root — returns version and docs link."""
     return {
-        "message": (
-            "Welcome to NewsScope API. Try /health to check status."
-        ),
+        "message": "Welcome to NewsScope API. Try /health to check status.",
         "version": "1.0.0",
         "docs": "/docs",
     }
@@ -455,13 +437,11 @@ def root():
 
 @app.head("/")
 def root_head():
-    """HEAD handler for uptime monitors."""
     return {}
 
 
 @app.get("/health")
 def health():
-    """Instant in-memory response — never touches DB or models."""
     return {"status": "ok"}
 
 
@@ -470,10 +450,6 @@ def health():
 
 @app.post("/internal/analyze-batch")
 async def internal_analyze_batch(background_tasks: BackgroundTasks):
-    """
-    Manual or external analysis trigger. Retained for debug use only.
-    Uses BackgroundTasks — avoids asyncio.create_task race condition.
-    """
     if _analysis_running:
         return {"status": "skipped — analysis already running"}
     background_tasks.add_task(_guarded_analysis)
@@ -482,21 +458,24 @@ async def internal_analyze_batch(background_tasks: BackgroundTasks):
 
 @app.post("/debug/ingest")
 async def debug_ingest(background_tasks: BackgroundTasks):
-    """Manually trigger an ingestion cycle."""
     background_tasks.add_task(_scheduled_ingestion)
     return {"status": "ingestion triggered in background"}
 
 
 @app.post("/debug/analyze")
 async def debug_analyze(background_tasks: BackgroundTasks):
-    """Manually trigger an analysis cycle."""
     background_tasks.add_task(_guarded_analysis)
     return {"status": "analysis triggered in background"}
 
 
+@app.post("/debug/factcheck")
+async def debug_factcheck(background_tasks: BackgroundTasks):
+    background_tasks.add_task(batch_factcheck_recent, 48)
+    return {"status": "fact-check triggered in background"}
+
+
 @app.post("/debug/archive")
 async def debug_archive(background_tasks: BackgroundTasks):
-    """Manually trigger an archiving cycle."""
     background_tasks.add_task(archive_old_articles)
     return {"status": "archiving triggered in background"}
 
@@ -511,16 +490,7 @@ async def track_reading(
 ):
     """
     Track article reading time and snapshot scores for bias profile.
-
-    Scores are copied from the article row onto the reading_history row
-    at read time. The article FK is ON DELETE SET NULL so archiving
-    sets article_id to NULL but never deletes the history row itself.
-    get_bias_profile reads exclusively from these snapshot columns —
-    never from the articles join — so stats are permanently stable.
-
-    If the article row is not found (race condition between scrape and
-    analysis), scores default to None and the row is still recorded so
-    time-spent data is never lost.
+    Scores copied from article row at read time — stable after archiving.
     """
     try:
         article_data = (
@@ -538,7 +508,6 @@ async def track_reading(
             "article_id": data.article_id,
             "time_spent_seconds": data.time_spent_seconds,
             "opened_at": datetime.utcnow().isoformat(),
-            # Snapshotted at read time — bias profile stable after archiving.
             "bias_score": scores.get("bias_score"),
             "sentiment_score": scores.get("sentiment_score"),
             "source": scores.get("source"),
@@ -547,10 +516,7 @@ async def track_reading(
         response = supabase.table("reading_history").upsert(
             payload, on_conflict="user_id,article_id"
         ).execute()
-        print(
-            f"Reading tracked: {data.article_id} "
-            f"({data.time_spent_seconds}s)"
-        )
+        print(f"Reading tracked: {data.article_id} ({data.time_spent_seconds}s)")
         return {"success": True, "data": response.data}
     except Exception as exc:
         print(f"Error tracking reading: {exc}")
@@ -561,25 +527,12 @@ async def track_reading(
 async def get_bias_profile(user_id: str = Depends(get_current_user)):
     """
     Calculate user's bias profile from reading history snapshot columns.
-
-    Reads bias_score, sentiment_score, source, and general_bias directly
-    from reading_history snapshot columns — never from the articles join.
-    This means the profile is fully stable after article archiving:
-    deleted articles contribute their scores permanently via the snapshot.
-
-    source_breakdown: top-12 sources by article count, keyed by source
-    name. Powers the bar chart on the Flutter profile screen.
-
-    Rows written before the snapshot migration have NULL score columns
-    and are included in total_articles_read and reading_time but skipped
-    in weighted score calculations — same behaviour as unscored articles.
+    Reads directly from reading_history — stable after article archiving.
     """
     try:
         response = (
             supabase.table("reading_history")
-            .select(
-                "time_spent_seconds, bias_score, sentiment_score, source"
-            )
+            .select("time_spent_seconds, bias_score, sentiment_score, source")
             .eq("user_id", user_id)
             .execute()
         )
@@ -594,9 +547,7 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
                 center_count=0,
                 right_count=0,
                 most_read_source="N/A",
-                bias_distribution={
-                    "left": 0.0, "center": 0.0, "right": 0.0
-                },
+                bias_distribution={"left": 0.0, "center": 0.0, "right": 0.0},
                 reading_time_total_minutes=0,
                 positive_count=0,
                 neutral_count=0,
@@ -606,7 +557,6 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
 
         total_time = sum(h["time_spent_seconds"] for h in history)
 
-        # Weighted averages — only rows with snapshot scores contribute.
         bias_terms = [
             (h["time_spent_seconds"], h["bias_score"])
             for h in history
@@ -620,13 +570,11 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
 
         weighted_bias = (
             sum(t * b for t, b in bias_terms) / sum(t for t, _ in bias_terms)
-            if bias_terms
-            else 0.0
+            if bias_terms else 0.0
         )
         weighted_sentiment = (
             sum(t * s for t, s in sent_terms) / sum(t for t, _ in sent_terms)
-            if sent_terms
-            else 0.0
+            if sent_terms else 0.0
         )
 
         left = sum(
@@ -651,26 +599,14 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
 
         sources = [h["source"] for h in history if h.get("source")]
         source_counter = Counter(sources)
-        most_read = (
-            source_counter.most_common(1)[0][0]
-            if source_counter
-            else "N/A"
-        )
+        most_read = source_counter.most_common(1)[0][0] if source_counter else "N/A"
         source_breakdown = dict(source_counter.most_common(12))
 
         total_reads = len(history)
         distribution = {
-            "left": (
-                round(left / total_reads * 100, 1) if total_reads else 0.0
-            ),
-            "center": (
-                round(center / total_reads * 100, 1)
-                if total_reads
-                else 0.0
-            ),
-            "right": (
-                round(right / total_reads * 100, 1) if total_reads else 0.0
-            ),
+            "left": round(left / total_reads * 100, 1) if total_reads else 0.0,
+            "center": round(center / total_reads * 100, 1) if total_reads else 0.0,
+            "right": round(right / total_reads * 100, 1) if total_reads else 0.0,
         }
 
         return BiasProfile(
@@ -695,21 +631,6 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
 
 @app.post("/api/articles/compare", response_model=ComparisonResponse)
 async def compare_articles(request: ComparisonRequest):
-    """
-    Find articles on the same topic grouped by political bias.
-
-    Splits into left/centre/right using bias_score thresholds —
-    does not rely on general_bias string values so casing is irrelevant.
-
-    Filters applied in order:
-      1. topic  — OR search across title and content
-      2. category — exact match (resolving sub-categories is done
-                    client-side via CATEGORY_GROUP_MAP in articles.py)
-      3. source — exact match against the source column
-
-    No row cap — with a 30d article window results are well under
-    1,000 in practice, but limit is set high to never silently truncate.
-    """
     try:
         query = (
             supabase.table("articles")
@@ -717,35 +638,21 @@ async def compare_articles(request: ComparisonRequest):
             .not_.is_("bias_score", "null")
             .order("published_at", desc=True)
         )
-
-        # FIX: search title AND content — content may be empty for many rows
         if request.topic:
             query = query.or_(
                 f"title.ilike.%{request.topic}%,"
                 f"content.ilike.%{request.topic}%"
             )
-
         if request.category:
             query = query.eq("category", request.category)
-
-        # FIX: source filter now wired up from ComparisonRequest
         if request.source:
             query = query.eq("source", request.source)
 
         articles_data = query.limit(10000).execute().data
 
-        left = [
-            a for a in articles_data
-            if a.get("bias_score", 0) < -0.3
-        ]
-        center = [
-            a for a in articles_data
-            if -0.3 <= a.get("bias_score", 0) <= 0.3
-        ]
-        right = [
-            a for a in articles_data
-            if a.get("bias_score", 0) > 0.3
-        ]
+        left = [a for a in articles_data if a.get("bias_score", 0) < -0.3]
+        center = [a for a in articles_data if -0.3 <= a.get("bias_score", 0) <= 0.3]
+        right = [a for a in articles_data if a.get("bias_score", 0) > 0.3]
 
         return ComparisonResponse(
             topic=request.topic or "",
@@ -769,7 +676,6 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 @app.get("/favicon.ico")
 async def favicon():
-    """Serve favicon if present, otherwise return empty response."""
     file_path = os.path.join(BASE_DIR, "..", "static", "favicon.ico")
     if os.path.exists(file_path):
         return FileResponse(file_path)

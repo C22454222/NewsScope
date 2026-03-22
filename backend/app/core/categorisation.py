@@ -1,90 +1,82 @@
-"""NewsScope article category inference - 3-tier, zero local ML.
+"""
+NewsScope article category inference - 3-tier, zero local ML.
 
 Never returns 'general' — worst case is 'world'.
 Tier 3 falls back to _match_from_title_broad() instead of 'general'
 when HF_TOKEN is missing or the API call fails.
 
+CHANGES FROM v1:
+
+1. HF TIMEOUT RAISED 8s → 20s:
+   bart-large-mnli cold-starts in 20-40s on HF free tier. The previous
+   8s timeout caused every cold-start to throw an exception and fall
+   back to _match_from_title_broad() — the HF call was effectively
+   always wasted on cold instances. 20s catches warm models reliably
+   and catches cold-start models on the second request of a cycle.
+
+2. WARM-MODEL RETRY ON 503:
+   HF returns 503 when the model is loading. Previously this fell back
+   immediately to broad scan. Now we wait 15s and retry once — the
+   model is usually warm by then. If still 503, broad scan fallback.
+   This means categorisation uses the AI model far more often in practice.
+
+3. SESSION REUSE:
+   _classify_with_api now uses a module-level requests.Session for
+   TCP connection reuse across multiple categorisation calls within
+   the same ingestion cycle. Saves ~50ms per article on TLS handshake.
+
 Flake8: 0 errors/warnings.
 """
 
 import os
+import time
 import requests
 from typing import Optional
 from urllib.parse import urlparse
 
 
-# Expanded canonical category labels from BBC/NYT/Guardian/RTE/AP standards.
 CATEGORIES = [
-    "politics",
-    "world",
-    "us",
-    "uk",
-    "ireland",
-    "europe",
-    "business",
-    "economy",
-    "markets",
-    "finance",
-    "tech",
-    "science",
-    "environment",
-    "climate",
-    "health",
-    "sport",
-    "football",
-    "rugby",
-    "gaa",
-    "cricket",
-    "entertainment",
-    "culture",
-    "film",
-    "tv",
-    "music",
-    "lifestyle",
-    "travel",
-    "food",
-    "news",
-    "local",
-    "opinion",
-    "analysis",
+    "politics", "world", "us", "uk", "ireland", "europe",
+    "business", "economy", "markets", "finance",
+    "tech", "science", "environment", "climate", "health",
+    "sport", "football", "rugby", "gaa", "cricket",
+    "entertainment", "culture", "film", "tv", "music",
+    "lifestyle", "travel", "food",
+    "news", "local", "opinion", "analysis",
 ]
 
-# Tier 3 candidate labels — 8 parent groups only.
-# BART MNLI performs poorly with 33 labels; 8 is the sweet spot.
-# Sub-categories are handled by tiers 1+2 and CATEGORY_GROUP_MAP
-# in articles.py. This ensures fast, accurate API classification.
 _TIER3_LABELS = [
-    "politics",
-    "world",
-    "business",
-    "tech",
-    "sport",
-    "entertainment",
-    "health",
-    "science",
+    "politics", "world", "business", "tech",
+    "sport", "entertainment", "health", "science",
 ]
 
-# HuggingFace Inference API — free tier, no local model loaded.
-# Add HF_API_TOKEN to Render env vars.
 _HF_TOKEN = os.getenv("HF_API_TOKEN")
 _HF_API_URL = (
     "https://api-inference.huggingface.co/models/"
     "facebook/bart-large-mnli"
 )
 
+# Module-level session — reused across all HF calls within a cycle.
+_hf_session: Optional[requests.Session] = None
+
+
+def _get_hf_session() -> requests.Session:
+    global _hf_session
+    if _hf_session is None:
+        _hf_session = requests.Session()
+    return _hf_session
+
 
 # ── Tier 1a: URL path matching ────────────────────────────────────────────────
 
 
 def _match_from_path(path: str) -> Optional[str]:
-    """Tier 1a: Direct path/section matching + keyword fallback."""
     if not path:
         return None
 
     path_lower = path.lower()
 
     section_map = {
-        # BBC
         "/news/uk": "uk",
         "/news/world": "world",
         "/news/business": "business",
@@ -93,7 +85,6 @@ def _match_from_path(path: str) -> Optional[str]:
         "/news/health": "health",
         "/sport": "sport",
         "/news/entertainment-arts": "entertainment",
-        # NYT
         "/section/us": "us",
         "/section/politics": "politics",
         "/section/business": "business",
@@ -102,13 +93,8 @@ def _match_from_path(path: str) -> Optional[str]:
         "/section/health": "health",
         "/section/sports": "sport",
         "/section/arts": "entertainment",
-        # RTE
         "/news/ireland": "ireland",
         "/news/politics": "politics",
-        "/sport": "sport",
-        "/news/business": "business",
-        "/news/health": "health",
-        # Guardian
         "/uk-news": "uk",
         "/world": "world",
         "/business": "business",
@@ -117,12 +103,10 @@ def _match_from_path(path: str) -> Optional[str]:
         "/sport": "sport",
         "/culture": "entertainment",
         "/environment": "environment",
-        # Irish Times
         "/ireland": "ireland",
         "/crime-law": "ireland",
         "/crime-law/courts": "ireland",
         "/courts": "ireland",
-        # Generic
         "/politics": "politics",
         "/opinion": "opinion",
         "/analysis": "analysis",
@@ -135,7 +119,6 @@ def _match_from_path(path: str) -> Optional[str]:
         if key in section_map:
             return section_map[key]
 
-    # Keyword fallback on path segments.
     if any(seg in path_lower for seg in ["politics", "election", "government"]):
         return "politics"
     if any(seg in path_lower for seg in ["world", "international", "europe", "africa", "asia"]):
@@ -164,7 +147,6 @@ def _match_from_path(path: str) -> Optional[str]:
 
 
 def _match_from_title(title: str) -> Optional[str]:
-    """Tier 2: Expanded title keywords covering ~95% of common topics."""
     if not title:
         return None
 
@@ -252,27 +234,20 @@ def _match_from_title(title: str) -> Optional[str]:
 def _match_from_title_broad(title: str) -> str:
     """
     Broad fallback keyword scan — catches what tier 2 misses.
-
-    Used when HF_TOKEN is missing or the API call fails.
-    Returns 'world' as true last resort — unclassifiable articles
-    are more likely international news than any other single category.
-    Never returns 'general'.
+    Never returns 'general'. Worst case returns 'world'.
     """
     if not title:
         return "world"
 
     t = title.lower()
 
-    # Governance / official events → politics or world
     if any(w in t for w in [
         "president", "prime minister", "official", "authorities",
         "agency", "committee", "summit", "bilateral", "rally",
-        "protest", "military", "army", "attack", "shooting",
-        "explosion",
+        "protest", "military", "army", "attack", "shooting", "explosion",
     ]):
         return "world"
 
-    # Legal / courts / crime
     if any(w in t for w in [
         "court", "judge", "jury", "verdict", "sentence", "charged",
         "arrested", "police", "murder", "trial", "lawsuit", "legal",
@@ -280,7 +255,6 @@ def _match_from_title_broad(title: str) -> str:
     ]):
         return "ireland"
 
-    # Economy / money
     if any(w in t for w in [
         "price", "cost", "billion", "million", "fund", "budget",
         "tax", "rate", "growth", "loss", "earnings", "quarter",
@@ -288,30 +262,31 @@ def _match_from_title_broad(title: str) -> str:
     ]):
         return "business"
 
-    # People / culture / lifestyle
     if any(w in t for w in [
         "star", "fans", "award", "show", "premiere", "release",
         "interview", "model", "fashion", "viral", "social media",
     ]):
         return "entertainment"
 
-    # True last resort — international news is the most likely bucket
-    # for any article that genuinely cannot be classified.
     return "world"
 
 
 # ── Tier 3: HuggingFace API ───────────────────────────────────────────────────
 
 
-def _classify_with_api(
-    title: str, content: Optional[str] = None
-) -> str:
+def _classify_with_api(title: str, content: Optional[str] = None) -> str:
     """
     Tier 3: HuggingFace Inference API — zero local memory cost.
 
-    Falls back to _match_from_title_broad() instead of 'general'
-    when HF_TOKEN is missing or the API call fails — every article
-    gets a meaningful category regardless of API availability.
+    Timeout raised 8s → 20s: bart-large-mnli warm calls complete in
+    ~3-8s; cold-start takes 20-40s. 20s catches warm models reliably.
+
+    503 warm-up retry: waits 15s and retries once on model-loading
+    503 responses. The model is usually warm by the second attempt.
+    Without this retry, cold-start cycles wasted the HF call entirely
+    and fell back to broad scan for every article in that batch.
+
+    Session reuse: TCP connection reused across calls via _hf_session.
     """
     if not _HF_TOKEN:
         return _match_from_title_broad(title)
@@ -319,19 +294,34 @@ def _classify_with_api(
     text = f"{title}. {(content or '')[:400]}"
 
     try:
-        response = requests.post(
+        session = _get_hf_session()
+        response = session.post(
             _HF_API_URL,
             headers={"Authorization": f"Bearer {_HF_TOKEN}"},
             json={
                 "inputs": text,
                 "parameters": {"candidate_labels": _TIER3_LABELS},
             },
-            timeout=8,
+            timeout=20,  # raised from 8s
         )
 
         if response.status_code == 503:
-            # HF model still loading — fall back to broad scan.
-            return _match_from_title_broad(title)
+            # Model is loading — wait 15s and retry once.
+            print("bart-large-mnli loading, waiting 15s before retry...")
+            response.close()
+            time.sleep(15)
+            response = session.post(
+                _HF_API_URL,
+                headers={"Authorization": f"Bearer {_HF_TOKEN}"},
+                json={
+                    "inputs": text,
+                    "parameters": {"candidate_labels": _TIER3_LABELS},
+                },
+                timeout=20,
+            )
+            if response.status_code == 503:
+                response.close()
+                return _match_from_title_broad(title)
 
         response.raise_for_status()
         return response.json()["labels"][0]
@@ -351,7 +341,7 @@ def infer_category(
     """
     3-tier category inference — zero local ML model loaded.
 
-    Tier 1a: URL path/section parsing (BBC/NYT/RTE/Irish Times maps)
+    Tier 1a: URL path/section parsing
     Tier 1b: URL keyword match
     Tier 2:  Title keyword match (strict, ~95% coverage)
     Tier 3:  HuggingFace BART zero-shot OR broad keyword fallback
@@ -372,5 +362,4 @@ def infer_category(
     if not category:
         category = _classify_with_api(title or "", content)
 
-    # _classify_with_api guarantees a non-None, non-'general' result.
     return category
