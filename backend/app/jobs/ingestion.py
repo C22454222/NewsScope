@@ -180,11 +180,16 @@ def upsert_source(name: str) -> Optional[str]:
 def sanitize_for_postgres(text: str) -> str:
     if not text:
         return ""
+    # Strip null bytes and other control characters.
     text = text.replace("\x00", "").replace("\u0000", "")
     text = re.sub(r"[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f]", "", text)
-    return text.encode("utf-8", errors="ignore").decode(
-        "utf-8", errors="ignore"
-    )
+    # Strip Unicode surrogates — unpaired surrogates are valid in Python
+    # strings but invalid in JSON, causing Supabase to return 400
+    # "JSON could not be generated" when scraping malformed UTF-16 pages.
+    text = re.sub(r"[\ud800-\udfff]", "", text)
+    # Force round-trip through UTF-8 to drop any remaining invalid sequences.
+    text = text.encode("utf-8", errors="ignore").decode("utf-8", errors="ignore")
+    return text
 
 
 def clean_text(text: str) -> str:
