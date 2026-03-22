@@ -1110,14 +1110,21 @@ def insert_articles_batch(articles: List[Dict[str, Any]]) -> List[str]:
     batch_size = 500
     for i in range(0, len(urls), batch_size):
         url_batch = urls[i:i + batch_size]
-        rows = (
-            supabase.table("articles")
-            .select("url")
-            .in_("url", url_batch)
-            .execute()
-            .data
-        )
-        existing_urls.update(r["url"] for r in rows)
+        try:
+            rows = (
+                supabase.table("articles")
+                .select("url")
+                .in_("url", url_batch)
+                .execute()
+                .data
+            )
+            existing_urls.update(r["url"] for r in rows)
+        except Exception as e:
+            print(f"Dedup query failed for batch {i}:{i + batch_size}: {e}")
+            for u in url_batch:
+                print(f"  URL in failed batch: {u}")
+            # Continue without dedup for this batch — safer than crashing.
+            continue
 
     new_articles = [
         a for a in articles
