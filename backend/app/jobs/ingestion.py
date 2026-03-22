@@ -1167,13 +1167,31 @@ def insert_articles_batch(articles: List[Dict[str, Any]]) -> List[str]:
         # Insert immediately after each chunk — don't accumulate all
         # payloads in memory before writing. Frees ~60MB per chunk.
         if payloads:
-            res = (
-                supabase.table("articles")
-                .insert(payloads)
-                .execute()
-                .data
-            )
-            all_new_ids.extend(r["id"] for r in res)
+            try:
+                res = (
+                    supabase.table("articles")
+                    .insert(payloads)
+                    .execute()
+                    .data
+                )
+                all_new_ids.extend(r["id"] for r in res)
+            except Exception as e:
+                print(f"Chunk insert failed: {e}")
+                # Isolate the offending article by inserting one at a time.
+                for p in payloads:
+                    try:
+                        single = (
+                            supabase.table("articles")
+                            .insert(p)
+                            .execute()
+                            .data
+                        )
+                        all_new_ids.extend(r["id"] for r in single)
+                    except Exception as e2:
+                        print(f"  Failed article: {p.get('url', '?')}")
+                        print(f"  Source: {p.get('source', '?')}")
+                        print(f"  Title: {p.get('title', '?')}")
+                        print(f"  Error: {e2}")
 
         # Explicit cleanup at chunk boundary — the most effective
         # point to reclaim DOM/response memory on 512MB Render.
