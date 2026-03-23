@@ -24,7 +24,7 @@ from app.db.supabase import supabase
 # NewsAPI source IDs.
 # NOTE: "associated-press" removed — AP News is already fetched via RSS
 # (https://feeds.apnews.com/rss/apf-topnews). Keeping both wasted 24 of
-# 96 daily free-tier NewsAPI requests for zero additional articles.
+# 96 daily free-tier NewsAPI requests for zero additional article.
 NEWSAPI_SOURCES = [
     "cnn",
     "fox-news",
