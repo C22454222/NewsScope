@@ -55,12 +55,14 @@ class Settings:
     )
     HF_POLITICAL_BIAS_SPACE: str = os.getenv(
         "HF_POLITICAL_BIAS_SPACE",
-        # Fine-tuned RoBERTa model hosted on HF Spaces.
+        # Fine-tuned RoBERTa model hosted on HF Spaces (base URL only).
+        # Do NOT append /run/predict — Gradio 5.x uses a two-step
+        # queue-based SSE API. analysis.py appends /call/predict and
+        # /call/predict/{event_id} itself.
         # Trained on ramybaly/Article-Bias-Prediction (37,554 AllSides
-        # articles). Achieves 87.3% accuracy, 87.3% macro F1 across
-        # LEFT / CENTER / RIGHT classification.
+        # articles). 87.3% accuracy, 87.3% macro F1 (LEFT/CENTER/RIGHT).
         # Zero RAM footprint on Render — inference runs on HF Spaces.
-        "https://c22454222-political-bias-api.hf.space/run/predict",
+        "https://c22454222-political-bias-api.hf.space",
     )
 
     # ── Firebase ──────────────────────────────────────────────────────────────

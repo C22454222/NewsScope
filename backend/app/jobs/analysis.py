@@ -20,56 +20,34 @@ to 512 tokens. RoBERTa tokenizer handles subword tokenisation so 512
 tokens ≈ 350-400 words of actual article content — enough to capture
 the political framing of any news article.
 
-CHANGES FROM v4:
+CHANGES FROM v5:
 
-1. WINDOWED ARTICLE FETCH (was unbounded .limit(10000)):
-   Now fetches only articles published in the last 48 hours that are
-   unscored. On a mature DB, .limit(10000) with no time filter could
-   pull thousands of old unscored rows every cycle, burning API quota
-   on articles nobody will ever read. 48h window matches the article
-   display window in the app.
-   Fallback: if the 48h window yields 0 results, the query drops back
-   to unscored articles from the last 7 days (catches edge cases where
-   the server was down for a day).
+1. GRADIO 5 TWO-STEP SSE API (replaces single POST /run/predict):
+   Gradio 5.x removed the synchronous POST /run/predict endpoint.
+   Posting to the Space root or /run/predict now hits the SvelteKit
+   SSR layer which returns 405 "No form actions exist for this page".
+   The correct protocol is:
+     Step 1 — POST /call/predict  →  {"event_id": "abc123"}
+     Step 2 — GET  /call/predict/{event_id}  →  SSE stream
+   The SSE stream emits lines; the result is on the "data:" line that
+   follows the "event: complete" line. Parsed as JSON list — [0] gives
+   the {"label": ..., "score": ...} dict returned by classify_bias().
+   No new dependencies — uses the existing requests.Session.
 
-2. CONCURRENCY STAGGER (was 1.0s sleep at end of _score_article):
-   The 1.0s sleep was supposed to stagger 5 concurrent threads but
-   asyncio.gather fires all 5 immediately — they all sleep at the same
-   time, providing zero stagger. Replaced with a per-article launch
-   delay: article N starts N*0.5s after the previous one, spreading
-   HF calls across time rather than clustering them.
-   Result: HF calls arrive at 0s, 0.5s, 1.0s, 1.5s, 2.0s offsets
-   instead of all at once — better rate limit compliance.
+2. CONFIG URL FIXED (base URL, no /run/predict suffix):
+   HF_POLITICAL_BIAS_SPACE is now the base URL only. _detect_political_bias
+   appends /call/predict and /call/predict/{event_id} itself. Previously
+   the default in config.py included /run/predict which is now dead.
 
-3. SESSION REUSE ACROSS ARTICLES:
-   The module-level _session is now explicitly passed through to
-   _inference_api_call which already reuses it. No change needed here —
-   just documenting that TCP connection reuse is already active.
-
-4. ANALYSIS CONCURRENCY RAISED 5 → 8:
-   With the stagger above, 8 concurrent articles overlap safely.
-   Each HF call is ~2-5s on warm models. At 8 concurrent with 0.5s
-   stagger: calls arrive spread over 3.5s, responses come back over
-   ~5-8s total. HF free tier handles this without 429s.
-   Raises throughput from ~300 articles/hour to ~480 articles/hour.
-
-5. CONTENT TRUNCATION MOVED TO FETCH (not _score_article):
-   Previously each article's full content was fetched from DB then
-   truncated to 512 chars in _score_article. Now truncated at fetch
-   time via Supabase's left() function — reduces network transfer.
-
-6. POLITICAL BIAS MODEL ADDED (v5):
-   Fine-tuned RoBERTa hosted on HF Spaces. Input is title + full body
-   concatenated — gives the model maximum article context. Separate
-   _TEXT_LIMIT_POLITICAL constant (512 tokens) controls truncation for
-   this model independently of the 512-char limit used by sentiment
-   and general bias models.
+3. import json ADDED:
+   Required to parse the SSE data line from the GET stream.
 
 Flake8: 0 errors/warnings.
 """
 
 import asyncio
 import gc
+import json
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple
@@ -348,18 +326,24 @@ def _detect_political_bias(
     Trained on: ramybaly/Article-Bias-Prediction (37,554 AllSides articles)
     Performance: 87.3% accuracy, 87.3% macro F1 (LEFT/CENTER/RIGHT)
 
-    Input is title + full article body — gives the model maximum context
-    for political framing detection. Truncated to _TEXT_LIMIT_POLITICAL
-    chars before sending. Returns (label, confidence) or (None, None).
+    Gradio 5.x API protocol (two-step SSE):
+      Step 1 — POST {base}/call/predict
+               Body: {"data": ["<article text>"]}
+               Returns: {"event_id": "<uuid>"}
+      Step 2 — GET  {base}/call/predict/{event_id}
+               Streams SSE lines until "event: complete".
+               The "data:" line after complete contains a JSON list;
+               index [0] is the dict returned by classify_bias():
+               {"label": "LEFT"|"CENTER"|"RIGHT", "score": 0.xx}
 
-    Timeout is _SPACES_TIMEOUT (60s) to handle HF Spaces cold starts.
+    No new dependencies — uses the existing requests.Session.
+    Timeout _SPACES_TIMEOUT (60s) covers HF Spaces cold starts.
     No HF_API_TOKEN required — Space is public.
     """
     if not POLITICAL_BIAS_SPACE:
         print("HF_POLITICAL_BIAS_SPACE not set — skipping political bias.")
         return None, None
 
-    # Concatenate title and body — model benefits from full article context.
     text = f"{title}. {content}".strip()
     text = text[:_TEXT_LIMIT_POLITICAL]
 
@@ -367,27 +351,51 @@ def _detect_political_bias(
         print("Political bias: text too short — skipping.")
         return None, None
 
+    base = POLITICAL_BIAS_SPACE.rstrip("/")
+
     try:
         session = _get_session()
-        response = session.post(
-            POLITICAL_BIAS_SPACE,
+
+        # Step 1: POST to /call/predict → receive event_id.
+        r1 = session.post(
+            f"{base}/call/predict",
             headers={"Content-Type": "application/json"},
             json={"data": [text]},
             timeout=_SPACES_TIMEOUT,
         )
-        response.raise_for_status()
-        result = response.json()["data"][0]
-        label = result["label"].upper()
-        score = round(result["score"], 4)
-        print(f"Political bias (article): {label} (confidence={score:.2%})")
-        return label, score
+        r1.raise_for_status()
+        event_id = r1.json()["event_id"]
+
+        # Step 2: GET SSE stream → read until result line.
+        r2 = session.get(
+            f"{base}/call/predict/{event_id}",
+            stream=True,
+            timeout=_SPACES_TIMEOUT,
+        )
+        r2.raise_for_status()
+
+        for raw_line in r2.iter_lines(decode_unicode=True):
+            if not raw_line or not raw_line.startswith("data:"):
+                continue
+            payload = json.loads(raw_line[len("data:"):].strip())
+            # payload is a list: [{"label": "RIGHT", "score": 0.91}]
+            result = payload[0]
+            label = result["label"].upper()
+            score = round(result["score"], 4)
+            print(
+                f"Political bias (article): {label} "
+                f"(confidence={score:.2%})"
+            )
+            return label, score
 
     except requests.exceptions.Timeout:
-        print("Political bias: HF Space cold starting — will retry next cycle.")
+        print("Political bias: HF Space timed out — will retry next cycle.")
         return None, None
     except Exception as exc:
         print(f"Political bias error: {exc}")
         return None, None
+
+    return None, None
 
 
 # ── Single article scorer ─────────────────────────────────────────────────────
@@ -397,7 +405,7 @@ def _score_article(article: dict) -> dict:
     """
     Score a single article synchronously. Called via asyncio.to_thread.
     Makes 3 remote calls: sentiment + general bias (HF Inference API)
-    + political bias (HF Spaces).
+    + political bias (HF Spaces via two-step SSE).
     Source-level political leaning sourced locally — no network call.
 
     0.1s sleep between HF calls: per-article rate limit spacing.
