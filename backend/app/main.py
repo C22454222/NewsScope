@@ -370,7 +370,9 @@ def _ingestion_ran_recently() -> bool:
             return True
 
     except Exception as exc:
-        print(f"Redeploy guard check failed: {exc} — proceeding with ingestion.")
+        print(
+            f"Redeploy guard check failed: {exc} — proceeding with ingestion."
+        )
 
     return False
 
@@ -383,13 +385,12 @@ async def _run_startup_sequence() -> None:
     and run analysis only — articles are already in DB, just need scoring.
     Subsequent runs follow the hourly cron schedule.
     """
-    global _ingestion_running
-
     if _ingestion_ran_recently():
         print(
             "Startup ingestion skipped (redeploy guard). "
-            "Running analysis on existing unscored articles..."
+            "Waiting 180s then running analysis..."
         )
+        await asyncio.sleep(180)
         if _heavy_job_lock.acquire(blocking=False):
             try:
                 await _guarded_analysis()
@@ -434,11 +435,17 @@ def get_current_user(
         print(f"Authenticated user: {user_id}")
         return user_id
     except auth.InvalidIdTokenError:
-        raise HTTPException(status_code=401, detail="Invalid authentication token")
+        raise HTTPException(
+            status_code=401, detail="Invalid authentication token"
+        )
     except auth.ExpiredIdTokenError:
-        raise HTTPException(status_code=401, detail="Authentication token expired")
+        raise HTTPException(
+            status_code=401, detail="Authentication token expired"
+        )
     except Exception as exc:
-        raise HTTPException(status_code=401, detail=f"Authentication failed: {exc}")
+        raise HTTPException(
+            status_code=401, detail=f"Authentication failed: {exc}"
+        )
 
 
 # ── Core routes ───────────────────────────────────────────────────────────────
@@ -617,14 +624,22 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
 
         sources = [h["source"] for h in history if h.get("source")]
         source_counter = Counter(sources)
-        most_read = source_counter.most_common(1)[0][0] if source_counter else "N/A"
+        most_read = (
+            source_counter.most_common(1)[0][0] if source_counter else "N/A"
+        )
         source_breakdown = dict(source_counter.most_common(12))
 
         total_reads = len(history)
         distribution = {
-            "left": round(left / total_reads * 100, 1) if total_reads else 0.0,
-            "center": round(center / total_reads * 100, 1) if total_reads else 0.0,
-            "right": round(right / total_reads * 100, 1) if total_reads else 0.0,
+            "left": (
+                round(left / total_reads * 100, 1) if total_reads else 0.0
+            ),
+            "center": (
+                round(center / total_reads * 100, 1) if total_reads else 0.0
+            ),
+            "right": (
+                round(right / total_reads * 100, 1) if total_reads else 0.0
+            ),
         }
 
         return BiasProfile(
@@ -669,7 +684,10 @@ async def compare_articles(request: ComparisonRequest):
         articles_data = query.limit(10000).execute().data
 
         left = [a for a in articles_data if a.get("bias_score", 0) < -0.3]
-        center = [a for a in articles_data if -0.3 <= a.get("bias_score", 0) <= 0.3]
+        center = [
+            a for a in articles_data
+            if -0.3 <= a.get("bias_score", 0) <= 0.3
+        ]
         right = [a for a in articles_data if a.get("bias_score", 0) > 0.3]
 
         return ComparisonResponse(
