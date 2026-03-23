@@ -22,11 +22,13 @@ from app.db.supabase import supabase
 # ── Constants ────────────────────────────────────────────────────────────────
 
 # NewsAPI source IDs.
+# NOTE: "associated-press" removed — AP News is already fetched via RSS
+# (https://feeds.apnews.com/rss/apf-topnews). Keeping both wasted 24 of
+# 96 daily free-tier NewsAPI requests for zero additional articles.
 NEWSAPI_SOURCES = [
     "cnn",
     "fox-news",
     "bbc-news",
-    "associated-press",
 ]
 
 # RSS feed → source name mapping.
@@ -56,10 +58,11 @@ _FACTCHECK_CONCURRENCY = 1
 _FACTCHECK_DELAY_SECONDS = 600
 
 # NewsAPI max per request on any plan is 100.
-# Free plan: 100 req/day — 4 sources × 24 cycles = 96/day, fits exactly.
+# Free plan: 100 req/day — 3 sources × 24 cycles = 72/day, fits within
+# free tier with 28 requests headroom (was 4 sources × 24 = 96/day).
 _NEWSAPI_PAGE_SIZE = 100
 
-# RSS: was 15, now 50. feedparser only fetches the feed XML once
+# RSS: 50 entries per feed. feedparser only fetches the feed XML once
 # regardless of how many entries we read, so no extra HTTP cost.
 _RSS_ENTRY_LIMIT = 50
 
@@ -1228,11 +1231,10 @@ def fetch_newsapi() -> List[Dict[str, Any]]:
     """
     Fetch articles from NewsAPI.
 
-    pageSize raised from 25 → 100 (API max).
-    Free plan budget: 100 req/day, 4 sources × 24 cycles = 96 req/day.
-    This fits within the free tier with 4 requests headroom.
-    If you run more than 4 sources or cycle more than hourly, drop
-    pageSize back to 25 to avoid hitting the daily cap.
+    Sources reduced from 4 → 3: "associated-press" removed because AP
+    News is already fetched via RSS (feeds.apnews.com). This saves 24
+    daily requests (was 4 × 24 = 96/day, now 3 × 24 = 72/day), leaving
+    28 requests headroom on the 100 req/day free tier.
     """
     if not settings.NEWSAPI_KEY:
         print("NEWSAPI_KEY not set, skipping NewsAPI")
@@ -1254,7 +1256,7 @@ def fetch_newsapi() -> List[Dict[str, Any]]:
         try:
             params = {
                 "sources": source_id,
-                "pageSize": _NEWSAPI_PAGE_SIZE,  # was 25
+                "pageSize": _NEWSAPI_PAGE_SIZE,
                 "language": "en",
             }
             r = requests.get(
@@ -1296,10 +1298,8 @@ def fetch_rss() -> List[Dict[str, Any]]:
     """
     Fetch articles from configured RSS feeds.
 
-    Entry limit raised from 15 → 50 per feed.
-    feedparser fetches the feed XML once regardless of entry count —
-    no additional HTTP cost. The only cost is iterating more entries
-    in memory, which is negligible (<1MB per feed).
+    Entry limit: 50 per feed. feedparser fetches the feed XML once
+    regardless of how many entries we read — no additional HTTP cost.
     """
     rss_feeds = _get_rss_feeds()
     normalized: List[Dict[str, Any]] = []
@@ -1316,7 +1316,7 @@ def fetch_rss() -> List[Dict[str, Any]]:
                 source_name = "RTÉ News"
 
             articles_from_feed = 0
-            for e in parsed.entries[:_RSS_ENTRY_LIMIT]:  # was 15
+            for e in parsed.entries[:_RSS_ENTRY_LIMIT]:
                 url = getattr(e, "link", None)
                 title = getattr(e, "title", None)
                 published = getattr(

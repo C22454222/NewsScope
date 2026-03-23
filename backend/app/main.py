@@ -1,41 +1,53 @@
 """
 NewsScope FastAPI application entry point.
 
-SCHEDULING OVERVIEW (v5 — staggered, non-overlapping):
+SCHEDULING OVERVIEW (v6 — chain-first, cron-as-safety-net):
 
-  :00  Ingestion starts   (CronTrigger minute=0)
-       Scraping typically takes 8-15 min for ~400 new articles.
-       _heavy_job_lock held for entire duration.
+  PIPELINE (chained, fires automatically each cycle):
+    :00  Ingestion starts   (CronTrigger minute=0)
+         Categorisation is inline — happens per-article during scraping.
+         Completes in ~5 minutes on 512MB Render free tier.
+         _heavy_job_lock held for entire duration.
+         ↓ on completion
+         Analysis fires immediately — no fixed wait, no wasted minutes.
+         Completes in ~10-15 minutes (200 articles × 8 concurrent HF calls).
+         ↓ on completion
+         Pipeline done. Total wall time: ~15-20 minutes per hour.
 
-  :20  Analysis starts    (CronTrigger minute=20)
-       Fires 20 minutes after ingestion starts — by this point
-       ingestion is complete and RAM has had time to clear.
-       Falls back gracefully if ingestion overruns (lock busy).
+  SAFETY NETS (cron — only fire if chained call failed/was skipped):
+    :20  Analysis safety net  (CronTrigger minute=20)
+         Catches articles that slipped through if ingestion chained
+         analysis failed. analyze_unscored_articles() is idempotent —
+         only picks up articles with sentiment_score IS NULL, so it
+         never double-scores articles the chain already handled.
 
-  :40  Fact-check window  (CronTrigger minute=40)
-       Runs 20 minutes after analysis. Fact-checking is I/O only
-       (Google API) — no RAM pressure, can run alongside nothing.
+    :45  Fact-check           (CronTrigger minute=45)
+         Pure async I/O (Google API). No heavy job lock needed.
+         Runs after analysis is reliably complete (chained ~15-20 min,
+         safety net at :20 adds another buffer). Was :40, moved to :45
+         to give analysis 5 extra minutes on busy cycles.
 
-  03:00 Archiving         (CronTrigger hour=3)
-       Once daily. Lightweight DB-only operation.
+    03:00 Archiving           (CronTrigger hour=3)
+          Once daily. Lightweight DB-only operation.
 
-WHY NOT IntervalTrigger(minutes=10)?
-  The previous 10-minute analysis interval fired at :00, :10, :20...
-  meaning analysis could fire while ingestion scraping was mid-chunk.
-  The lock blocked it, but this caused silent skips and delayed
-  analysis by up to 30 minutes in the worst case. CronTrigger at :20
-  guarantees analysis always runs after ingestion has finished.
+WHY CHAINED NOT CRON FOR ANALYSIS?
+  The previous CronTrigger at :20 was a timing guess — if ingestion
+  somehow ran slow, analysis fired while scraping was still mid-chunk.
+  The lock blocked it, causing silent skips and delayed scoring.
+  Chaining guarantees analysis always starts the instant ingestion
+  finishes, regardless of how long ingestion took. The :20 cron stays
+  purely as a safety net for failure recovery.
 
-MEMORY MODEL:
+MEMORY MODEL (512MB Render free tier):
   - Ingestion peak: 4 workers × ~15MB DOM = ~60MB per chunk of 5.
     Total ingestion footprint: ~100MB above baseline.
-  - Analysis peak: 5 concurrent HF response buffers ≈ 5×10KB = trivial.
-    Real cost is the Supabase row fetch — capped to 48h window × 500
-    rows max to prevent unbounded growth on large DBs.
+  - Analysis peak: 8 concurrent HF response buffers ≈ negligible.
+    Real cost is the Supabase row fetch — capped to 48h × 200 rows.
   - Fact-check: httpx async client, one open connection. Negligible.
-  - Combined baseline (FastAPI + Supabase client + APScheduler): ~80MB.
-  - Headroom on 512MB Render: ~280MB — sufficient for all three jobs
-    running sequentially with the staggered schedule above.
+  - Combined baseline (FastAPI + Supabase + APScheduler): ~80MB.
+  - Headroom on 512MB: ~280MB — sufficient for chained pipeline.
+  - Analysis starts after ingestion RAM is freed (gc.collect() in
+    run_ingestion_cycle finalizer), so no memory overlap.
 
 Flake8: 0 errors/warnings.
 """
@@ -77,18 +89,14 @@ _main_loop: Optional[asyncio.AbstractEventLoop] = None
 
 # ── Job guards ────────────────────────────────────────────────────────────────
 # _heavy_job_lock: atomic threading.Lock — prevents any two heavy jobs
-# (ingestion, analysis, fact-check) from running simultaneously.
+# (ingestion, analysis) from running simultaneously.
 # acquire(blocking=False) is the only safe pattern — boolean flags
 # had a check-then-act race between APScheduler thread pool workers.
 _ingestion_running = False
 _analysis_running = False
 _heavy_job_lock = threading.Lock()
 
-# ── Startup timing ────────────────────────────────────────────────────────────
-# 180s gap before first analysis — ingestion needs time to fully flush.
-_ANALYSIS_STARTUP_DELAY_SECONDS = 180
-
-# Redeploy guard: skip startup ingestion if DB updated < 15 min ago.
+# Redeploy guard: skip startup ingestion if DB updated < 30 min ago.
 _REDEPLOY_GUARD_MINUTES = 30
 
 
@@ -117,7 +125,9 @@ init_firebase()
 def _sync_ingestion() -> None:
     """
     Sync bridge — runs _scheduled_ingestion on the main event loop.
-    Fires at :00 via CronTrigger. Lock is held for full scrape duration.
+    Fires at :00 via CronTrigger. After ingestion completes, analysis
+    is chained immediately inside _scheduled_ingestion.
+    Lock is held for full ingestion + analysis duration.
     """
     if not _heavy_job_lock.acquire(blocking=False):
         print("Heavy job in progress — skipping scheduled ingestion.")
@@ -137,19 +147,19 @@ def _sync_ingestion() -> None:
         _heavy_job_lock.release()
 
 
-def _sync_analysis() -> None:
+def _sync_analysis_safety_net() -> None:
     """
-    Sync bridge — runs _guarded_analysis on the main event loop.
-    Fires at :20 via CronTrigger — 20 minutes after ingestion starts,
-    by which time ingestion is reliably complete. If ingestion has
-    somehow overrun, the lock will be busy and this fires next cycle.
+    Sync bridge — analysis safety net at :20.
+    Only does real work if chained analysis (inside _scheduled_ingestion)
+    failed or was skipped. analyze_unscored_articles() is idempotent —
+    it only picks up articles with sentiment_score IS NULL.
     """
     if not _heavy_job_lock.acquire(blocking=False):
-        print("Heavy job in progress — skipping scheduled analysis.")
+        print("Heavy job in progress — skipping analysis safety net.")
         return
     if _main_loop is None or not _main_loop.is_running():
         _heavy_job_lock.release()
-        print("Analysis bridge: no running loop, skipping.")
+        print("Analysis safety net: no running loop, skipping.")
         return
     future = asyncio.run_coroutine_threadsafe(
         _guarded_analysis(), _main_loop
@@ -157,7 +167,7 @@ def _sync_analysis() -> None:
     try:
         future.result(timeout=600)
     except Exception as exc:
-        print(f"Scheduled analysis error: {exc}")
+        print(f"Analysis safety net error: {exc}")
     finally:
         _heavy_job_lock.release()
 
@@ -165,9 +175,9 @@ def _sync_analysis() -> None:
 def _sync_factcheck() -> None:
     """
     Sync bridge — runs batch_factcheck_recent on the main event loop.
-    Fires at :40 via CronTrigger — after both ingestion and analysis.
-    No heavy job lock — fact-checking is pure I/O (Google API calls),
-    holds no parse trees or model buffers. RAM cost is negligible.
+    Fires at :45 via CronTrigger — after chained ingestion+analysis
+    (~15-20 min) and the :20 analysis safety net.
+    No heavy job lock — fact-checking is pure I/O (Google API calls).
     """
     if _main_loop is None or not _main_loop.is_running():
         print("Fact-check bridge: no running loop, skipping.")
@@ -202,15 +212,35 @@ def _sync_archive() -> None:
 
 
 async def _scheduled_ingestion() -> None:
+    """
+    Run ingestion, then immediately chain analysis on completion.
+
+    This is the core of the pipeline — categorisation is inline during
+    scraping (infer_category called per article in _scrape_one), so by
+    the time ingestion finishes every article already has a category.
+    Analysis fires the instant ingestion returns, with no fixed delay.
+
+    The :20 cron safety net handles the case where this chain fails.
+    """
     global _ingestion_running
     if _ingestion_running:
         print("Ingestion already running — skipping duplicate trigger.")
         return
     _ingestion_running = True
     try:
+        print("Pipeline: starting ingestion...")
         await asyncio.to_thread(run_ingestion_cycle)
+        print("Pipeline: ingestion complete — chaining analysis immediately.")
+    except Exception as exc:
+        print(f"Pipeline: ingestion failed: {exc}")
+        return
     finally:
         _ingestion_running = False
+
+    # Chain: analysis fires immediately after ingestion, no sleep needed.
+    # gc.collect() already called at end of run_ingestion_cycle, so
+    # ingestion RAM is freed before analysis begins.
+    await _guarded_analysis()
 
 
 async def _guarded_analysis() -> None:
@@ -233,14 +263,14 @@ async def lifespan(app: FastAPI):
     """
     FastAPI lifespan context manager.
 
-    Scheduled job timing (all CronTrigger — no more IntervalTrigger):
-      :00  ingestion   — top of every hour
-      :20  analysis    — 20min after ingestion starts (reliably complete)
-      :40  fact-check  — 20min after analysis, pure I/O, negligible RAM
-      03:00 archiving  — once daily, lightweight
+    Scheduled job timing:
+      :00  ingestion → chains analysis immediately on completion
+      :20  analysis safety net — idempotent, only scores NULL articles
+      :45  fact-check — pure I/O, no lock needed (moved from :40)
+      03:00 archiving — once daily, lightweight
 
-    Analysis moved from IntervalTrigger(10min) to CronTrigger(minute=20)
-    to guarantee it never fires while ingestion is still running.
+    On startup: ingestion runs once immediately (with redeploy guard),
+    then analysis chains off it. Subsequent runs follow the cron schedule.
     """
     global _main_loop
 
@@ -251,7 +281,7 @@ async def lifespan(app: FastAPI):
 
     start_scheduler()
 
-    # Ingestion: top of every hour.
+    # Ingestion at top of every hour — chains analysis on completion.
     scheduler.add_job(
         _sync_ingestion,
         trigger=CronTrigger(minute=0),
@@ -261,20 +291,22 @@ async def lifespan(app: FastAPI):
         replace_existing=True,
     )
 
-    # Analysis: :20 each hour — after ingestion is reliably done.
+    # Analysis safety net at :20 — only does work if chain failed.
+    # analyze_unscored_articles() is idempotent (NULL filter).
     scheduler.add_job(
-        _sync_analysis,
+        _sync_analysis_safety_net,
         trigger=CronTrigger(minute=20),
-        id="analysis",
+        id="analysis_safety_net",
         max_instances=1,
         coalesce=True,
         replace_existing=True,
     )
 
-    # Fact-check: :40 each hour — after analysis, pure I/O.
+    # Fact-check at :45 — after chained pipeline (~15-20 min) is done.
+    # Pure I/O, no heavy job lock. Moved from :40 → :45 for extra buffer.
     scheduler.add_job(
         _sync_factcheck,
-        trigger=CronTrigger(minute=40),
+        trigger=CronTrigger(minute=45),
         id="factcheck",
         max_instances=1,
         coalesce=True,
@@ -345,17 +377,19 @@ def _ingestion_ran_recently() -> bool:
 
 async def _run_startup_sequence() -> None:
     """
-    Startup: ingest → wait 180s → analyze → done.
-    Subsequent runs follow the cron schedule.
+    Startup sequence: ingest → chain analysis immediately → done.
+
+    If redeploy guard fires (ingestion ran < 30 min ago), skip ingestion
+    and run analysis only — articles are already in DB, just need scoring.
+    Subsequent runs follow the hourly cron schedule.
     """
     global _ingestion_running
 
     if _ingestion_ran_recently():
         print(
-            f"Startup ingestion skipped (redeploy guard). "
-            f"Waiting {_ANALYSIS_STARTUP_DELAY_SECONDS}s then running analysis..."
+            "Startup ingestion skipped (redeploy guard). "
+            "Running analysis on existing unscored articles..."
         )
-        await asyncio.sleep(_ANALYSIS_STARTUP_DELAY_SECONDS)
         if _heavy_job_lock.acquire(blocking=False):
             try:
                 await _guarded_analysis()
@@ -365,35 +399,19 @@ async def _run_startup_sequence() -> None:
             print("Lock held at startup analysis — skipping.")
         return
 
-    print("Server startup: Running ingestion...")
+    print("Server startup: running ingestion pipeline...")
     if not _heavy_job_lock.acquire(blocking=False):
-        print("Lock already held at startup — skipping ingestion.")
+        print("Lock already held at startup — skipping.")
         return
 
-    _ingestion_running = True
+    # _scheduled_ingestion handles the full chain: ingest → analyse.
     try:
-        await asyncio.to_thread(run_ingestion_cycle)
-        print("Startup ingestion complete")
+        await _scheduled_ingestion()
+        print("Startup pipeline complete (ingestion + analysis).")
     except Exception as exc:
-        print(f"Startup ingestion failed: {exc}")
+        print(f"Startup pipeline failed: {exc}")
     finally:
-        _ingestion_running = False
         _heavy_job_lock.release()
-
-    print(
-        f"Waiting {_ANALYSIS_STARTUP_DELAY_SECONDS}s before first "
-        "analysis run to allow ingestion RAM to clear..."
-    )
-    await asyncio.sleep(_ANALYSIS_STARTUP_DELAY_SECONDS)
-    print("Starting post-startup analysis run...")
-
-    if _heavy_job_lock.acquire(blocking=False):
-        try:
-            await _guarded_analysis()
-        finally:
-            _heavy_job_lock.release()
-    else:
-        print("Lock held before startup analysis — skipping.")
 
 
 # ── App ───────────────────────────────────────────────────────────────────────
