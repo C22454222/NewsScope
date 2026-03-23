@@ -53,6 +53,15 @@ class Settings:
         # Returns BIASED / UNBIASED. 3.79k downloads.
         "valurank/distilroberta-bias",
     )
+    HF_POLITICAL_BIAS_SPACE: str = os.getenv(
+        "HF_POLITICAL_BIAS_SPACE",
+        # Fine-tuned RoBERTa model hosted on HF Spaces.
+        # Trained on ramybaly/Article-Bias-Prediction (37,554 AllSides
+        # articles). Achieves 87.3% accuracy, 87.3% macro F1 across
+        # LEFT / CENTER / RIGHT classification.
+        # Zero RAM footprint on Render — inference runs on HF Spaces.
+        "https://c22454222-political-bias-api.hf.space/run/predict",
+    )
 
     # ── Firebase ──────────────────────────────────────────────────────────────
     FIREBASE_SERVICE_ACCOUNT: str = os.getenv(
