@@ -20,27 +20,16 @@ to 512 tokens. RoBERTa tokenizer handles subword tokenisation so 512
 tokens ≈ 350-400 words of actual article content — enough to capture
 the political framing of any news article.
 
-CHANGES FROM v5:
+CHANGES FROM v6:
 
-1. GRADIO 5 TWO-STEP SSE API (replaces single POST /run/predict):
-   Gradio 5.x removed the synchronous POST /run/predict endpoint.
-   Posting to the Space root or /run/predict now hits the SvelteKit
-   SSR layer which returns 405 "No form actions exist for this page".
-   The correct protocol is:
-     Step 1 — POST /call/predict  →  {"event_id": "abc123"}
-     Step 2 — GET  /call/predict/{event_id}  →  SSE stream
-   The SSE stream emits lines; the result is on the "data:" line that
-   follows the "event: complete" line. Parsed as JSON list — [0] gives
-   the {"label": ..., "score": ...} dict returned by classify_bias().
-   No new dependencies — uses the existing requests.Session.
-
-2. CONFIG URL FIXED (base URL, no /run/predict suffix):
-   HF_POLITICAL_BIAS_SPACE is now the base URL only. _detect_political_bias
-   appends /call/predict and /call/predict/{event_id} itself. Previously
-   the default in config.py included /run/predict which is now dead.
-
-3. import json ADDED:
-   Required to parse the SSE data line from the GET stream.
+1. CORRECT GRADIO API ENDPOINT (replaces /call/predict):
+   Discovered via /gradio_api/info that the Space exposes the endpoint
+   as /classify_bias (matching the Python function name), not /predict.
+   Gradio 5.x also prefixes all API routes with /gradio_api/ — so the
+   correct paths are:
+     Step 1 — POST {base}/gradio_api/call/classify_bias
+     Step 2 — GET  {base}/gradio_api/call/classify_bias/{event_id}
+   Previously used /call/predict which returned 404 Not Found.
 
 Flake8: 0 errors/warnings.
 """
@@ -327,15 +316,16 @@ def _detect_political_bias(
     Performance: 87.3% accuracy, 87.3% macro F1 (LEFT/CENTER/RIGHT)
 
     Gradio 5.x API protocol (two-step SSE):
-      Step 1 — POST {base}/call/predict
+      Step 1 — POST {base}/gradio_api/call/classify_bias
                Body: {"data": ["<article text>"]}
                Returns: {"event_id": "<uuid>"}
-      Step 2 — GET  {base}/call/predict/{event_id}
-               Streams SSE lines until "event: complete".
-               The "data:" line after complete contains a JSON list;
+      Step 2 — GET  {base}/gradio_api/call/classify_bias/{event_id}
+               Streams SSE lines. The "data:" line contains a JSON list;
                index [0] is the dict returned by classify_bias():
                {"label": "LEFT"|"CENTER"|"RIGHT", "score": 0.xx}
 
+    Endpoint name /classify_bias confirmed via /gradio_api/info.
+    Prefix /gradio_api/ required by Gradio 5.x — /call/predict returns 404.
     No new dependencies — uses the existing requests.Session.
     Timeout _SPACES_TIMEOUT (60s) covers HF Spaces cold starts.
     No HF_API_TOKEN required — Space is public.
@@ -356,9 +346,9 @@ def _detect_political_bias(
     try:
         session = _get_session()
 
-        # Step 1: POST to /call/predict → receive event_id.
+        # Step 1: POST to /gradio_api/call/classify_bias → receive event_id.
         r1 = session.post(
-            f"{base}/call/predict",
+            f"{base}/gradio_api/call/classify_bias",
             headers={"Content-Type": "application/json"},
             json={"data": [text]},
             timeout=_SPACES_TIMEOUT,
@@ -368,7 +358,7 @@ def _detect_political_bias(
 
         # Step 2: GET SSE stream → read until result line.
         r2 = session.get(
-            f"{base}/call/predict/{event_id}",
+            f"{base}/gradio_api/call/classify_bias/{event_id}",
             stream=True,
             timeout=_SPACES_TIMEOUT,
         )
