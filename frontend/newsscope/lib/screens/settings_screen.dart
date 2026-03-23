@@ -33,23 +33,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
     });
   }
 
-  // ── Notifications — FCM permission + topic subscription ───────────────────
+  // ── Notifications ─────────────────────────────────────────────────────────
 
   Future<void> _setNotifications(bool value) async {
     if (value) {
-      // Request FCM permission (Android 13+ requires explicit grant)
       final settings = await FirebaseMessaging.instance.requestPermission(
         alert: true,
         badge: true,
         sound: true,
       );
 
-      final granted = settings.authorizationStatus == AuthorizationStatus.authorized
-          || settings.authorizationStatus == AuthorizationStatus.provisional;
+      final granted =
+          settings.authorizationStatus == AuthorizationStatus.authorized ||
+              settings.authorizationStatus == AuthorizationStatus.provisional;
 
       if (!granted) {
         if (!mounted) return;
-        // Show dialog offering to open device notification settings
         final openSettings = await showDialog<bool>(
           context: context,
           builder: (context) => AlertDialog(
@@ -75,16 +74,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         );
         if (openSettings == true) await openAppSettings();
-        return; // Don't enable the toggle — permission wasn't granted
+        return;
       }
 
-      // Permission granted — subscribe to FCM topic
-      await FirebaseMessaging.instance
-          .subscribeToTopic('news_updates');
+      await FirebaseMessaging.instance.subscribeToTopic('news_updates');
     } else {
-      // Unsubscribe from FCM topic
-      await FirebaseMessaging.instance
-          .unsubscribeFromTopic('news_updates');
+      await FirebaseMessaging.instance.unsubscribeFromTopic('news_updates');
     }
 
     final prefs = await SharedPreferences.getInstance();
@@ -107,7 +102,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final result = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('Edit Display Name'),
         content: TextField(
           controller: controller,
@@ -177,7 +173,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  // ── Privacy policy modal ──────────────────────────────────────────────────
+  // ── Privacy policy ────────────────────────────────────────────────────────
 
   void _showPrivacyPolicy() {
     showModalBottomSheet(
@@ -194,7 +190,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           children: [
             const SizedBox(height: 12),
             Container(
-              width: 40, height: 4,
+              width: 40,
+              height: 4,
               decoration: BoxDecoration(
                 color: Colors.grey[300],
                 borderRadius: BorderRadius.circular(2),
@@ -206,8 +203,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 Icon(Icons.privacy_tip_outlined, color: Colors.blue[700]),
                 const SizedBox(width: 10),
                 Text('Privacy Policy',
-                    style: TextStyle(fontSize: 18,
-                        fontWeight: FontWeight.bold, color: Colors.grey[800])),
+                    style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.grey[800])),
               ]),
             ),
             const Divider(),
@@ -229,9 +228,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   _privacySection('Contact',
                       'For any privacy-related queries, please contact the developer via Technological University Dublin.'),
                   const SizedBox(height: 8),
-                  // UPDATED: version → Beta
                   Text('Last updated: March 2026 · NewsScope v1.0.0 Beta',
-                      style: TextStyle(fontSize: 11, color: Colors.grey[400]),
+                      style:
+                          TextStyle(fontSize: 11, color: Colors.grey[400]),
                       textAlign: TextAlign.center),
                 ],
               ),
@@ -247,7 +246,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       padding: const EdgeInsets.only(bottom: 20),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Text(title,
-            style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold,
+            style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
                 color: Colors.blue[800])),
         const SizedBox(height: 6),
         Text(body,
@@ -288,12 +289,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // ── Delete account ────────────────────────────────────────────────────────
 
   Future<void> _handleDeleteAccount() async {
+    // Step 1: Initial confirmation
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Delete Account',
-            style: TextStyle(color: Colors.red)),
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title:
+            const Text('Delete Account', style: TextStyle(color: Colors.red)),
         content: const Text(
           'This will permanently delete your account and all reading '
           'history. This cannot be undone.',
@@ -307,8 +310,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           TextButton(
             onPressed: () => Navigator.pop(context, true),
             child: const Text('Delete',
-                style: TextStyle(
-                    color: Colors.red, fontWeight: FontWeight.bold)),
+                style:
+                    TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
           ),
         ],
       ),
@@ -316,24 +319,99 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     if (confirmed != true || !mounted) return;
 
+    // Step 2: Ask for password to re-authenticate
+    final passwordController = TextEditingController();
+    bool obscure = true;
+    final password = await showDialog<String>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16)),
+          title: const Text('Confirm Your Password'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Enter your password to confirm account deletion.',
+                style: TextStyle(fontSize: 13, height: 1.4),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: passwordController,
+                obscureText: obscure,
+                autofocus: true,
+                decoration: InputDecoration(
+                  labelText: 'Password',
+                  border: const OutlineInputBorder(),
+                  suffixIcon: IconButton(
+                    icon: Icon(obscure
+                        ? Icons.visibility_off_outlined
+                        : Icons.visibility_outlined),
+                    onPressed: () =>
+                        setDialogState(() => obscure = !obscure),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () =>
+                  Navigator.pop(context, passwordController.text),
+              child: const Text('Confirm',
+                  style: TextStyle(
+                      color: Colors.red, fontWeight: FontWeight.bold)),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    passwordController.dispose();
+    if (password == null || password.isEmpty || !mounted) return;
+
+    // Step 3: Re-authenticate then delete
     try {
+      final email = user?.email;
+      if (email == null) return;
+
+      final credential = EmailAuthProvider.credential(
+        email: email,
+        password: password,
+      );
+      await user?.reauthenticateWithCredential(credential);
       await user?.delete();
+
       if (!mounted) return;
       Navigator.of(context).popUntil((route) => route.isFirst);
     } on FirebaseAuthException catch (e) {
       if (!mounted) return;
-      if (e.code == 'requires-recent-login') {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text(
-              'Please sign out and sign back in before deleting your account.'),
-          behavior: SnackBarBehavior.floating,
-        ));
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Failed to delete account: ${e.message}'),
-          backgroundColor: Colors.red,
-          behavior: SnackBarBehavior.floating,
-        ));
+      switch (e.code) {
+        case 'wrong-password':
+        case 'invalid-credential':
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Incorrect password — account not deleted'),
+            backgroundColor: Colors.red,
+            behavior: SnackBarBehavior.floating,
+          ));
+          break;
+        case 'too-many-requests':
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Too many attempts — please try again later'),
+            behavior: SnackBarBehavior.floating,
+          ));
+          break;
+        default:
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('Failed to delete account: ${e.message}'),
+            backgroundColor: Colors.red,
+            behavior: SnackBarBehavior.floating,
+          ));
       }
     }
   }
@@ -346,8 +424,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       child: Text(
         title.toUpperCase(),
         style: TextStyle(
-            fontSize: 11, fontWeight: FontWeight.bold,
-            color: Colors.blue[700], letterSpacing: 1.2),
+            fontSize: 11,
+            fontWeight: FontWeight.bold,
+            color: Colors.blue[700],
+            letterSpacing: 1.2),
       ),
     );
   }
@@ -368,7 +448,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         child: Icon(icon, size: 18, color: iconColor ?? Colors.blue[700]),
       ),
       title: Text(title,
-          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500,
+          style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w500,
               color: titleColor ?? Colors.grey[800])),
       subtitle: subtitle != null
           ? Text(subtitle,
@@ -452,11 +534,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
         leading: CircleAvatar(
           radius: 18,
           backgroundColor: Colors.blue[700]!.withAlpha(25),
-          child: Icon(Icons.menu_book_outlined,
-              size: 18, color: Colors.blue[700]),
+          child:
+              Icon(Icons.menu_book_outlined, size: 18, color: Colors.blue[700]),
         ),
         title: Text('Glossary',
-            style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500,
+            style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
                 color: Colors.grey[800])),
         subtitle: Text('Tap to learn key terms',
             style: TextStyle(fontSize: 12, color: Colors.grey[500])),
@@ -468,7 +552,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Container(
-                  width: 36, height: 36,
+                  width: 36,
+                  height: 36,
                   decoration: BoxDecoration(
                     color: t.color.withAlpha(25),
                     borderRadius: BorderRadius.circular(8),
@@ -481,12 +566,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(t.term,
-                          style: TextStyle(fontSize: 13,
-                              fontWeight: FontWeight.bold, color: t.color)),
+                          style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.bold,
+                              color: t.color)),
                       const SizedBox(height: 3),
                       Text(t.definition,
-                          style: TextStyle(fontSize: 12,
-                              color: Colors.grey[600], height: 1.4)),
+                          style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey[600],
+                              height: 1.4)),
                     ],
                   ),
                 ),
@@ -506,7 +595,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       appBar: AppBar(
         centerTitle: true,
         title: Text('Settings',
-            style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold,
+            style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
                 color: Colors.blue[800])),
       ),
       body: ListView(
@@ -559,9 +650,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     size: 18, color: Colors.blue[700]),
               ),
               title: Text('Notifications',
-                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500,
+                  style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
                       color: Colors.grey[800])),
-              // UPDATED: more descriptive subtitle
               subtitle: Text(
                   _notificationsEnabled
                       ? 'Alerts when new articles are analysed'
@@ -582,7 +674,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
             shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12)),
             child: Column(children: [
-              // UPDATED: version → 1.0.0 Beta, REMOVED NewsScope bio tile
               _buildTile(
                 icon: Icons.info_outline,
                 title: 'App Version',
@@ -593,8 +684,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               _buildTile(
                 icon: Icons.privacy_tip_outlined,
                 title: 'Privacy Policy',
-                trailing: Icon(Icons.open_in_new,
-                    size: 16, color: Colors.grey[400]),
+                trailing:
+                    Icon(Icons.open_in_new, size: 16, color: Colors.grey[400]),
                 onTap: _showPrivacyPolicy,
               ),
             ]),
