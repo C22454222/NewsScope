@@ -128,6 +128,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
     );
 
+    controller.dispose();
     if (result == null || result.isEmpty || !mounted) return;
 
     try {
@@ -289,14 +290,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // ── Delete account ────────────────────────────────────────────────────────
 
   Future<void> _handleDeleteAccount() async {
-    // Step 1: Initial confirmation
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         shape:
             RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title:
-            const Text('Delete Account', style: TextStyle(color: Colors.red)),
+        title: const Text(
+          'Delete Account',
+          style: TextStyle(color: Colors.red),
+        ),
         content: const Text(
           'This will permanently delete your account and all reading '
           'history. This cannot be undone.',
@@ -309,9 +311,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Delete',
-                style:
-                    TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
+            child: const Text(
+              'Delete',
+              style: TextStyle(
+                  color: Colors.red, fontWeight: FontWeight.bold),
+            ),
           ),
         ],
       ),
@@ -319,99 +323,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     if (confirmed != true || !mounted) return;
 
-    // Step 2: Ask for password to re-authenticate
-    final passwordController = TextEditingController();
-    bool obscure = true;
-    final password = await showDialog<String>(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16)),
-          title: const Text('Confirm Your Password'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text(
-                'Enter your password to confirm account deletion.',
-                style: TextStyle(fontSize: 13, height: 1.4),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: passwordController,
-                obscureText: obscure,
-                autofocus: true,
-                decoration: InputDecoration(
-                  labelText: 'Password',
-                  border: const OutlineInputBorder(),
-                  suffixIcon: IconButton(
-                    icon: Icon(obscure
-                        ? Icons.visibility_off_outlined
-                        : Icons.visibility_outlined),
-                    onPressed: () =>
-                        setDialogState(() => obscure = !obscure),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-            TextButton(
-              onPressed: () =>
-                  Navigator.pop(context, passwordController.text),
-              child: const Text('Confirm',
-                  style: TextStyle(
-                      color: Colors.red, fontWeight: FontWeight.bold)),
-            ),
-          ],
-        ),
-      ),
-    );
-
-    passwordController.dispose();
-    if (password == null || password.isEmpty || !mounted) return;
-
-    // Step 3: Re-authenticate then delete
     try {
-      final email = user?.email;
-      if (email == null) return;
-
-      final credential = EmailAuthProvider.credential(
-        email: email,
-        password: password,
-      );
-      await user?.reauthenticateWithCredential(credential);
       await user?.delete();
-
       if (!mounted) return;
       Navigator.of(context).popUntil((route) => route.isFirst);
     } on FirebaseAuthException catch (e) {
       if (!mounted) return;
-      switch (e.code) {
-        case 'wrong-password':
-        case 'invalid-credential':
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Incorrect password — account not deleted'),
-            backgroundColor: Colors.red,
-            behavior: SnackBarBehavior.floating,
-          ));
-          break;
-        case 'too-many-requests':
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Too many attempts — please try again later'),
-            behavior: SnackBarBehavior.floating,
-          ));
-          break;
-        default:
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text('Failed to delete account: ${e.message}'),
-            backgroundColor: Colors.red,
-            behavior: SnackBarBehavior.floating,
-          ));
+      if (e.code == 'requires-recent-login') {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text(
+            'Please sign out and sign back in, then try deleting again.',
+          ),
+          behavior: SnackBarBehavior.floating,
+        ));
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Failed to delete account: ${e.message}'),
+          backgroundColor: Colors.red,
+          behavior: SnackBarBehavior.floating,
+        ));
       }
     }
   }
@@ -534,8 +464,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         leading: CircleAvatar(
           radius: 18,
           backgroundColor: Colors.blue[700]!.withAlpha(25),
-          child:
-              Icon(Icons.menu_book_outlined, size: 18, color: Colors.blue[700]),
+          child: Icon(Icons.menu_book_outlined,
+              size: 18, color: Colors.blue[700]),
         ),
         title: Text('Glossary',
             style: TextStyle(
@@ -684,8 +614,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               _buildTile(
                 icon: Icons.privacy_tip_outlined,
                 title: 'Privacy Policy',
-                trailing:
-                    Icon(Icons.open_in_new, size: 16, color: Colors.grey[400]),
+                trailing: Icon(Icons.open_in_new,
+                    size: 16, color: Colors.grey[400]),
                 onTap: _showPrivacyPolicy,
               ),
             ]),
