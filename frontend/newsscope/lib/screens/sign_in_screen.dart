@@ -52,7 +52,7 @@ class _SignInScreenState extends State<SignInScreen> {
         password: _passwordController.text,
       );
 
-      // Block sign in if email is not verified
+      // Block unverified users
       if (userCred.user != null && !userCred.user!.emailVerified) {
         await FirebaseAuth.instance.signOut();
         if (!mounted) return;
@@ -63,7 +63,7 @@ class _SignInScreenState extends State<SignInScreen> {
         return;
       }
     } on FirebaseAuthException catch (e) {
-      _showError(_mapFirebaseError(e.code));
+      _showError(_mapSignInError(e.code));
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -82,18 +82,24 @@ class _SignInScreenState extends State<SignInScreen> {
       );
       await FirebaseAuth.instance.signInWithCredential(credential);
     } on FirebaseAuthException catch (e) {
-      _showError(_mapFirebaseError(e.code));
+      _showError(_mapSignInError(e.code));
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
   }
 
   Future<void> _handleForgotPassword() async {
+    // Validate email field first
     final emailError = _validateEmail(_emailController.text);
     if (emailError != null) {
       _showError('Enter a valid email address above first');
       return;
     }
+
+    // Guard against double-tap or race with sign-in button
+    if (_isLoading) return;
+    setState(() => _isLoading = true);
+
     try {
       await FirebaseAuth.instance
           .sendPasswordResetEmail(email: _emailController.text.trim());
@@ -105,11 +111,16 @@ class _SignInScreenState extends State<SignInScreen> {
         behavior: SnackBarBehavior.floating,
       ));
     } on FirebaseAuthException catch (e) {
-      _showError(_mapFirebaseError(e.code));
+      _showError(_mapPasswordResetError(e.code));
+    } catch (_) {
+      _showError('Could not send reset email — please try again');
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  String _mapFirebaseError(String code) {
+  // Sign-in specific errors
+  String _mapSignInError(String code) {
     switch (code) {
       case 'user-not-found':
         return 'No account found with this email';
@@ -127,6 +138,20 @@ class _SignInScreenState extends State<SignInScreen> {
         return 'Incorrect email or password';
       default:
         return 'Sign in failed — please try again';
+    }
+  }
+
+  // Password reset specific errors — never says "sign in failed"
+  String _mapPasswordResetError(String code) {
+    switch (code) {
+      case 'invalid-email':
+        return 'Invalid email address';
+      case 'network-request-failed':
+        return 'No internet connection';
+      case 'too-many-requests':
+        return 'Too many attempts — please try again later';
+      default:
+        return 'Could not send reset email — please try again';
     }
   }
 
@@ -215,8 +240,8 @@ class _SignInScreenState extends State<SignInScreen> {
                     decoration: InputDecoration(
                       labelText: 'Email',
                       hintText: 'you@example.com',
-                      prefixIcon:
-                          Icon(Icons.email_outlined, color: Colors.blue[700]),
+                      prefixIcon: Icon(Icons.email_outlined,
+                          color: Colors.blue[700]),
                       border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(10)),
                       focusedBorder: OutlineInputBorder(
@@ -239,8 +264,8 @@ class _SignInScreenState extends State<SignInScreen> {
                     ],
                     decoration: InputDecoration(
                       labelText: 'Password',
-                      prefixIcon:
-                          Icon(Icons.lock_outline, color: Colors.blue[700]),
+                      prefixIcon: Icon(Icons.lock_outline,
+                          color: Colors.blue[700]),
                       suffixIcon: IconButton(
                         icon: Icon(
                           _obscurePassword
@@ -266,7 +291,8 @@ class _SignInScreenState extends State<SignInScreen> {
                   Align(
                     alignment: Alignment.centerRight,
                     child: TextButton(
-                      onPressed: _handleForgotPassword,
+                      // Disabled while loading to prevent race condition
+                      onPressed: _isLoading ? null : _handleForgotPassword,
                       style: TextButton.styleFrom(
                           foregroundColor: Colors.blue[700],
                           padding: const EdgeInsets.symmetric(
@@ -290,7 +316,8 @@ class _SignInScreenState extends State<SignInScreen> {
                             shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(10)),
                             textStyle: const TextStyle(
-                                fontSize: 16, fontWeight: FontWeight.w600),
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600),
                           ),
                           child: const Text('Sign In'),
                         ),

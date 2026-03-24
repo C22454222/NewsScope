@@ -8,7 +8,6 @@ from fastapi import APIRouter, HTTPException
 from app.db.supabase import supabase
 from app.schemas import UserCreate
 
-
 router = APIRouter()
 
 
@@ -75,3 +74,18 @@ def update_bias_profile(uid: str, profile: dict) -> dict:
             status_code=404, detail="User not found or update failed"
         )
     return response.data[0]
+
+
+@router.delete("/{uid}")
+def delete_user(uid: str) -> dict:
+    """
+    Delete all Supabase data for a user by Firebase UID.
+
+    Deletes reading_history first (FK constraint), then the users row.
+    Called from the Flutter client immediately after Firebase
+    user.delete() succeeds — keeps Firebase and Supabase in sync.
+    Returns 200 even if no rows found (idempotent — safe to retry).
+    """
+    supabase.table("reading_history").delete().eq("user_id", uid).execute()
+    supabase.table("users").delete().eq("id", uid).execute()
+    return {"deleted": uid}

@@ -4,11 +4,12 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:firebase_auth/firebase_auth.dart';
 
+import '../core/config.dart';
 import '../models/article.dart';
 import '../models/bias_profile.dart';
 
 class ApiService {
-  static const String _baseUrl = 'https://newsscope-backend.onrender.com';
+  static String get _baseUrl => AppConfig.baseUrl;
 
   // ── Auth ──────────────────────────────────────────────────────────────────
 
@@ -43,6 +44,29 @@ class ApiService {
       }
     } catch (e) {
       debugPrint('Error registering user: $e');
+    }
+  }
+
+  // ── User deletion ─────────────────────────────────────────────────────────
+
+  Future<void> deleteUser(String uid) async {
+    final token = await _getToken();
+    if (token == null) {
+      debugPrint('No auth token available for deletion');
+      return;
+    }
+    try {
+      final response = await http.delete(
+        Uri.parse('$_baseUrl/users/$uid'),
+        headers: {'Authorization': 'Bearer $token'},
+      );
+      if (response.statusCode != 200) {
+        debugPrint('Failed to delete user: ${response.statusCode}');
+      } else {
+        debugPrint('User deleted from Supabase: $uid');
+      }
+    } catch (e) {
+      debugPrint('Error deleting user: $e');
     }
   }
 
@@ -172,9 +196,6 @@ class ApiService {
     String? source,
   }) async {
     try {
-      // POST to /api/articles/compare — splits by bias_score server-side
-      // so left/centre/right are always correct regardless of general_bias
-      // casing or null values in the DB.
       final body = <String, dynamic>{'topic': topic};
       if (category != null && category.isNotEmpty) {
         body['category'] = category.toLowerCase();

@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:google_sign_in/google_sign_in.dart';
+import 'package:http/http.dart' as http;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import '../core/config.dart'; // adjust import to wherever your base URL constant lives
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -323,8 +327,42 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
     if (confirmed != true || !mounted) return;
 
+    final uid = user?.uid;
+    if (uid == null) return;
+
     try {
+      // Re-authenticate Google users — Firebase requires fresh credentials.
+      final isGoogleUser = user?.providerData
+              .any((p) => p.providerId == 'google.com') ??
+          false;
+
+      if (isGoogleUser) {
+        final googleSignIn = GoogleSignIn();
+        final googleUser = await googleSignIn.signIn();
+        if (googleUser == null) return; // user cancelled
+        final googleAuth = await googleUser.authentication;
+        final credential = GoogleAuthProvider.credential(
+          idToken: googleAuth.idToken,
+          accessToken: googleAuth.accessToken,
+        );
+        await user?.reauthenticateWithCredential(credential);
+      }
+
+      // Get Firebase ID token to authenticate the backend DELETE call
+      final idToken = await user?.getIdToken();
+
+      // Delete Firebase Auth account first
       await user?.delete();
+
+      // Clean up Supabase via backend — idempotent, safe to call even
+      // if the row doesn't exist (returns 200 regardless)
+      if (idToken != null) {
+        await http.delete(
+          Uri.parse('${AppConfig.baseUrl}/users/$uid'),
+          headers: {'Authorization': 'Bearer $idToken'},
+        );
+      }
+
       if (!mounted) return;
       Navigator.of(context).popUntil((route) => route.isFirst);
     } on FirebaseAuthException catch (e) {
@@ -332,8 +370,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (e.code == 'requires-recent-login') {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text(
-            'Please sign out and sign back in, then try deleting again.',
-          ),
+              'Please sign out and sign back in, then try deleting again.'),
           behavior: SnackBarBehavior.floating,
         ));
       } else {
@@ -343,6 +380,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
           behavior: SnackBarBehavior.floating,
         ));
       }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Failed to delete account: $e'),
+        backgroundColor: Colors.red,
+        behavior: SnackBarBehavior.floating,
+      ));
     }
   }
 
@@ -532,7 +576,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
       body: ListView(
         children: [
-          // ── Account ───────────────────────────────────────────────────────
           _buildSectionHeader('Account'),
           Card(
             margin: const EdgeInsets.symmetric(horizontal: 16),
@@ -565,7 +608,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ]),
           ),
 
-          // ── Preferences ───────────────────────────────────────────────────
           _buildSectionHeader('Preferences'),
           Card(
             margin: const EdgeInsets.symmetric(horizontal: 16),
@@ -596,7 +638,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
 
-          // ── About ─────────────────────────────────────────────────────────
           _buildSectionHeader('About'),
           Card(
             margin: const EdgeInsets.symmetric(horizontal: 16),
@@ -621,11 +662,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ]),
           ),
 
-          // ── Glossary ──────────────────────────────────────────────────────
           _buildSectionHeader('Glossary'),
           _buildGlossarySection(),
 
-          // ── Account Actions ───────────────────────────────────────────────
           _buildSectionHeader('Account Actions'),
           Card(
             margin: const EdgeInsets.symmetric(horizontal: 16),
