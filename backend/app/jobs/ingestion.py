@@ -5,7 +5,7 @@ import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import feedparser
@@ -22,16 +22,18 @@ from app.db.supabase import supabase
 # ── Constants ────────────────────────────────────────────────────────────────
 
 # NewsAPI source IDs.
-# NOTE: "associated-press" removed — AP News is already fetched via RSS
-# (https://feeds.apnews.com/rss/apf-topnews). Keeping both wasted 24 of
-# 96 daily free-tier NewsAPI requests for zero additional article.
+# AP News fetched via NewsAPI — RSS feed (feeds.apnews.com) was unreliable
+# and has been removed. 4 sources × 24 cycles = 96/day, within the 100
+# req/day free tier limit.
 NEWSAPI_SOURCES = [
     "cnn",
     "fox-news",
     "bbc-news",
+    "associated-press",
 ]
 
 # RSS feed → source name mapping.
+# AP News intentionally absent — fetched via NewsAPI instead.
 FEED_NAME_MAP = {
     "https://www.theguardian.com/uk/rss": "The Guardian",
     "https://www.gbnews.com/feeds/politics.rss": "GB News",
@@ -41,7 +43,6 @@ FEED_NAME_MAP = {
     "https://www.npr.org/rss/rss.php?id=1001": "NPR",
     "https://feeds.skynews.com/feeds/rss/uk.xml": "Sky News",
     "https://rss.dw.com/rdf/rss-en-all": "Deutsche Welle",
-    "https://feeds.apnews.com/rss/apf-topnews": "AP News",
 }
 
 # ── Tuning ───────────────────────────────────────────────────────────────────
@@ -58,13 +59,30 @@ _FACTCHECK_CONCURRENCY = 1
 _FACTCHECK_DELAY_SECONDS = 600
 
 # NewsAPI max per request on any plan is 100.
-# Free plan: 100 req/day — 3 sources × 24 cycles = 72/day, fits within
-# free tier with 28 requests headroom (was 4 sources × 24 = 96/day).
+# 4 sources × 24 cycles = 96/day, fits within 100 req/day free tier.
 _NEWSAPI_PAGE_SIZE = 100
 
 # RSS: 50 entries per feed. feedparser only fetches the feed XML once
 # regardless of how many entries we read, so no extra HTTP cost.
 _RSS_ENTRY_LIMIT = 50
+
+# Articles older than 7 days are skipped at ingest — they will never
+# appear in the active feed and wasting scrape/analysis budget on them
+# serves no purpose. Matches standard news app display conventions.
+_MAX_ARTICLE_AGE_DAYS = 7
+
+# Non-article URL path suffixes that must never be ingested.
+# cnn.com/watch is a show-listings page, not an article — the CNN RSS
+# feed occasionally surfaces it as if it were a story.
+_BLOCKED_URL_SUFFIXES = (
+    "/watch",
+    "/live",
+    "/video",
+    "/videos",
+    "/schedule",
+    "/topics",
+    "/gallery",
+)
 
 _main_event_loop: Optional[asyncio.AbstractEventLoop] = None
 
@@ -104,6 +122,44 @@ def _detect_source_from_url(url: str) -> Optional[str]:
         if domain in url_lower:
             return name
     return None
+
+
+# ── URL validation ────────────────────────────────────────────────────────────
+
+
+def _is_valid_article_url(url: str) -> bool:
+    """
+    Return False for non-article pages that should never be ingested.
+    Strips query strings and fragments before checking suffixes so that
+    e.g. cnn.com/watch?id=123 is also blocked.
+    """
+    if not url:
+        return False
+    path = url.split("?")[0].split("#")[0].rstrip("/").lower()
+    return not any(path.endswith(suffix) for suffix in _BLOCKED_URL_SUFFIXES)
+
+
+# ── Age gate ──────────────────────────────────────────────────────────────────
+
+
+def _is_within_age_limit(published_at: Optional[str]) -> bool:
+    """
+    Return False if published_at is parseable and older than
+    _MAX_ARTICLE_AGE_DAYS. Articles with no date pass through —
+    better to ingest and score than silently drop.
+    """
+    if not published_at:
+        return True
+    try:
+        ts = dtparser.parse(published_at)
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        cutoff = datetime.now(timezone.utc) - timedelta(
+            days=_MAX_ARTICLE_AGE_DAYS
+        )
+        return ts >= cutoff
+    except Exception:
+        return True
 
 
 # ── Content validation ───────────────────────────────────────────────────────
@@ -183,14 +239,9 @@ def upsert_source(name: str) -> Optional[str]:
 def sanitize_for_postgres(text: str) -> str:
     if not text:
         return ""
-    # Strip null bytes and other control characters.
     text = text.replace("\x00", "").replace("\u0000", "")
     text = re.sub(r"[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f]", "", text)
-    # Strip Unicode surrogates — unpaired surrogates are valid in Python
-    # strings but invalid in JSON, causing Supabase to return 400
-    # "JSON could not be generated" when scraping malformed UTF-16 pages.
     text = re.sub(r"[\ud800-\udfff]", "", text)
-    # Force round-trip through UTF-8 to drop any remaining invalid sequences.
     text = text.encode("utf-8", errors="ignore").decode("utf-8", errors="ignore")
     return text
 
@@ -1030,7 +1081,6 @@ def _scrape_one(article: Dict[str, Any]) -> Dict[str, Any]:
         "_is_fallback": is_fallback,
     }
 
-    # Worker-level gc: free DOM/response memory before returning result.
     gc.collect()
     return result
 
@@ -1101,14 +1151,24 @@ def _schedule_factcheck(article_ids: List[str]) -> None:
 
 
 def insert_articles_batch(articles: List[Dict[str, Any]]) -> List[str]:
+    # ── Pre-insert gates ─────────────────────────────────────────────────────
+    # 1. Drop non-article URLs (watch pages, video hubs, schedules etc.)
+    # 2. Drop articles older than _MAX_ARTICLE_AGE_DAYS — they will never
+    #    appear in the active feed so scraping them wastes budget.
+    before = len(articles)
+    articles = [
+        a for a in articles
+        if _is_valid_article_url(a.get("url", "")) and _is_within_age_limit(a.get("published_at"))
+    ]
+    dropped = before - len(articles)
+    if dropped:
+        print(f"  Dropped {dropped} articles (invalid URL or too old)")
+
     urls = [a["url"] for a in articles if a.get("url")]
     if not urls:
         return []
 
     # ── Pre-scrape deduplication ─────────────────────────────────────────────
-    # Deduplicate in batches of 500 to avoid Supabase URL-length limits.
-    # This prevents scraping work for articles already in the DB —
-    # the biggest avoidable RAM and time cost in high-volume cycles.
     existing_urls: set = set()
     batch_size = 50
     for i in range(0, len(urls), batch_size):
@@ -1126,7 +1186,6 @@ def insert_articles_batch(articles: List[Dict[str, Any]]) -> List[str]:
             print(f"Dedup query failed for batch {i}:{i + batch_size}: {e}")
             for u in url_batch:
                 print(f"  URL in failed batch: {u}")
-            # Continue without dedup for this batch — safer than crashing.
             continue
 
     new_articles = [
@@ -1174,8 +1233,6 @@ def insert_articles_batch(articles: List[Dict[str, Any]]) -> List[str]:
                         f"[{article.get('url', '?')}]: {exc}"
                     )
 
-        # Insert immediately after each chunk — don't accumulate all
-        # payloads in memory before writing. Frees ~60MB per chunk.
         if payloads:
             try:
                 res = (
@@ -1187,7 +1244,6 @@ def insert_articles_batch(articles: List[Dict[str, Any]]) -> List[str]:
                 all_new_ids.extend(r["id"] for r in res)
             except Exception as e:
                 print(f"Chunk insert failed: {e}")
-                # Isolate the offending article by inserting one at a time.
                 for p in payloads:
                     try:
                         single = (
@@ -1203,8 +1259,6 @@ def insert_articles_batch(articles: List[Dict[str, Any]]) -> List[str]:
                         print(f"  Title: {p.get('title', '?')}")
                         print(f"  Error: {e2}")
 
-        # Explicit cleanup at chunk boundary — the most effective
-        # point to reclaim DOM/response memory on 512MB Render.
         del payloads
         del chunk
         gc.collect()
@@ -1231,10 +1285,9 @@ def fetch_newsapi() -> List[Dict[str, Any]]:
     """
     Fetch articles from NewsAPI.
 
-    Sources reduced from 4 → 3: "associated-press" removed because AP
-    News is already fetched via RSS (feeds.apnews.com). This saves 24
-    daily requests (was 4 × 24 = 96/day, now 3 × 24 = 72/day), leaving
-    28 requests headroom on the 100 req/day free tier.
+    4 sources: CNN, Fox News, BBC News, Associated Press.
+    4 × 24 cycles = 96 req/day — within the 100 req/day free tier.
+    AP News fetched here instead of RSS — the AP RSS feed is unreliable.
     """
     if not settings.NEWSAPI_KEY:
         print("NEWSAPI_KEY not set, skipping NewsAPI")
@@ -1267,11 +1320,14 @@ def fetch_newsapi() -> List[Dict[str, Any]]:
             r.close()
 
             for a in data.get("articles", []):
+                article_url = a.get("url")
+                if not _is_valid_article_url(article_url):
+                    continue
                 source_name = (a.get("source") or {}).get("name")
                 source_name = source_map.get(source_name, source_name)
                 n = normalize_article(
                     source_name=source_name,
-                    url=a.get("url"),
+                    url=article_url,
                     title=a.get("title"),
                     published_at=a.get("publishedAt"),
                 )
@@ -1300,6 +1356,7 @@ def fetch_rss() -> List[Dict[str, Any]]:
 
     Entry limit: 50 per feed. feedparser fetches the feed XML once
     regardless of how many entries we read — no additional HTTP cost.
+    AP News is intentionally absent — fetched via NewsAPI instead.
     """
     rss_feeds = _get_rss_feeds()
     normalized: List[Dict[str, Any]] = []
@@ -1322,6 +1379,10 @@ def fetch_rss() -> List[Dict[str, Any]]:
                 published = getattr(
                     e, "published", None
                 ) or getattr(e, "updated", None)
+
+                if not _is_valid_article_url(url):
+                    continue
+
                 n = normalize_article(
                     source_name=source_name,
                     url=url,

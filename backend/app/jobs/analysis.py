@@ -29,6 +29,10 @@ HF Spaces cold starts can take 30-90s. Full article text is sent to
 every Space; each applies truncation=True internally so the underlying
 model only sees its token limit (512 tokens for all three).
 
+Analysis window uses created_at (ingestion time) not published_at so
+articles ingested today are always scored regardless of publish date.
+Display window is 7 days — matches standard news app conventions.
+
 Flake8: 0 errors/warnings.
 """
 
@@ -55,11 +59,12 @@ _ANALYSIS_CONCURRENCY = 8
 # Full article text cap — Spaces apply truncation=True internally.
 _TEXT_LIMIT_ARTICLE = 8000
 
-# 48h primary window. 7d fallback if primary yields nothing.
-_ANALYSIS_WINDOW_HOURS = 48
-_ANALYSIS_FALLBACK_WINDOW_HOURS = 168
+# Primary window: 7 days by created_at — covers ingestion lag where
+# articles published weeks ago are ingested today. 48h fallback removed;
+# 7d is now the floor. Backfill handles anything older.
+_ANALYSIS_WINDOW_HOURS = 168  # 7 days
 
-# Safety cap per cycle.
+# Safety cap per regular cycle — backfill has no cap.
 _MAX_ARTICLES_PER_CYCLE = 200
 
 _analysis_running = False
@@ -145,8 +150,18 @@ def _spaces_call(
             json={"data": [text]},
         )
         r1.raise_for_status()
-        event_id = r1.json()["event_id"]
+
+        r1_json = r1.json()
         r1.close()
+
+        if not r1_json or "event_id" not in r1_json:
+            print(
+                f"Space [{fn_name}]: unexpected response shape "
+                f"— {r1_json} — Space may still be building."
+            )
+            return None
+
+        event_id = r1_json["event_id"]
 
         # Step 2: stream SSE until result line.
         r2 = session.get(
@@ -420,13 +435,14 @@ def _score_article(article: dict) -> dict:
     return {"id": article["id"], "update": update_data}
 
 
-# ── Windowed article fetch ────────────────────────────────────────────────────
+# ── Windowed article fetch (by created_at) ────────────────────────────────────
 
 
 def _fetch_unscored_articles(window_hours: int) -> list:
     """
-    Fetch unscored articles published within the last `window_hours`.
-    Full content fetched — all three models need the article body.
+    Fetch unscored articles ingested within the last `window_hours`.
+    Filters by created_at (ingestion time) not published_at so articles
+    published weeks ago but ingested today are always scored.
     """
     cutoff = (
         datetime.now(timezone.utc) - timedelta(hours=window_hours)
@@ -435,8 +451,8 @@ def _fetch_unscored_articles(window_hours: int) -> list:
         supabase.table("articles")
         .select("id, title, source, published_at")
         .is_("sentiment_score", "null")
-        .gte("published_at", cutoff)
-        .order("published_at", desc=True)
+        .gte("created_at", cutoff)
+        .order("created_at", desc=True)
         .limit(_MAX_ARTICLES_PER_CYCLE)
         .execute()
     )
@@ -463,17 +479,104 @@ def _fetch_unscored_articles(window_hours: int) -> list:
     return articles
 
 
-# ── Public entry point ────────────────────────────────────────────────────────
+# ── Backfill — no time window ─────────────────────────────────────────────────
+
+
+def _fetch_all_unscored_articles() -> list:
+    """
+    Fetch ALL unscored articles regardless of age.
+    Used for one-time backfill of articles missed by the 7d window.
+    Pages through in batches of 1000 to avoid Supabase row limits.
+    """
+    all_articles: list = []
+    page_size = 1000
+    offset = 0
+
+    while True:
+        response = (
+            supabase.table("articles")
+            .select("id, title, source, published_at")
+            .is_("sentiment_score", "null")
+            .order("created_at", desc=True)
+            .range(offset, offset + page_size - 1)
+            .execute()
+        )
+        batch = response.data or []
+        if not batch:
+            break
+
+        ids = [a["id"] for a in batch]
+        content_rows = (
+            supabase.table("articles")
+            .select("id, content")
+            .in_("id", ids)
+            .execute()
+            .data
+        ) or []
+        content_map = {
+            r["id"]: (r.get("content") or "")
+            for r in content_rows
+        }
+        for a in batch:
+            a["content"] = content_map.get(a["id"], "")
+
+        all_articles.extend(batch)
+        offset += page_size
+
+        if len(batch) < page_size:
+            break
+
+    print(f"Backfill: found {len(all_articles)} unscored articles total.")
+    return all_articles
+
+
+# ── Shared gather logic ───────────────────────────────────────────────────────
+
+
+async def _run_analysis(articles: list, label: str) -> None:
+    """
+    Score and persist a list of articles concurrently.
+    Shared by analyze_unscored_articles and backfill_all_articles.
+    """
+    print(
+        f"{label}: analyzing {len(articles)} articles "
+        f"(concurrency={_ANALYSIS_CONCURRENCY}, stagger=0.5s)..."
+    )
+
+    semaphore = asyncio.Semaphore(_ANALYSIS_CONCURRENCY)
+
+    async def _process_one(article: dict, index: int) -> None:
+        await asyncio.sleep(index * 0.5)
+        async with semaphore:
+            result = await asyncio.to_thread(_score_article, article)
+            if result.get("update"):
+                await asyncio.to_thread(
+                    lambda r=result: (
+                        supabase.table("articles")
+                        .update(r["update"])
+                        .eq("id", r["id"])
+                        .execute()
+                    )
+                )
+
+    await asyncio.gather(
+        *[_process_one(a, i) for i, a in enumerate(articles)]
+    )
+
+    del articles
+    gc.collect()
+    print(f"{label}: complete.")
+
+
+# ── Public entry points ───────────────────────────────────────────────────────
 
 
 async def analyze_unscored_articles() -> None:
     """
-    Async entry point called by APScheduler and debug routes.
-
-    Fetches unscored articles from the last 48h (7d fallback).
-    Processes up to _ANALYSIS_CONCURRENCY=8 articles simultaneously.
-    Each article staggered by 0.5s × index to spread Space calls.
-    Supabase updates run via to_thread — event loop never blocked.
+    Async entry point called by APScheduler every 5 minutes.
+    Scores articles ingested in the last 7 days (created_at window).
+    7 days matches standard news app display conventions and covers
+    ingestion lag where old articles are ingested well after publish.
     """
     global _analysis_running
 
@@ -488,48 +591,40 @@ async def analyze_unscored_articles() -> None:
         )
 
         if not articles:
-            print(
-                f"No unscored articles in last {_ANALYSIS_WINDOW_HOURS}h — "
-                f"trying {_ANALYSIS_FALLBACK_WINDOW_HOURS}h fallback..."
-            )
-            articles = await asyncio.to_thread(
-                _fetch_unscored_articles, _ANALYSIS_FALLBACK_WINDOW_HOURS
-            )
-
-        if not articles:
-            print("No unscored articles found.")
+            print("No unscored articles found in last 7 days.")
             return
 
-        print(
-            f"Analyzing {len(articles)} unscored articles "
-            f"(concurrency={_ANALYSIS_CONCURRENCY}, stagger=0.5s)..."
-        )
-
-        semaphore = asyncio.Semaphore(_ANALYSIS_CONCURRENCY)
-
-        async def _process_one(article: dict, index: int) -> None:
-            await asyncio.sleep(index * 0.5)
-            async with semaphore:
-                result = await asyncio.to_thread(_score_article, article)
-                if result.get("update"):
-                    await asyncio.to_thread(
-                        lambda r=result: (
-                            supabase.table("articles")
-                            .update(r["update"])
-                            .eq("id", r["id"])
-                            .execute()
-                        )
-                    )
-
-        await asyncio.gather(
-            *[_process_one(a, i) for i, a in enumerate(articles)]
-        )
-
-        del articles
-        gc.collect()
-        print("Analysis cycle complete.")
+        await _run_analysis(articles, "Analysis")
 
     except Exception as exc:
         print(f"Analysis cycle failed: {exc}")
+    finally:
+        _analysis_running = False
+
+
+async def backfill_all_articles() -> None:
+    """
+    One-time backfill — scores ALL unscored articles in the database
+    regardless of age. Called via POST /debug/backfill.
+    Pages in batches of 1000, no article cap.
+    """
+    global _analysis_running
+
+    if _analysis_running:
+        print("Analysis already running — skipping backfill.")
+        return
+
+    _analysis_running = True
+    try:
+        articles = await asyncio.to_thread(_fetch_all_unscored_articles)
+
+        if not articles:
+            print("Backfill: no unscored articles found.")
+            return
+
+        await _run_analysis(articles, "Backfill")
+
+    except Exception as exc:
+        print(f"Backfill failed: {exc}")
     finally:
         _analysis_running = False
