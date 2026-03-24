@@ -1,5 +1,5 @@
 """
-NewsScope application configuration.
+NewsScope application configurations.
 
 All environment variables are centralised here via a pydantic-settings
 Settings class. Import `settings` — never os.getenv() directly elsewhere.
