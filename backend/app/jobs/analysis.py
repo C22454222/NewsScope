@@ -6,12 +6,12 @@ zero Inference API credits consumed:
 
   Sentiment      : distilbert-base-uncased-finetuned-sst-2-english
                    Space: c22454222-sentiment.hf.space
-                   Endpoint: /gradio_api/call/lambda
+                   Endpoint: /gradio_api/call/classify_sentiment
                    Returns POSITIVE / NEGATIVE scores → mapped to [-1, +1]
 
   General bias   : valurank/distilroberta-bias
                    Space: c22454222-general-bias.hf.space
-                   Endpoint: /gradio_api/call/lambda
+                   Endpoint: /gradio_api/call/classify_general_bias
                    Returns BIASED / UNBIASED
 
   Political bias : C22454222/political-bias-roberta (fine-tuned RoBERTa)
@@ -27,7 +27,7 @@ All three use the Gradio 5.x two-step SSE protocol:
 No timeouts set — Render free tier does not impose request timeouts and
 HF Spaces cold starts can take 30-90s. Full article text is sent to
 every Space; each applies truncation=True internally so the underlying
-model only sees its token limit (512 for all three).
+model only sees its token limit (512 tokens for all three).
 
 Flake8: 0 errors/warnings.
 """
@@ -86,6 +86,9 @@ def _get_session() -> requests.Session:
     global _session
     if _session is None:
         _session = requests.Session()
+        # Force HTTP/1.1 — prevents ConnectionTerminated errors from
+        # HF Spaces which can drop HTTP/2 connections mid-stream.
+        _session.headers.update({"Connection": "keep-alive"})
     return _session
 
 
@@ -117,6 +120,10 @@ def _spaces_call(
     Step 2: GET {base}/gradio_api/call/{fn_name}/{event_id}
             Streams SSE lines. The "data:" line holds a JSON list —
             payload[0] is what the Space function returned.
+
+    Handles two payload shapes across Gradio versions:
+      - payload[0] is already a list/dict  → returned as-is
+      - payload[0] is a JSON string        → parsed before returning
 
     No timeout set — HF Spaces cold starts can legitimately take
     30-90s and Render does not impose request time limits.
@@ -153,7 +160,18 @@ def _spaces_call(
                 continue
             payload = json.loads(raw_line[len("data:"):].strip())
             r2.close()
-            return payload[0]
+
+            result = payload[0]
+
+            # Gradio sometimes serialises the return value as a JSON
+            # string rather than a parsed object — unwrap if needed.
+            if isinstance(result, str):
+                try:
+                    result = json.loads(result)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+            return result
 
     except requests.exceptions.ConnectionError as exc:
         print(f"Space connection error [{fn_name}]: {exc}")
@@ -196,11 +214,11 @@ def _get_source_political_leaning(source_name: str) -> float:
 
 def _sentiment_score(text: str) -> Optional[float]:
     """
-    Score sentiment via the sentiment Space (/gradio_api/call/lambda).
+    Score sentiment via classify_sentiment on the sentiment Space.
     Returns float in [-1.0, +1.0]: positive - negative scores.
     Returns None if the Space call fails — retried next cycle.
     """
-    items = _spaces_call(SENTIMENT_SPACE, "lambda", text)
+    items = _spaces_call(SENTIMENT_SPACE, "classify_sentiment", text)
     if not items:
         print("Sentiment Space call failed — will retry next cycle.")
         return None
@@ -251,11 +269,12 @@ def _detect_general_bias(
     text: str,
 ) -> Tuple[Optional[str], Optional[float]]:
     """
-    Classify BIASED / UNBIASED via the general bias Space
-    (/gradio_api/call/lambda).
-    Returns (label, confidence) or (None, None) on failure.
+    Classify BIASED / UNBIASED via classify_general_bias on the
+    general bias Space. Returns (label, confidence) or (None, None).
     """
-    items = _spaces_call(GENERAL_BIAS_SPACE, "lambda", text)
+    items = _spaces_call(
+        GENERAL_BIAS_SPACE, "classify_general_bias", text
+    )
     if not items:
         print("General bias Space call failed — will retry next cycle.")
         return None, None
@@ -300,10 +319,9 @@ def _detect_political_bias(
     content: str,
 ) -> Tuple[Optional[str], Optional[float]]:
     """
-    Classify LEFT / CENTER / RIGHT via the political bias Space
-    (/gradio_api/call/classify_bias).
-    Full title + content sent — Space truncates to 512 tokens internally.
-    Returns (label, confidence) or (None, None) on failure.
+    Classify LEFT / CENTER / RIGHT via classify_bias on the political
+    bias Space. Full title + content sent — Space truncates to 512
+    tokens internally. Returns (label, confidence) or (None, None).
     """
     text = f"{title}. {content}".strip()
 
@@ -339,7 +357,7 @@ def _score_article(article: dict) -> dict:
 
     Full article text (title + content, capped at _TEXT_LIMIT_ARTICLE)
     sent to all three Spaces. Each Space applies truncation=True so
-    the model only sees its token limit (512 for all three).
+    the model only sees its token limit (512 tokens for all three).
 
     Three remote Space calls: sentiment, general bias, political bias.
     Source-level political leaning is a local DB lookup — no network.
