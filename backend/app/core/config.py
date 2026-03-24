@@ -32,37 +32,35 @@ class Settings:
 
     # ── HuggingFace ───────────────────────────────────────────────────────────
     HF_API_TOKEN: str = os.getenv("HF_API_TOKEN", "")
-    HF_SENTIMENT_MODEL: str = os.getenv(
-        "HF_SENTIMENT_MODEL",
-        "distilbert/distilbert-base-uncased-finetuned-sst-2-english",
-    )
+
+    # Zero-shot NLI — still used for topic/category classification during
+    # ingestion. Called rarely so Inference API credit cost is negligible.
     HF_BIAS_MODEL: str = os.getenv(
         "HF_BIAS_MODEL",
-        # MoritzLaurer/mDeBERTa-v3-base-mnli-xnli — confirmed on HF
-        # Inference API. Zero-shot NLI, 0.3B params. Replaces
-        # facebook/bart-large-mnli (0.4B) which caused OOM via 90s
-        # socket stalls on cold start. Same candidate_labels payload
-        # shape and response format. DeBERTa-v3 outperforms BART on
-        # NLI benchmarks. Multilingual — handles RTÉ, Irish Times,
-        # Euronews content better than English-only BART.
         "MoritzLaurer/mDeBERTa-v3-base-mnli-xnli",
     )
-    HF_GENERAL_BIAS_MODEL: str = os.getenv(
-        "HF_GENERAL_BIAS_MODEL",
-        # valurank/distilroberta-bias — confirmed on HF Inference API.
-        # Returns BIASED / UNBIASED. 3.79k downloads.
-        "valurank/distilroberta-bias",
-    )
+
+    # ── HuggingFace Spaces (free CPU, unlimited requests, no credits) ─────────
     HF_POLITICAL_BIAS_SPACE: str = os.getenv(
         "HF_POLITICAL_BIAS_SPACE",
-        # Fine-tuned RoBERTa model hosted on HF Spaces (base URL only).
-        # Do NOT append /run/predict — Gradio 5.x uses a two-step
-        # queue-based SSE API. analysis.py appends /call/predict and
-        # /call/predict/{event_id} itself.
-        # Trained on ramybaly/Article-Bias-Prediction (37,554 AllSides
-        # articles). 87.3% accuracy, 87.3% macro F1 (LEFT/CENTER/RIGHT).
-        # Zero RAM footprint on Render — inference runs on HF Spaces.
+        # Fine-tuned RoBERTa — C22454222/political-bias-roberta.
+        # Trained on 37,554 AllSides articles. 87.3% accuracy / macro F1.
+        # Gradio 5.x endpoint: /gradio_api/call/classify_bias
         "https://c22454222-political-bias-api.hf.space",
+    )
+    HF_SENTIMENT_SPACE: str = os.getenv(
+        "HF_SENTIMENT_SPACE",
+        # distilbert-base-uncased-finetuned-sst-2-english wrapped in Gradio.
+        # Gradio 5.x endpoint: /gradio_api/call/lambda
+        # Returns list of {label, score} for POSITIVE / NEGATIVE.
+        "https://c22454222-sentiment.hf.space",
+    )
+    HF_GENERAL_BIAS_SPACE: str = os.getenv(
+        "HF_GENERAL_BIAS_SPACE",
+        # valurank/distilroberta-bias wrapped in Gradio.
+        # Gradio 5.x endpoint: /gradio_api/call/lambda
+        # Returns list of {label, score} for BIASED / UNBIASED.
+        "https://c22454222-general-bias.hf.space",
     )
 
     # ── Firebase ──────────────────────────────────────────────────────────────

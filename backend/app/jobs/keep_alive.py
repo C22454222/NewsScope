@@ -2,12 +2,12 @@
 NewsScope keep-alive pinger.
 
 Pings /health every 14 minutes to prevent Render free tier spin-down.
-Pings HF Political Bias Space every 10 minutes to prevent Gradio cold
+Pings all three HF Spaces every 10 minutes to prevent Gradio cold
 starts — free Spaces sleep after ~15 minutes of inactivity, causing
-30-90s cold start delays that exceed _SPACES_TIMEOUT in analysis.py.
-Analysis is handled exclusively by APScheduler (every 5 minutes) —
-keep-alive no longer triggers analysis batches to avoid race conditions
-with the _heavy_job_running lock during ingestion.
+30-90s cold start delays on the next analysis cycle.
+
+All three Spaces are pinged in a single scheduled job so they share
+the same 10-minute interval and a single scheduler thread.
 
 Flake8: 0 errors/warnings.
 """
@@ -19,6 +19,8 @@ from app.core.config import settings
 
 BACKEND_URL = settings.RENDER_EXTERNAL_URL
 POLITICAL_BIAS_SPACE = settings.HF_POLITICAL_BIAS_SPACE
+SENTIMENT_SPACE = settings.HF_SENTIMENT_SPACE
+GENERAL_BIAS_SPACE = settings.HF_GENERAL_BIAS_SPACE
 
 # Module-level guard — prevents duplicate schedulers if lifespan
 # or Uvicorn worker init somehow calls start_keep_alive() twice.
@@ -27,10 +29,8 @@ _scheduler: BackgroundScheduler | None = None
 
 def keep_alive() -> None:
     """
-    Ping health endpoint to prevent Render spin-down.
+    Ping /health to prevent Render spin-down.
     Response closed immediately to release socket memory.
-    Analysis scheduling is handled by APScheduler — not triggered
-    here to prevent race conditions with ingestion memory lock.
     """
     try:
         response = requests.get(f"{BACKEND_URL}/health", timeout=10)
@@ -43,26 +43,32 @@ def keep_alive() -> None:
         print(f"Keep-alive ping error: {exc}")
 
 
-def ping_political_bias_space() -> None:
+def ping_spaces() -> None:
     """
-    GET the HF Space root to prevent Gradio cold starts.
+    Ping all three HF Spaces to prevent Gradio cold starts.
 
-    Free HF Spaces sleep after ~15 minutes of inactivity. A cold start
-    forces the Space to reload the RoBERTa model (~1.3GB) which takes
-    30-90s and exceeds _SPACES_TIMEOUT in analysis.py. Pinging every
-    10 minutes keeps the Space warm so article scoring calls complete
-    in 2-5s instead of timing out.
+    Free Spaces sleep after ~15 minutes of inactivity — a cold start
+    forces the Space to reload its model which takes 30-90s. Pinging
+    every 10 minutes keeps all three warm so analysis calls complete
+    in 2-5s instead of timing out or stalling.
 
-    A simple GET to the root is enough — no inference triggered.
+    A simple GET to the Space root is enough — no inference triggered.
     Failures are silently swallowed; a sleeping Space will just wake
     on the next analysis cycle instead.
     """
-    try:
-        response = requests.get(POLITICAL_BIAS_SPACE, timeout=10)
-        response.close()
-        print("Political bias Space ping successful")
-    except Exception as exc:
-        print(f"Political bias Space ping error: {exc}")
+    for name, url in (
+        ("Political bias", POLITICAL_BIAS_SPACE),
+        ("Sentiment", SENTIMENT_SPACE),
+        ("General bias", GENERAL_BIAS_SPACE),
+    ):
+        if not url:
+            continue
+        try:
+            response = requests.get(url, timeout=15)
+            response.close()
+            print(f"{name} Space ping successful")
+        except Exception as exc:
+            print(f"{name} Space ping error: {exc}")
 
 
 def start_keep_alive() -> None:
@@ -75,14 +81,16 @@ def start_keep_alive() -> None:
     global _scheduler
 
     if _scheduler is not None and _scheduler.running:
-        print("Keep-alive scheduler already running — skipping duplicate start.")
+        print(
+            "Keep-alive scheduler already running — skipping duplicate start."
+        )
         return
 
     _scheduler = BackgroundScheduler()
     _scheduler.add_job(keep_alive, "interval", minutes=14)
-    _scheduler.add_job(ping_political_bias_space, "interval", minutes=10)
+    _scheduler.add_job(ping_spaces, "interval", minutes=10)
     _scheduler.start()
     print(
         "Keep-alive scheduler started "
-        "(Render ping every 14 min, Space ping every 10 min)"
+        "(Render ping every 14 min, Space pings every 10 min)"
     )

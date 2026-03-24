@@ -1,35 +1,33 @@
 """
 NewsScope Analysis Service.
 
-Three models run for article analysis:
-  Sentiment      : distilbert/distilbert-base-uncased-finetuned-sst-2-english
-                   via HuggingFace Serverless Inference API
+Three models score every article — all run on free HuggingFace Spaces,
+zero Inference API credits consumed:
+
+  Sentiment      : distilbert-base-uncased-finetuned-sst-2-english
+                   Space: c22454222-sentiment.hf.space
+                   Endpoint: /gradio_api/call/lambda
+                   Returns POSITIVE / NEGATIVE scores → mapped to [-1, +1]
+
   General bias   : valurank/distilroberta-bias
-                   via HuggingFace Serverless Inference API
-  Political bias : C22454222/political-bias-roberta
-                   via HuggingFace Spaces (fine-tuned RoBERTa)
-                   Trained on ramybaly/Article-Bias-Prediction (37,554
-                   AllSides articles). 87.3% accuracy, 87.3% macro F1.
-                   Returns LEFT / CENTER / RIGHT with confidence score.
+                   Space: c22454222-general-bias.hf.space
+                   Endpoint: /gradio_api/call/lambda
+                   Returns BIASED / UNBIASED
 
-Zero local RAM footprint on Render — all inference runs remotely.
-No transformers/torch loaded on Render.
+  Political bias : C22454222/political-bias-roberta (fine-tuned RoBERTa)
+                   Space: c22454222-political-bias-api.hf.space
+                   Endpoint: /gradio_api/call/classify_bias
+                   Returns LEFT / CENTER / RIGHT + confidence score
+                   Trained on 37,554 AllSides articles. 87.3% acc / F1.
 
-Political bias input: title + full article body concatenated, truncated
-to 512 tokens. RoBERTa tokenizer handles subword tokenisation so 512
-tokens ≈ 350-400 words of actual article content — enough to capture
-the political framing of any news article.
+All three use the Gradio 5.x two-step SSE protocol:
+  Step 1 — POST {base}/gradio_api/call/{fn}   → {"event_id": "<uuid>"}
+  Step 2 — GET  {base}/gradio_api/call/{fn}/{event_id}  → SSE stream
 
-CHANGES FROM v6:
-
-1. CORRECT GRADIO API ENDPOINT (replaces /call/predict):
-   Discovered via /gradio_api/info that the Space exposes the endpoint
-   as /classify_bias (matching the Python function name), not /predict.
-   Gradio 5.x also prefixes all API routes with /gradio_api/ — so the
-   correct paths are:
-     Step 1 — POST {base}/gradio_api/call/classify_bias
-     Step 2 — GET  {base}/gradio_api/call/classify_bias/{event_id}
-   Previously used /call/predict which returned 404 Not Found.
+No timeouts set — Render free tier does not impose request timeouts and
+HF Spaces cold starts can take 30-90s. Full article text is sent to
+every Space; each applies truncation=True internally so the underlying
+model only sees its token limit (512 for all three).
 
 Flake8: 0 errors/warnings.
 """
@@ -39,7 +37,7 @@ import gc
 import json
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 import requests
 
@@ -47,38 +45,21 @@ from app.core.config import settings
 from app.db.supabase import supabase
 
 
-HF_API_TOKEN = settings.HF_API_TOKEN
-SENTIMENT_MODEL = settings.HF_SENTIMENT_MODEL.strip()
-GENERAL_BIAS_MODEL = settings.HF_GENERAL_BIAS_MODEL.strip()
 POLITICAL_BIAS_SPACE = settings.HF_POLITICAL_BIAS_SPACE.strip()
+SENTIMENT_SPACE = settings.HF_SENTIMENT_SPACE.strip()
+GENERAL_BIAS_SPACE = settings.HF_GENERAL_BIAS_SPACE.strip()
 
-_HF_API_BASE = "https://router.huggingface.co/hf-inference/models"
-
-# Raised from 5 → 8: staggered launch means HF calls spread over time.
-# At 8 concurrent × 0.5s stagger = calls arrive over 3.5s window.
+# 8 concurrent articles × 0.5s stagger = calls spread over 3.5s window.
 _ANALYSIS_CONCURRENCY = 8
 
-# Text limit for sentiment and general bias models — 512 chars.
-_TEXT_LIMIT = 512
+# Full article text cap — Spaces apply truncation=True internally.
+_TEXT_LIMIT_ARTICLE = 8000
 
-# Text limit for political bias model — 512 tokens (RoBERTa tokenizer).
-# Title + body concatenated. 512 tokens ≈ 350-400 words of article text.
-_TEXT_LIMIT_POLITICAL = 1500
-
-_REQUEST_TIMEOUT = 30
-
-# Longer timeout for HF Spaces — cold start can take 30-60s.
-_SPACES_TIMEOUT = 60
-
-# 48h window: matches app display window. Articles older than 48h
-# are either already scored or archived — no need to re-process.
+# 48h primary window. 7d fallback if primary yields nothing.
 _ANALYSIS_WINDOW_HOURS = 48
+_ANALYSIS_FALLBACK_WINDOW_HOURS = 168
 
-# Fallback window if 48h yields 0 results (e.g. server was down).
-_ANALYSIS_FALLBACK_WINDOW_HOURS = 168  # 7 days
-
-# Max articles per cycle — safety cap. At 8 concurrent with 0.5s
-# stagger + ~3s per article, 200 articles ≈ 75 seconds total.
+# Safety cap per cycle.
 _MAX_ARTICLES_PER_CYCLE = 200
 
 _analysis_running = False
@@ -118,69 +99,67 @@ def _reset_session() -> None:
         _session = None
 
 
-# ── Inference API helper ──────────────────────────────────────────────────────
+# ── Generic Gradio Space caller ───────────────────────────────────────────────
 
 
-def _inference_api_call(
-    model: str,
+def _spaces_call(
+    space_base: str,
+    fn_name: str,
     text: str,
-    retries: int = 2,
-    timeout: int = _REQUEST_TIMEOUT,
-) -> Optional[list]:
+) -> Optional[Any]:
     """
-    POST to HuggingFace Serverless Inference with retry + warm-up handling.
-    Returns raw list of label/score dicts, or None on failure.
+    Call any Gradio 5.x Space via the two-step SSE protocol.
+
+    Step 1: POST {base}/gradio_api/call/{fn_name}
+            Body: {"data": ["<text>"]}
+            Returns: {"event_id": "<uuid>"}
+
+    Step 2: GET {base}/gradio_api/call/{fn_name}/{event_id}
+            Streams SSE lines. The "data:" line holds a JSON list —
+            payload[0] is what the Space function returned.
+
+    No timeout set — HF Spaces cold starts can legitimately take
+    30-90s and Render does not impose request time limits.
+    Returns payload[0] on success, None on any error.
     """
-    if not HF_API_TOKEN:
-        print("HF_API_TOKEN not set — skipping Inference API call.")
+    if not space_base:
+        print(f"Space URL not configured for {fn_name} — skipping.")
         return None
 
-    url = f"{_HF_API_BASE}/{model}"
-    headers = {"Authorization": f"Bearer {HF_API_TOKEN}"}
-    payload = {"inputs": text[:_TEXT_LIMIT]}
+    base = space_base.rstrip("/")
 
-    for attempt in range(retries):
+    try:
         session = _get_session()
-        try:
-            response = session.post(
-                url, headers=headers, json=payload, timeout=timeout,
-            )
 
-            if response.status_code == 503:
-                wait = 10 + (attempt * 5)
-                print(
-                    f"Model {model} loading, waiting {wait}s "
-                    f"(attempt {attempt + 1})..."
-                )
-                response.close()
-                time.sleep(wait)
+        # Step 1: submit job, receive event_id.
+        r1 = session.post(
+            f"{base}/gradio_api/call/{fn_name}",
+            headers={"Content-Type": "application/json"},
+            json={"data": [text]},
+        )
+        r1.raise_for_status()
+        event_id = r1.json()["event_id"]
+        r1.close()
+
+        # Step 2: stream SSE until result line.
+        r2 = session.get(
+            f"{base}/gradio_api/call/{fn_name}/{event_id}",
+            stream=True,
+        )
+        r2.raise_for_status()
+
+        for raw_line in r2.iter_lines(decode_unicode=True):
+            if not raw_line or not raw_line.startswith("data:"):
                 continue
+            payload = json.loads(raw_line[len("data:"):].strip())
+            r2.close()
+            return payload[0]
 
-            response.raise_for_status()
-            result = response.json()
-            response.close()
-
-            if isinstance(result, list) and result:
-                return result[0] if isinstance(result[0], list) else result
-
-        except (
-            requests.exceptions.ReadTimeout,
-            requests.exceptions.ConnectionError,
-        ) as exc:
-            print(
-                f"Inference API connection error [{model}] "
-                f"attempt {attempt + 1}: {exc}"
-            )
-            _reset_session()
-            if attempt < retries - 1:
-                time.sleep(2 ** attempt)
-
-        except Exception as exc:
-            print(
-                f"Inference API error [{model}] attempt {attempt + 1}: {exc}"
-            )
-            if attempt < retries - 1:
-                time.sleep(2 ** attempt)
+    except requests.exceptions.ConnectionError as exc:
+        print(f"Space connection error [{fn_name}]: {exc}")
+        _reset_session()
+    except Exception as exc:
+        print(f"Space call error [{fn_name}]: {exc}")
 
     return None
 
@@ -216,9 +195,14 @@ def _get_source_political_leaning(source_name: str) -> float:
 
 
 def _sentiment_score(text: str) -> Optional[float]:
-    items = _inference_api_call(SENTIMENT_MODEL, text)
+    """
+    Score sentiment via the sentiment Space (/gradio_api/call/lambda).
+    Returns float in [-1.0, +1.0]: positive - negative scores.
+    Returns None if the Space call fails — retried next cycle.
+    """
+    items = _spaces_call(SENTIMENT_SPACE, "lambda", text)
     if not items:
-        print("Sentiment API call failed — will retry next cycle.")
+        print("Sentiment Space call failed — will retry next cycle.")
         return None
 
     try:
@@ -228,8 +212,6 @@ def _sentiment_score(text: str) -> Optional[float]:
             score = item["score"]
             if "negative" in label:
                 sentiment_map["negative"] = score
-            elif "neutral" in label:
-                sentiment_map["neutral"] = score
             elif "positive" in label:
                 sentiment_map["positive"] = score
 
@@ -255,17 +237,27 @@ def _get_political_bias(source_name: str) -> Tuple[float, float]:
     else:
         label = "CENTER"
 
-    print(f"Political bias (source): {label} ({source_name} = {bias_score:.2f})")
+    print(
+        f"Political bias (source): {label} "
+        f"({source_name} = {bias_score:.2f})"
+    )
     return bias_score, 0.5
 
 
 # ── General bias ──────────────────────────────────────────────────────────────
 
 
-def _detect_general_bias(text: str) -> Tuple[Optional[str], Optional[float]]:
-    items = _inference_api_call(GENERAL_BIAS_MODEL, text)
+def _detect_general_bias(
+    text: str,
+) -> Tuple[Optional[str], Optional[float]]:
+    """
+    Classify BIASED / UNBIASED via the general bias Space
+    (/gradio_api/call/lambda).
+    Returns (label, confidence) or (None, None) on failure.
+    """
+    items = _spaces_call(GENERAL_BIAS_SPACE, "lambda", text)
     if not items:
-        print("General bias API call failed — will retry next cycle.")
+        print("General bias Space call failed — will retry next cycle.")
         return None, None
 
     try:
@@ -278,7 +270,7 @@ def _detect_general_bias(text: str) -> Tuple[Optional[str], Optional[float]]:
         ):
             label = "BIASED"
         elif (
-            "UNBIASED" in top_upper or "NON" in top_upper or "NEUTRAL" in top_upper
+            "UNBIASED" in top_upper or "UN" in top_upper or "NON" in top_upper or "NEUTRAL" in top_upper
         ):
             label = "UNBIASED"
         elif top_upper in ("LABEL_1", "1"):
@@ -288,7 +280,7 @@ def _detect_general_bias(text: str) -> Tuple[Optional[str], Optional[float]]:
         else:
             print(
                 f"Unknown general bias label: '{top_label}' "
-                f"— defaulting to UNBIASED"
+                "— defaulting to UNBIASED"
             )
             label = "UNBIASED"
 
@@ -300,7 +292,7 @@ def _detect_general_bias(text: str) -> Tuple[Optional[str], Optional[float]]:
         return None, None
 
 
-# ── Article-level political bias (fine-tuned RoBERTa via HF Spaces) ───────────
+# ── Article-level political bias (fine-tuned RoBERTa via HF Space) ────────────
 
 
 def _detect_political_bias(
@@ -308,84 +300,34 @@ def _detect_political_bias(
     content: str,
 ) -> Tuple[Optional[str], Optional[float]]:
     """
-    Classify political bias at article level using fine-tuned RoBERTa.
-
-    Model: C22454222/political-bias-roberta
-    Hosted: HuggingFace Spaces (c22454222-political-bias-api.hf.space)
-    Trained on: ramybaly/Article-Bias-Prediction (37,554 AllSides articles)
-    Performance: 87.3% accuracy, 87.3% macro F1 (LEFT/CENTER/RIGHT)
-
-    Gradio 5.x API protocol (two-step SSE):
-      Step 1 — POST {base}/gradio_api/call/classify_bias
-               Body: {"data": ["<article text>"]}
-               Returns: {"event_id": "<uuid>"}
-      Step 2 — GET  {base}/gradio_api/call/classify_bias/{event_id}
-               Streams SSE lines. The "data:" line contains a JSON list;
-               index [0] is the dict returned by classify_bias():
-               {"label": "LEFT"|"CENTER"|"RIGHT", "score": 0.xx}
-
-    Endpoint name /classify_bias confirmed via /gradio_api/info.
-    Prefix /gradio_api/ required by Gradio 5.x — /call/predict returns 404.
-    No new dependencies — uses the existing requests.Session.
-    Timeout _SPACES_TIMEOUT (60s) covers HF Spaces cold starts.
-    No HF_API_TOKEN required — Space is public.
+    Classify LEFT / CENTER / RIGHT via the political bias Space
+    (/gradio_api/call/classify_bias).
+    Full title + content sent — Space truncates to 512 tokens internally.
+    Returns (label, confidence) or (None, None) on failure.
     """
-    if not POLITICAL_BIAS_SPACE:
-        print("HF_POLITICAL_BIAS_SPACE not set — skipping political bias.")
-        return None, None
-
     text = f"{title}. {content}".strip()
-    text = text[:_TEXT_LIMIT_POLITICAL]
 
     if len(text) < 10:
         print("Political bias: text too short — skipping.")
         return None, None
 
-    base = POLITICAL_BIAS_SPACE.rstrip("/")
+    result = _spaces_call(POLITICAL_BIAS_SPACE, "classify_bias", text)
+    if not result:
+        print("Political bias Space call failed — will retry next cycle.")
+        return None, None
 
     try:
-        session = _get_session()
-
-        # Step 1: POST to /gradio_api/call/classify_bias → receive event_id.
-        r1 = session.post(
-            f"{base}/gradio_api/call/classify_bias",
-            headers={"Content-Type": "application/json"},
-            json={"data": [text]},
-            timeout=_SPACES_TIMEOUT,
+        label = result["label"].upper()
+        score = round(result["score"], 4)
+        print(
+            f"Political bias (article): {label} "
+            f"(confidence={score:.2%})"
         )
-        r1.raise_for_status()
-        event_id = r1.json()["event_id"]
+        return label, score
 
-        # Step 2: GET SSE stream → read until result line.
-        r2 = session.get(
-            f"{base}/gradio_api/call/classify_bias/{event_id}",
-            stream=True,
-            timeout=_SPACES_TIMEOUT,
-        )
-        r2.raise_for_status()
-
-        for raw_line in r2.iter_lines(decode_unicode=True):
-            if not raw_line or not raw_line.startswith("data:"):
-                continue
-            payload = json.loads(raw_line[len("data:"):].strip())
-            # payload is a list: [{"label": "RIGHT", "score": 0.91}]
-            result = payload[0]
-            label = result["label"].upper()
-            score = round(result["score"], 4)
-            print(
-                f"Political bias (article): {label} "
-                f"(confidence={score:.2%})"
-            )
-            return label, score
-
-    except requests.exceptions.Timeout:
-        print("Political bias: HF Space timed out — will retry next cycle.")
-        return None, None
     except Exception as exc:
-        print(f"Political bias error: {exc}")
+        print(f"Political bias parse error: {exc}")
         return None, None
-
-    return None, None
 
 
 # ── Single article scorer ─────────────────────────────────────────────────────
@@ -394,32 +336,32 @@ def _detect_political_bias(
 def _score_article(article: dict) -> dict:
     """
     Score a single article synchronously. Called via asyncio.to_thread.
-    Makes 3 remote calls: sentiment + general bias (HF Inference API)
-    + political bias (HF Spaces via two-step SSE).
-    Source-level political leaning sourced locally — no network call.
 
-    0.1s sleep between HF calls: per-article rate limit spacing.
-    The inter-article stagger (0.5s per article index) is applied
-    in _process_one before this function is called via to_thread.
+    Full article text (title + content, capped at _TEXT_LIMIT_ARTICLE)
+    sent to all three Spaces. Each Space applies truncation=True so
+    the model only sees its token limit (512 for all three).
+
+    Three remote Space calls: sentiment, general bias, political bias.
+    Source-level political leaning is a local DB lookup — no network.
+    0.1s sleep between Space calls to avoid bursting the same Space.
     """
     content = (article.get("content") or "")
     title = article.get("title") or ""
     source = article.get("source") or ""
 
-    # Short combined text for sentiment + general bias (512 char limit).
-    text_short = f"{title}. {content[:_TEXT_LIMIT]}".strip()
+    full_text = f"{title}. {content}".strip()[:_TEXT_LIMIT_ARTICLE]
 
-    if len(text_short) < 10:
+    if len(full_text) < 10:
         print(f"Skipping article {article['id']} — no content")
         return {}
 
-    sentiment = _sentiment_score(text_short)
+    sentiment = _sentiment_score(full_text)
     time.sleep(0.1)
 
     bias_score, bias_intensity = _get_political_bias(source)
     time.sleep(0.1)
 
-    general_bias_label, general_bias_score = _detect_general_bias(text_short)
+    general_bias_label, general_bias_score = _detect_general_bias(full_text)
     time.sleep(0.1)
 
     political_bias_label, political_bias_score = _detect_political_bias(
@@ -466,7 +408,7 @@ def _score_article(article: dict) -> dict:
 def _fetch_unscored_articles(window_hours: int) -> list:
     """
     Fetch unscored articles published within the last `window_hours`.
-    Content fetched in full — political bias model needs full body.
+    Full content fetched — all three models need the article body.
     """
     cutoff = (
         datetime.now(timezone.utc) - timedelta(hours=window_hours)
@@ -485,7 +427,6 @@ def _fetch_unscored_articles(window_hours: int) -> list:
     if not articles:
         return []
 
-    # Fetch full content for matched IDs.
     ids = [a["id"] for a in articles]
     content_rows = (
         supabase.table("articles")
@@ -511,11 +452,10 @@ async def analyze_unscored_articles() -> None:
     """
     Async entry point called by APScheduler and debug routes.
 
-    Fetches unscored articles from the last 48h (or 7d fallback).
+    Fetches unscored articles from the last 48h (7d fallback).
     Processes up to _ANALYSIS_CONCURRENCY=8 articles simultaneously.
-    Each article is launched with a 0.5s stagger to spread HF API
-    calls across time rather than clustering them all at T=0.
-    Supabase update runs in to_thread — never blocks the event loop.
+    Each article staggered by 0.5s × index to spread Space calls.
+    Supabase updates run via to_thread — event loop never blocked.
     """
     global _analysis_running
 
@@ -525,12 +465,10 @@ async def analyze_unscored_articles() -> None:
 
     _analysis_running = True
     try:
-        # Primary window: 48h.
         articles = await asyncio.to_thread(
             _fetch_unscored_articles, _ANALYSIS_WINDOW_HOURS
         )
 
-        # Fallback: 7 days if primary yields nothing.
         if not articles:
             print(
                 f"No unscored articles in last {_ANALYSIS_WINDOW_HOURS}h — "
@@ -552,9 +490,6 @@ async def analyze_unscored_articles() -> None:
         semaphore = asyncio.Semaphore(_ANALYSIS_CONCURRENCY)
 
         async def _process_one(article: dict, index: int) -> None:
-            # Stagger: article N waits N*0.5s before acquiring semaphore.
-            # Spreads HF calls across time — prevents 8 simultaneous
-            # requests all hitting the API at T=0.
             await asyncio.sleep(index * 0.5)
             async with semaphore:
                 result = await asyncio.to_thread(_score_article, article)
