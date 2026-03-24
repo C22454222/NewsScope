@@ -1,5 +1,5 @@
 """
-NewsScope FastAPI application entry point.
+NewsScope FastAPI application entry points.
 
 SCHEDULING OVERVIEW (v6 — chain-first, cron-as-safety-net):
 
