@@ -20,6 +20,10 @@ from app.core.config import settings
 BACKEND_URL = settings.RENDER_EXTERNAL_URL
 POLITICAL_BIAS_SPACE = settings.HF_POLITICAL_BIAS_SPACE
 
+# Module-level guard — prevents duplicate schedulers if lifespan
+# or Uvicorn worker init somehow calls start_keep_alive() twice.
+_scheduler: BackgroundScheduler | None = None
+
 
 def keep_alive() -> None:
     """
@@ -62,11 +66,22 @@ def ping_political_bias_space() -> None:
 
 
 def start_keep_alive() -> None:
-    """Start the background scheduler for keep-alive pings."""
-    scheduler = BackgroundScheduler()
-    scheduler.add_job(keep_alive, "interval", minutes=14)
-    scheduler.add_job(ping_political_bias_space, "interval", minutes=10)
-    scheduler.start()
+    """
+    Start the background scheduler for keep-alive pings.
+
+    Guard prevents duplicate schedulers — safe to call multiple times;
+    only the first call has any effect. Subsequent calls are no-ops.
+    """
+    global _scheduler
+
+    if _scheduler is not None and _scheduler.running:
+        print("Keep-alive scheduler already running — skipping duplicate start.")
+        return
+
+    _scheduler = BackgroundScheduler()
+    _scheduler.add_job(keep_alive, "interval", minutes=14)
+    _scheduler.add_job(ping_political_bias_space, "interval", minutes=10)
+    _scheduler.start()
     print(
         "Keep-alive scheduler started "
         "(Render ping every 14 min, Space ping every 10 min)"

@@ -1,5 +1,5 @@
 """
-NewsScope FastAPI application entry point. Fix
+NewsScope FastAPI application entry point.
 
 SCHEDULING OVERVIEW (v6 — chain-first, cron-as-safety-net):
 
@@ -49,6 +49,12 @@ MEMORY MODEL (512MB Render free tier):
   - Analysis starts after ingestion RAM is freed (gc.collect() in
     run_ingestion_cycle finalizer), so no memory overlap.
 
+KEEP-ALIVE:
+  - start_keep_alive() is guarded by a module-level _scheduler global —
+    calling it twice is a no-op, preventing duplicate scheduler threads.
+  - An immediate ping fires on startup via asyncio.to_thread so there
+    is no 14-minute gap between deploy and the first keep-alive ping.
+
 Flake8: 0 errors/warnings.
 """
 
@@ -74,7 +80,7 @@ from app.jobs.analysis import analyze_unscored_articles
 from app.jobs.archiving import archive_old_articles
 from app.jobs.fact_checking import batch_factcheck_recent
 from app.jobs.ingestion import run_ingestion_cycle, set_main_event_loop
-from app.jobs.keep_alive import start_keep_alive
+from app.jobs.keep_alive import keep_alive, start_keep_alive  # keep_alive added
 from app.routes import articles, sources, users
 from app.schemas import (
     BiasProfile,
@@ -87,6 +93,7 @@ from app.schemas import (
 # ── Main event loop — captured in lifespan for sync bridges ──────────────────
 _main_loop: Optional[asyncio.AbstractEventLoop] = None
 
+
 # ── Job guards ────────────────────────────────────────────────────────────────
 # _heavy_job_lock: atomic threading.Lock — prevents any two heavy jobs
 # (ingestion, analysis) from running simultaneously.
@@ -95,6 +102,7 @@ _main_loop: Optional[asyncio.AbstractEventLoop] = None
 _ingestion_running = False
 _analysis_running = False
 _heavy_job_lock = threading.Lock()
+
 
 # Redeploy guard: skip startup ingestion if DB updated < 30 min ago.
 _REDEPLOY_GUARD_MINUTES = 30
@@ -119,7 +127,7 @@ def init_firebase() -> None:
 init_firebase()
 
 
-# ── Sync bridges for APScheduler ──────────────────────────────────────────────
+# ── Sync bridges for APScheduler ─────────────────────────────────────────────
 
 
 def _sync_ingestion() -> None:
@@ -271,6 +279,11 @@ async def lifespan(app: FastAPI):
 
     On startup: ingestion runs once immediately (with redeploy guard),
     then analysis chains off it. Subsequent runs follow the cron schedule.
+
+    Keep-alive:
+      start_keep_alive() is guarded — safe to call multiple times.
+      An immediate ping fires instantly on startup so there is no
+      14-minute cold gap between deploy and the first scheduled ping.
     """
     global _main_loop
 
@@ -327,8 +340,11 @@ async def lifespan(app: FastAPI):
     print(f"Environment: {env}")
 
     if env == "production":
+        # start_keep_alive is guarded — calling twice is a safe no-op.
         start_keep_alive()
         print("Keep-alive enabled (pings every 14 minutes)")
+        # Fire an immediate ping so there is no 14-minute gap on cold deploy.
+        asyncio.create_task(asyncio.to_thread(keep_alive))
     else:
         print("Keep-alive disabled in development")
 
