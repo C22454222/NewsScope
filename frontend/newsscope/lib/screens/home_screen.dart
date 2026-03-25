@@ -60,7 +60,9 @@ class _HomeScreenState extends State<HomeScreen> {
             label: 'Compare',
           ),
           BottomNavigationBarItem(
-              icon: Icon(Icons.person), label: 'Profile'),
+            icon: Icon(Icons.person),
+            label: 'Profile',
+          ),
         ],
         onTap: _onTabTapped,
       ),
@@ -89,25 +91,41 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
   String? _selectedCategory;
   String? _selectedSource;
 
-  static const List<String> _categories = [
-    'All', 'Politics', 'World', 'Business',
-    'Tech', 'Sport', 'Entertainment', 'Health', 'Science',
+  // Categories must match CATEGORIES list in categorisation.py (lowercased
+  // values sent to backend). Display label → backend value mapping below.
+  static const List<Map<String, String>> _categories = [
+    {'label': 'All', 'value': ''},
+    {'label': 'Politics', 'value': 'politics'},
+    {'label': 'World', 'value': 'world'},
+    {'label': 'US', 'value': 'us'},
+    {'label': 'UK', 'value': 'uk'},
+    {'label': 'Ireland', 'value': 'ireland'},
+    {'label': 'Europe', 'value': 'europe'},
+    {'label': 'Business', 'value': 'business'},
+    {'label': 'Tech', 'value': 'tech'},
+    {'label': 'Science', 'value': 'science'},
+    {'label': 'Health', 'value': 'health'},
+    {'label': 'Environment', 'value': 'environment'},
+    {'label': 'Sport', 'value': 'sport'},
+    {'label': 'Entertainment', 'value': 'entertainment'},
+    {'label': 'Crime', 'value': 'crime'},
+    {'label': 'Opinion', 'value': 'opinion'},
   ];
 
-  // Display label → exact source value stored in DB
+  // Display label → exact source name stored in DB.
   static const Map<String, String> _sourceMap = {
-    'BBC':          'BBC News',
-    'RTÉ':          'RTÉ News',
-    'Guardian':     'The Guardian',
-    'CNN':          'CNN',
-    'Irish Times':  'The Irish Times',
-    'AP News':      'AP News',
-    'Sky News':     'Sky News',
-    'Independent':  'The Independent',
-    'NPR':          'NPR',
-    'DW':           'Deutsche Welle',
-    'GB News':      'GB News',
-    'Fox News':     'Fox News',
+    'BBC': 'BBC News',
+    'RTÉ': 'RTÉ News',
+    'Guardian': 'The Guardian',
+    'CNN': 'CNN',
+    'Irish Times': 'The Irish Times',
+    'AP News': 'AP News',
+    'Sky News': 'Sky News',
+    'Independent': 'The Independent',
+    'NPR': 'NPR',
+    'DW': 'Deutsche Welle',
+    'GB News': 'GB News',
+    'Fox News': 'Fox News',
   };
 
   static const List<String> _sourceLabels = [
@@ -133,10 +151,10 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
   }
 
   void _loadArticles() {
-    final backendCategory =
-        (_selectedCategory == null || _selectedCategory == 'All')
-            ? null
-            : _selectedCategory!.toLowerCase();
+    final backendCategory = (_selectedCategory == null ||
+            _selectedCategory!.isEmpty)
+        ? null
+        : _selectedCategory;
     _articlesFuture = _apiService.getArticles(
       category: backendCategory,
       source: _selectedSource,
@@ -227,13 +245,17 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
         itemCount: _categories.length,
         separatorBuilder: (_, _) => const SizedBox(width: 8),
         itemBuilder: (context, index) {
-          final label = _categories[index];
-          final isSelected = (_selectedCategory ?? 'All') == label;
+          final cat = _categories[index];
+          final label = cat['label']!;
+          final value = cat['value']!;
+          final isSelected = value.isEmpty
+              ? (_selectedCategory == null || _selectedCategory!.isEmpty)
+              : _selectedCategory == value;
           return _buildChip(
             label: label,
             isSelected: isSelected,
             onTap: () => setState(() {
-              _selectedCategory = label == 'All' ? null : label;
+              _selectedCategory = value.isEmpty ? null : value;
               _loadArticles();
             }),
           );
@@ -242,7 +264,7 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
     );
   }
 
-  // ── Source / outlet chips ─────────────────────────────────────────────────
+  // ── Source chips ──────────────────────────────────────────────────────────
 
   Widget _buildSourceChips() {
     return SizedBox(
@@ -283,10 +305,13 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
         ),
         children: [
           const TextSpan(
-              text: 'News', style: TextStyle(color: Colors.black87)),
+            text: 'News',
+            style: TextStyle(color: Colors.black87),
+          ),
           TextSpan(
-              text: 'Scope',
-              style: TextStyle(color: Colors.blue[800])),
+            text: 'Scope',
+            style: TextStyle(color: Colors.blue[800]),
+          ),
         ],
       ),
     );
@@ -341,7 +366,9 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                 Text(
                   "Today's news, AI-analysed for bias and sentiment.",
                   style: TextStyle(
-                      color: Colors.white.withAlpha(160), fontSize: 12),
+                    color: Colors.white.withAlpha(160),
+                    fontSize: 12,
+                  ),
                 ),
               ],
             ),
@@ -455,8 +482,7 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
               future: _articlesFuture,
               builder: (context, snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(
-                      child: CircularProgressIndicator());
+                  return const Center(child: CircularProgressIndicator());
                 }
                 if (snapshot.hasError) {
                   return Center(
@@ -521,14 +547,13 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                 return RefreshIndicator(
                   onRefresh: _refreshArticles,
                   child: ListView.builder(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 16),
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
                     itemCount: sortedKeys.length,
                     itemBuilder: (context, i) {
                       final dateKey = sortedKeys[i];
                       final sectionArticles = grouped[dateKey]!;
-                      final header = _headerText(
-                          dateKey, todayKey, yesterdayKey);
+                      final header =
+                          _headerText(dateKey, todayKey, yesterdayKey);
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -541,8 +566,8 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                                   context,
                                   MaterialPageRoute(
                                     builder: (_) =>
-                                        ArticleDetailScreen
-                                            .fromArticle(article),
+                                        ArticleDetailScreen.fromArticle(
+                                            article),
                                   ),
                                 );
                                 widget.onArticleRead();

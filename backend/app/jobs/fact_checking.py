@@ -1,37 +1,34 @@
 """
 NewsScope Fact-Checking Service.
 
-Google Fact Check Tools API only indexes claims reviewed by registered
-fact-checkers (PolitiFact, Snopes, AFP, Reuters, etc.) with ClaimReview
-markup. Does NOT index breaking news or sports results.
-
 CHANGES FROM v2:
 
-1. BATCH SIZE RAISED 50 → 100:
-   Fact-checking is pure async I/O (httpx) — no parse trees, no model
-   buffers. RAM per article is one JSON response (~2KB). 100 articles
-   at 3 queries each = 300 Google API requests per cycle, still well
-   under the 1,000/day free tier budget.
+1. CRITICAL FIX — ArticleResponse validation error:
+   batch_factcheck_recent() was selecting only 4 columns
+   (id, title, content, source) but ArticleResponse requires all columns.
+   Changed to select("*") so Pydantic gets every field it needs.
+   This was causing 100% of fact-checks to fail silently.
 
-2. TIME WINDOW FILTER ADDED (was filtering only by credibility_score):
-   Now filters by published_at >= 48h cutoff AND credibility_score <= 80.1
-   The previous query had no time filter — on a large DB it could match
-   articles from weeks ago. The 48h window keeps the batch small and
-   focused on recently ingested articles that actually need checking.
+2. QUERY QUALITY — headline sent as direct query:
+   build_search_queries() now sends the full headline (truncated to 100
+   chars) as query 1. Fact-checkers index claims by subject matter — a
+   direct headline match is far more likely to return a ClaimReview than
+   a bag of 5 extracted keywords. Keywords are still used for queries 2
+   and 3 as fallback coverage.
 
-3. WIRED TO SCHEDULER DIRECTLY (no more ingestion-triggered delay):
-   Previously fact-checking was scheduled from inside ingestion via
-   _schedule_factcheck() with a 600s asyncio.sleep delay — a fragile
-   pattern that tied fact-check timing to ingestion completion time.
-   Now batch_factcheck_recent() runs at :40 via CronTrigger in main.py,
-   cleanly separated from ingestion. The _schedule_factcheck bridge
-   in ingestion.py is still present but batch_factcheck_recent now
-   handles the same function more reliably via the scheduler.
+3. NAMED ENTITIES PRESERVED — _PROPER_NOUN_STOPWORDS slimmed down:
+   The previous list stripped trump, iran, israel, biden, russia, china
+   etc. — exactly the entities that appear in fact-checker databases.
+   These have been removed from the stopword list so they survive into
+   the keyword queries.
 
-4. CONCURRENT CLAIM CHECKS PER ARTICLE:
-   The 3 keyword queries per article now run concurrently via
-   asyncio.gather instead of sequentially. At 3 queries × ~1s each,
-   this saves ~2s per article — meaningful at 100 articles per batch.
+4. RULING SCORING — broader pattern matching:
+   Added "rated false", "not true", "inaccurate", "exaggerated",
+   "distorted" to the ruling normaliser to capture more fact-checker
+   verdict formats beyond the most common English phrases.
+
+5. BATCH SELECT — select("*") instead of select("id,title,content,source"):
+   Full record needed for ArticleResponse instantiation.
 
 Flake8: 0 errors/warnings.
 """
@@ -50,7 +47,6 @@ from app.db.supabase import supabase
 
 _MAX_KEYWORD_QUERIES = 3
 
-# Raised from 50 → 100: fact-checking is pure I/O, negligible RAM.
 _FACTCHECK_BATCH_SIZE = 100
 
 _GOOGLE_FACTCHECK_KEY = os.getenv("GOOGLE_FACTCHECK_API_KEY", "")
@@ -90,14 +86,14 @@ _STOPWORDS = {
     "up", "out", "about", "into", "than", "us", "can",
 }
 
+# Stripped down to only genuine noise — named entities (trump, iran,
+# biden etc.) were removed because fact-checker databases index exactly
+# these terms. Keeping them in was causing zero-match queries.
 _PROPER_NOUN_STOPWORDS = {
-    "iran", "israel", "uk", "us", "usa", "trump", "london",
-    "europe", "china", "russia", "america", "washington", "biden",
-    "parliament", "government", "minister", "president", "police",
-    "court", "people", "country", "world", "state", "war", "new",
     "says", "told", "year", "years", "also", "after", "first",
-    "last", "two", "three", "four", "five", "six", "seven",
-    "eight", "nine", "ten", "one", "time", "day", "week", "month",
+    "last", "time", "day", "week", "month",
+    "two", "three", "four", "five", "six", "seven",
+    "eight", "nine", "ten", "one",
 }
 
 _BOILERPLATE_RE = re.compile(
@@ -146,24 +142,43 @@ def _extract_keywords_from_text(text: str, max_words: int = 5) -> List[str]:
 
 
 def build_search_queries(title: str, content: str) -> List[str]:
+    """
+    Build up to 3 queries for the Google Fact Check API.
+
+    Query 1: Full headline (≤100 chars) — most likely to match a
+             ClaimReview entry directly. Fact-checkers write reviews
+             against specific claims or headlines, so sending the
+             actual headline first gives the best match rate.
+
+    Query 2: Top keywords from headline, including named entities
+             (trump, iran, israel etc. are now preserved).
+
+    Query 3: Combined title + content keywords for topic coverage.
+    """
     queries: List[str] = []
 
+    # Query 1: headline direct — best match against ClaimReview entries
+    if title and title.strip():
+        headline_q = title.strip()[:100]
+        queries.append(headline_q)
+
+    # Query 2: keyword extraction from headline
     if title and title.strip():
         title_kws = _extract_keywords_from_text(title, max_words=5)
         if title_kws:
-            queries.append(" ".join(title_kws))
-
-    if content and _is_valid_content(content):
-        content_kws = _extract_keywords_from_text(content[:800], max_words=5)
-        if content_kws:
-            q2 = " ".join(content_kws)
+            q2 = " ".join(title_kws)
             if q2 not in queries:
                 queries.append(q2)
 
-    if title and content and len(queries) < _MAX_KEYWORD_QUERIES:
-        title_kws = _extract_keywords_from_text(title, max_words=3)
-        content_kws = _extract_keywords_from_text(content[:400], max_words=3)
-        combined = list(dict.fromkeys(title_kws + content_kws))[:5]
+    # Query 3: combined title + content keywords
+    if len(queries) < _MAX_KEYWORD_QUERIES:
+        title_kws_short = _extract_keywords_from_text(title or "", max_words=3)
+        content_kws = []
+        if content and _is_valid_content(content):
+            content_kws = _extract_keywords_from_text(
+                content[:800], max_words=3
+            )
+        combined = list(dict.fromkeys(title_kws_short + content_kws))[:5]
         q3 = " ".join(combined)
         if q3 and q3 not in queries:
             queries.append(q3)
@@ -177,11 +192,6 @@ def build_search_queries(title: str, content: str) -> List[str]:
 async def _check_single_query(
     client: httpx.AsyncClient, query: str
 ) -> tuple[str, Dict[str, Any]]:
-    """
-    Check a single keyword query against the Google Fact Check API.
-    Returns (query, result_dict).
-    Extracted so all 3 queries per article can run concurrently.
-    """
     for attempt in range(2):
         try:
             resp = await client.get(
@@ -205,7 +215,9 @@ async def _check_single_query(
                         return query, {
                             "ruling": top.get("textualRating", "Unknown"),
                             "url": top.get("url"),
-                            "publisher": top.get("publisher", {}).get("name", "Unknown"),
+                            "publisher": top.get("publisher", {}).get(
+                                "name", "Unknown"
+                            ),
                             "matched_claim": claim.get("text", "")[:120],
                         }
             return query, {"ruling": "No match", "url": None}
@@ -221,10 +233,8 @@ async def _check_single_query(
 
 async def check_google_factclaims(queries: List[str]) -> Dict[str, Any]:
     """
-    Query Google Fact Check Tools API with short keyword queries.
-
-    All queries now run concurrently within a shared httpx.AsyncClient
-    via asyncio.gather — saves ~2s per article vs sequential calls.
+    All queries run concurrently within a shared httpx.AsyncClient.
+    If GOOGLE_FACTCHECK_API_KEY is not set, returns Unverified for all.
     """
     if not _GOOGLE_FACTCHECK_KEY:
         return {q: {"ruling": "Unverified", "url": None} for q in queries}
@@ -250,13 +260,25 @@ def ruling_to_score(ruling: str) -> Optional[float]:
 
     if r in ("true", "correct", "accurate", "verified"):
         return 1.0
-    if any(x in r for x in ("mostly true", "largely true", "mostly correct")):
+    if any(x in r for x in (
+        "mostly true", "largely true", "mostly correct", "mostly accurate"
+    )):
         return 0.8
-    if any(x in r for x in ("half true", "partially true", "mixed")):
+    if any(x in r for x in (
+        "half true", "partially true", "mixed", "partially correct",
+        "unproven", "unsubstantiated", "needs context", "exaggerated",
+        "distorted", "misleading context",
+    )):
         return 0.5
-    if any(x in r for x in ("mostly false", "largely false", "misleading")):
+    if any(x in r for x in (
+        "mostly false", "largely false", "misleading",
+        "not accurate", "inaccurate", "not true", "rated false",
+    )):
         return 0.2
-    if any(x in r for x in ("false", "pants", "incorrect", "wrong", "fabricated")):
+    if any(x in r for x in (
+        "false", "pants", "incorrect", "wrong", "fabricated",
+        "scam", "hoax", "debunked",
+    )):
         return 0.0
 
     return 0.5
@@ -285,7 +307,10 @@ async def compute_credibility_score(article: ArticleResponse) -> Dict[str, Any]:
     if not queries:
         return {
             "score": float(base_score),
-            "reason": f"No queries could be built. Score based on source reputation ({source or 'unknown'}).",
+            "reason": (
+                f"No queries could be built. "
+                f"Score based on source reputation ({source or 'unknown'})."
+            ),
             "fact_checks": {},
             "claims_checked": 0,
         }
@@ -345,21 +370,18 @@ async def batch_factcheck_recent(hours: int = 48) -> List[Dict[str, Any]]:
     Fact-check articles published in the last `hours` hours
     whose credibility score is at or below 80.1.
 
-    Called by APScheduler at :40 via CronTrigger in main.py.
-    Also callable directly via /debug/factcheck route.
-
-    Batch size raised 50 → 100: fact-checking is pure async I/O
-    (httpx), no parse trees or model buffers. Each article holds
-    one open HTTP connection via the shared client — negligible RAM.
-
-    Time window added to the Supabase query to avoid re-checking
-    old articles that have already been scored and forgotten.
+    CRITICAL FIX: changed .select("id, title, content, source") to
+    .select("*") — ArticleResponse is a Pydantic model that requires
+    all columns. Selecting only 4 fields caused a validation error on
+    every single article, producing 0/100 scored every cycle.
     """
-    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(hours=hours)
+    ).isoformat()
 
     recent: Optional[list] = (
         supabase.table("articles")
-        .select("id, title, content, source")
+        .select("*")          # ← was select("id, title, content, source")
         .gte("published_at", cutoff)
         .lte("credibility_score", 80.1)
         .order("published_at", desc=True)
