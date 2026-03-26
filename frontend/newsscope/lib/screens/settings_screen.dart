@@ -6,7 +6,7 @@ import 'package:http/http.dart' as http;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../core/config.dart'; // adjust import to wherever your base URL constant lives
+import '../core/config.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -100,46 +100,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   // ── Edit display name ─────────────────────────────────────────────────────
+  // FIX: Controller is now owned by _EditDisplayNameDialog (a StatefulWidget),
+  // so it is disposed in that widget's dispose() — not here after the dialog
+  // closes. This eliminates the "_dependents.isEmpty is not true" assertion.
 
   Future<void> _handleEditDisplayName() async {
-    final controller = TextEditingController(text: _displayName ?? '');
+    final currentName = (_displayName ?? '').trim();
+
     final result = await showDialog<String>(
       context: context,
-      builder: (context) => AlertDialog(
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Edit Display Name'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          maxLength: 40,
-          decoration: const InputDecoration(
-            labelText: 'Display name',
-            border: OutlineInputBorder(),
-          ),
-          textCapitalization: TextCapitalization.words,
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, controller.text.trim()),
-            child: const Text('Save'),
-          ),
-        ],
-      ),
+      barrierDismissible: true,
+      builder: (_) => _EditDisplayNameDialog(initialValue: currentName),
     );
 
-    controller.dispose();
-    if (result == null || result.isEmpty || !mounted) return;
+    if (!mounted || result == null) return;
+
+    final newName = result.trim();
+
+    // No-op: cancelled, tapped outside, cleared to empty, or unchanged.
+    if (newName.isEmpty || newName == currentName) return;
 
     try {
-      await user?.updateDisplayName(result);
+      await user?.updateDisplayName(newName);
       await FirebaseAuth.instance.currentUser?.reload();
+      final refreshedName =
+          FirebaseAuth.instance.currentUser?.displayName ?? newName;
       if (!mounted) return;
-      setState(() => _displayName = result);
+      setState(() => _displayName = refreshedName.trim());
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: const Text('Display name updated'),
         backgroundColor: Colors.green[700],
@@ -331,7 +318,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (uid == null) return;
 
     try {
-      // Re-authenticate Google users — Firebase requires fresh credentials.
       final isGoogleUser = user?.providerData
               .any((p) => p.providerId == 'google.com') ??
           false;
@@ -339,7 +325,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (isGoogleUser) {
         final googleSignIn = GoogleSignIn();
         final googleUser = await googleSignIn.signIn();
-        if (googleUser == null) return; // user cancelled
+        if (googleUser == null) return;
         final googleAuth = await googleUser.authentication;
         final credential = GoogleAuthProvider.credential(
           idToken: googleAuth.idToken,
@@ -348,14 +334,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         await user?.reauthenticateWithCredential(credential);
       }
 
-      // Get Firebase ID token to authenticate the backend DELETE call
       final idToken = await user?.getIdToken();
-
-      // Delete Firebase Auth account first
       await user?.delete();
 
-      // Clean up Supabase via backend — idempotent, safe to call even
-      // if the row doesn't exist (returns 200 regardless)
       if (idToken != null) {
         await http.delete(
           Uri.parse('${AppConfig.baseUrl}/users/$uid'),
@@ -696,6 +677,87 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 32),
         ],
       ),
+    );
+  }
+}
+
+// ── Edit display name dialog ──────────────────────────────────────────────────
+// FIX: Owning the controller here ensures dispose() is called at the right
+// time in the widget lifecycle — not prematurely after showDialog() returns.
+
+class _EditDisplayNameDialog extends StatefulWidget {
+  final String initialValue;
+
+  const _EditDisplayNameDialog({required this.initialValue});
+
+  @override
+  State<_EditDisplayNameDialog> createState() => _EditDisplayNameDialogState();
+}
+
+class _EditDisplayNameDialogState extends State<_EditDisplayNameDialog> {
+  late final TextEditingController _controller;
+  late final FocusNode _focusNode;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.initialValue);
+    _focusNode = FocusNode();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _focusNode.requestFocus();
+      _controller.selection = TextSelection(
+        baseOffset: 0,
+        extentOffset: _controller.text.length,
+      );
+    });
+  }
+
+  @override
+  void dispose() {
+    _focusNode.dispose();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    FocusScope.of(context).unfocus();
+    Navigator.of(context).pop(_controller.text.trim());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      shape:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: const Text('Edit Display Name'),
+      content: TextField(
+        controller: _controller,
+        focusNode: _focusNode,
+        maxLength: 40,
+        textInputAction: TextInputAction.done,
+        textCapitalization: TextCapitalization.words,
+        onSubmitted: (_) => _save(),
+        onTapOutside: (_) => _focusNode.unfocus(),
+        decoration: const InputDecoration(
+          labelText: 'Display name',
+          border: OutlineInputBorder(),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () {
+            FocusScope.of(context).unfocus();
+            Navigator.of(context).pop(); // pops with null → caller ignores
+          },
+          child: const Text('Cancel'),
+        ),
+        TextButton(
+          onPressed: _save,
+          child: const Text('Save'),
+        ),
+      ],
     );
   }
 }
