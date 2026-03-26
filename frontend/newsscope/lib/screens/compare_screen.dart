@@ -17,6 +17,10 @@ class CompareScreen extends StatefulWidget {
 class _CompareScreenState extends State<CompareScreen>
     with SingleTickerProviderStateMixin {
   final TextEditingController _searchController = TextEditingController();
+
+  // FIX: FocusNode added so we can programmatically dismiss the keyboard.
+  final FocusNode _searchFocusNode = FocusNode();
+
   final ApiService _apiService = ApiService();
 
   late TabController _tabController;
@@ -29,7 +33,6 @@ class _CompareScreenState extends State<CompareScreen>
   String? _selectedCategory;
   String? _selectedSource;
 
-  // Must match CATEGORIES in categorisation.py and HomeScreen exactly.
   static const List<Map<String, String>> _categories = [
     {'label': 'All', 'value': ''},
     {'label': 'Politics', 'value': 'politics'},
@@ -91,6 +94,7 @@ class _CompareScreenState extends State<CompareScreen>
   @override
   void dispose() {
     _searchController.dispose();
+    _searchFocusNode.dispose(); // FIX: dispose the new FocusNode
     _tabController.dispose();
     super.dispose();
   }
@@ -101,6 +105,10 @@ class _CompareScreenState extends State<CompareScreen>
       _selectedSource != null;
 
   Future<void> _searchTopic() async {
+    // FIX: Dismiss keyboard immediately when search is triggered so it doesn't
+    // linger until the user presses "Done", and avoids the layout overflow.
+    FocusScope.of(context).unfocus();
+
     if (!_hasAnyFilter) {
       setState(() {
         _errorMessage = null;
@@ -481,118 +489,139 @@ class _CompareScreenState extends State<CompareScreen>
                 '${_selectedSource != null ? " · ${_sourceMap.entries.firstWhere((e) => e.value == _selectedSource, orElse: () => MapEntry(_selectedSource!, _selectedSource!)).key}" : ""}'
             : 'Compare Coverage';
 
-    return Scaffold(
-      appBar: AppBar(
-        centerTitle: true,
-        title: Text(
-          'Story Comparison',
-          style: TextStyle(
-            fontSize: 20,
-            fontWeight: FontWeight.bold,
-            letterSpacing: 0.3,
-            color: Colors.blue[800],
+    return GestureDetector(
+      // FIX: Tapping anywhere outside the TextField dismisses the keyboard.
+      onTap: () => FocusScope.of(context).unfocus(),
+      child: Scaffold(
+        appBar: AppBar(
+          centerTitle: true,
+          title: Text(
+            'Story Comparison',
+            style: TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 0.3,
+              color: Colors.blue[800],
+            ),
           ),
         ),
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            _buildFilterLabel('CATEGORY'),
-            const SizedBox(height: 6),
-            _buildCategoryChips(),
-            const SizedBox(height: 10),
-            _buildFilterLabel('OUTLET'),
-            const SizedBox(height: 6),
-            _buildSourceChips(),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                Expanded(child: Divider(color: Colors.grey[300])),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  child: Text(
-                    'or refine with a keyword',
-                    style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+        // FIX: resizeToAvoidBottomInset (default true) shrinks the Scaffold
+        // body when the keyboard opens. The former SizedBox(height:16) above
+        // Expanded was a fixed-height spacer that had nowhere to go once
+        // Expanded shrunk to 0 — causing exactly the 16 px overflow. Removing
+        // that spacer and folding the gap into the top padding of the results
+        // area eliminates the overflow entirely.
+        body: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _buildFilterLabel('CATEGORY'),
+              const SizedBox(height: 6),
+              _buildCategoryChips(),
+              const SizedBox(height: 10),
+              _buildFilterLabel('OUTLET'),
+              const SizedBox(height: 6),
+              _buildSourceChips(),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(child: Divider(color: Colors.grey[300])),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Text(
+                      'or refine with a keyword',
+                      style:
+                          TextStyle(fontSize: 11, color: Colors.grey[500]),
+                    ),
+                  ),
+                  Expanded(child: Divider(color: Colors.grey[300])),
+                ],
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _searchController,
+                focusNode: _searchFocusNode, // FIX: attach FocusNode
+                textInputAction: TextInputAction.search, // FIX: shows search key
+                onTapOutside: (_) => _searchFocusNode.unfocus(), // FIX
+                decoration: InputDecoration(
+                  labelText: _hasAnyFilter
+                      ? 'Add a keyword (optional)'
+                      : 'Enter a topic to compare',
+                  hintText: 'e.g., climate, housing, election',
+                  prefixIcon: const Icon(Icons.search),
+                  border: const OutlineInputBorder(),
+                  suffixIcon: _searchController.text.isNotEmpty
+                      ? IconButton(
+                          icon: const Icon(Icons.clear),
+                          onPressed: () {
+                            _searchController.clear();
+                            setState(() {});
+                            if (_hasAnyFilter) {
+                              _searchTopic();
+                            } else {
+                              setState(() {
+                                _rawResults = null;
+                                _errorMessage = null;
+                              });
+                            }
+                          },
+                        )
+                      : null,
+                ),
+                onChanged: (_) => setState(() {}),
+                onSubmitted: (_) => _searchTopic(), // FIX: also unfocuses via _searchTopic
+              ),
+              const SizedBox(height: 12),
+              ElevatedButton.icon(
+                onPressed: _isLoading ? null : _searchTopic,
+                icon: const Icon(Icons.compare_arrows),
+                label: Text(buttonLabel),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.blue[700],
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  textStyle: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
-                Expanded(child: Divider(color: Colors.grey[300])),
-              ],
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _searchController,
-              decoration: InputDecoration(
-                labelText: _hasAnyFilter
-                    ? 'Add a keyword (optional)'
-                    : 'Enter a topic to compare',
-                hintText: 'e.g., climate, housing, election',
-                prefixIcon: const Icon(Icons.search),
-                border: const OutlineInputBorder(),
-                suffixIcon: _searchController.text.isNotEmpty
-                    ? IconButton(
-                        icon: const Icon(Icons.clear),
-                        onPressed: () {
-                          _searchController.clear();
-                          setState(() {});
-                          if (_hasAnyFilter) {
-                            _searchTopic();
-                          } else {
-                            setState(() {
-                              _rawResults = null;
-                              _errorMessage = null;
-                            });
-                          }
-                        },
-                      )
-                    : null,
               ),
-              onChanged: (_) => setState(() {}),
-              onSubmitted: (_) => _searchTopic(),
-            ),
-            const SizedBox(height: 12),
-            ElevatedButton.icon(
-              onPressed: _isLoading ? null : _searchTopic,
-              icon: const Icon(Icons.compare_arrows),
-              label: Text(buttonLabel),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.blue[700],
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                textStyle: const TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
+              // FIX: Removed SizedBox(height: 16) that was here.
+              // It was a fixed-height child that caused the Column to overflow
+              // by exactly 16 px when the keyboard reduced available height
+              // and Expanded had already shrunk to 0. The visual gap is
+              // preserved via the top padding inside _buildResultsBody().
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 16),
+                  child: _isLoading
+                      ? const Center(child: CircularProgressIndicator())
+                      : _errorMessage != null
+                          ? Center(
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  const Icon(Icons.error_outline,
+                                      size: 64, color: Colors.red),
+                                  const SizedBox(height: 16),
+                                  Text(
+                                    _errorMessage!,
+                                    textAlign: TextAlign.center,
+                                  ),
+                                  const SizedBox(height: 16),
+                                  ElevatedButton(
+                                    onPressed: _searchTopic,
+                                    child: const Text('Retry'),
+                                  ),
+                                ],
+                              ),
+                            )
+                          : _buildResultsBody(),
                 ),
               ),
-            ),
-            const SizedBox(height: 16),
-            Expanded(
-              child: _isLoading
-                  ? const Center(child: CircularProgressIndicator())
-                  : _errorMessage != null
-                      ? Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              const Icon(Icons.error_outline,
-                                  size: 64, color: Colors.red),
-                              const SizedBox(height: 16),
-                              Text(
-                                _errorMessage!,
-                                textAlign: TextAlign.center,
-                              ),
-                              const SizedBox(height: 16),
-                              ElevatedButton(
-                                onPressed: _searchTopic,
-                                child: const Text('Retry'),
-                              ),
-                            ],
-                          ),
-                        )
-                      : _buildResultsBody(),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
