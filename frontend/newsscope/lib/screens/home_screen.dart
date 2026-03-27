@@ -51,6 +51,8 @@ class _HomeScreenState extends State<HomeScreen> {
         currentIndex: _currentIndex,
         selectedItemColor: Colors.blue[700],
         unselectedItemColor: Colors.grey[500],
+        // FIX: Slightly tinted background so the bar blends with the
+        //      soft scaffold colour used on all screens.
         backgroundColor: Colors.white,
         elevation: 8,
         items: const [
@@ -70,7 +72,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-// ── Home Feed Tab ─────────────────────────────────────────────────────────────
+// ── Home Feed Tab ──────────────────────────────────────────────────────────────
 
 class HomeFeedTab extends StatefulWidget {
   final VoidCallback onArticleRead;
@@ -82,6 +84,9 @@ class HomeFeedTab extends StatefulWidget {
 }
 
 class _HomeFeedTabState extends State<HomeFeedTab> {
+  // ── Consistent soft background ─────────────────────────────────────────────
+  static const Color _scaffoldBg = Color(0xFFF0F2F5);
+
   User? _user;
   StreamSubscription<User?>? _userSub;
 
@@ -162,7 +167,6 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
     setState(_loadArticles);
   }
 
-  // FIX: Show confirmation dialog before signing out
   Future<void> _handleLogout() async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -451,7 +455,9 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: _scaffoldBg,
       appBar: AppBar(
+        backgroundColor: _scaffoldBg,
         centerTitle: true,
         title: _buildNewsScopeTitle(),
         actions: [
@@ -462,7 +468,6 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
           ),
           IconButton(
             icon: const Icon(Icons.logout),
-            // FIX: now shows confirmation dialog before signing out
             onPressed: _handleLogout,
             tooltip: 'Sign Out',
           ),

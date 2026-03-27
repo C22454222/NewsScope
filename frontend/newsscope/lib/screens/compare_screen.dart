@@ -30,6 +30,9 @@ class _CompareScreenState extends State<CompareScreen>
   String? _selectedCategory;
   String? _selectedSource;
 
+  // ── Soft background colour ─────────────────────────────────────────────────
+  static const Color _scaffoldBg = Color(0xFFF0F2F5);
+
   static const List<Map<String, String>> _categories = [
     {'label': 'All', 'value': ''},
     {'label': 'Politics', 'value': 'politics'},
@@ -321,7 +324,7 @@ class _CompareScreenState extends State<CompareScreen>
     final activeColor = _tabColors[_activeTab];
     return Container(
       decoration: BoxDecoration(
-        color: Colors.grey[100],
+        color: Colors.grey[200],
         borderRadius: BorderRadius.circular(12),
       ),
       child: TabBar(
@@ -487,7 +490,14 @@ class _CompareScreenState extends State<CompareScreen>
     return GestureDetector(
       onTap: () => FocusScope.of(context).unfocus(),
       child: Scaffold(
+        // FIX: Consistent soft background
+        backgroundColor: _scaffoldBg,
+        // FIX: resizeToAvoidBottomInset=false prevents the keyboard from
+        // pushing the fixed filter/button area and causing an overflow.
+        // The results area (Expanded) shrinks naturally with the keyboard.
+        resizeToAvoidBottomInset: false,
         appBar: AppBar(
+          backgroundColor: _scaffoldBg,
           centerTitle: true,
           title: Text(
             'Story Comparison',
@@ -504,7 +514,6 @@ class _CompareScreenState extends State<CompareScreen>
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // FIX: Added instruction label above the filter chips
               Text(
                 'Pick a category and / or outlet to get started',
                 style: TextStyle(
@@ -543,6 +552,8 @@ class _CompareScreenState extends State<CompareScreen>
                 textInputAction: TextInputAction.search,
                 onTapOutside: (_) => _searchFocusNode.unfocus(),
                 decoration: InputDecoration(
+                  filled: true,
+                  fillColor: Colors.white,
                   labelText: _hasAnyFilter
                       ? 'Add a keyword (optional)'
                       : 'Enter a topic to compare',
@@ -568,7 +579,6 @@ class _CompareScreenState extends State<CompareScreen>
                       : null,
                 ),
                 onChanged: (_) => setState(() {}),
-                // FIX: keyboard submit unfocuses via _searchTopic's FocusScope.unfocus()
                 onSubmitted: (_) => _searchTopic(),
               ),
               const SizedBox(height: 12),
@@ -586,9 +596,8 @@ class _CompareScreenState extends State<CompareScreen>
                   ),
                 ),
               ),
-              // FIX: The old fixed SizedBox(height:16) here was causing the
-              // 16px overflow when the keyboard opened. It is removed entirely;
-              // the visual gap is provided by top padding inside _buildResultsBody.
+              // FIX: Results area — keyboard does NOT push this section because
+              // resizeToAvoidBottomInset=false. The Expanded fills remaining space.
               Expanded(
                 child: Padding(
                   padding: const EdgeInsets.only(top: 16),
