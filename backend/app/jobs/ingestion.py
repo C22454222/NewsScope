@@ -1327,6 +1327,7 @@ def _scrape_one(article: Dict[str, Any]) -> Dict[str, Any]:
         "claims_checked": 0,
         "credibility_reason": "Pending",
         "updated_at": datetime.now(timezone.utc).isoformat(),
+        "bias_explanation": None,
         "_is_fallback": is_fallback,
     }
 

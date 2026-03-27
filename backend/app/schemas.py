@@ -30,6 +30,8 @@ class ArticleBase(BaseModel):
     category: Optional[str] = None
     general_bias: Optional[str] = None
     general_bias_score: Optional[float] = None
+    political_bias: Optional[str] = None
+    political_bias_score: Optional[float] = None
 
 
 class ArticleCreate(ArticleBase):
@@ -59,6 +61,11 @@ class ArticleResponse(ArticleBase):
 
     credibility_reason is a plain human-readable string, e.g.
     "2/3 claims verified true. Rated reliable." — never a tally.
+
+    bias_explanation is a JSONB list of word-weight dicts produced
+    by LIME in analysis.py — None until analysis scores the article
+    with confidence >= 0.6. Shape per item:
+      {"word": str, "weight": float, "direction": "towards"|"against"}
     """
 
     id: Optional[str] = None
@@ -74,6 +81,12 @@ class ArticleResponse(ArticleBase):
     fact_checks: Optional[Dict[str, Any]] = Field(default_factory=dict)
     claims_checked: Optional[int] = 0
     credibility_reason: Optional[str] = None
+    credibility_updated_at: Optional[datetime] = None
+
+    # LIME bias explainability — null until analysis.py scores the
+    # article and confidence >= 0.6. Written by analysis.py, never
+    # by ingestion.py.
+    bias_explanation: Optional[List[Dict[str, Any]]] = None
 
     model_config = ConfigDict(from_attributes=True, extra="ignore")
 
@@ -214,13 +227,13 @@ class ComparisonRequest(BaseModel):
     Flutter compare screen can combine category + outlet + keyword.
     category field filters by article category before returning so
     the Flutter client receives pre-filtered results.
-    No row cap — with a 72h article window results are well under
+    No row cap — with a 7d article window results are well under
     1,000 in practice.
     """
 
     topic: str
     category: Optional[str] = None
-    source: Optional[str] = None  # FIX: added for outlet filtering
+    source: Optional[str] = None
 
 
 class ComparisonResponse(BaseModel):

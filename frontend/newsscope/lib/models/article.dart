@@ -1,6 +1,6 @@
 /// NewsScope Article model.
 /// Fields match the backend ArticleResponse schema including
-/// credibility, fact-checks, and general bias columns.
+/// credibility, fact-checks, general bias, and LIME explainability columns.
 class Article {
   final String id;
   final String title;
@@ -21,6 +21,10 @@ class Article {
   final Map<String, dynamic>? factChecks;
   final int? claimsChecked;
   final String? credibilityReason;
+  final DateTime? credibilityUpdatedAt;
+
+  // LIME bias explainability — top words driving political bias classification
+  final List<Map<String, dynamic>>? biasExplanation;
 
   Article({
     required this.id,
@@ -40,6 +44,8 @@ class Article {
     this.factChecks,
     this.claimsChecked,
     this.credibilityReason,
+    this.credibilityUpdatedAt,
+    this.biasExplanation,
   });
 
   factory Article.fromJson(Map<String, dynamic> json) {
@@ -79,6 +85,16 @@ class Article {
           ? (json['claims_checked'] as num).toInt()
           : null,
       credibilityReason: json['credibility_reason']?.toString(),
+      credibilityUpdatedAt: json['credibility_updated_at'] != null
+          ? DateTime.tryParse(json['credibility_updated_at'])
+          : null,
+      biasExplanation: json['bias_explanation'] != null
+          ? List<Map<String, dynamic>>.from(
+              (json['bias_explanation'] as List).map(
+                (e) => Map<String, dynamic>.from(e as Map),
+              ),
+            )
+          : null,
     );
   }
 
@@ -101,6 +117,8 @@ class Article {
       'fact_checks': factChecks,
       'claims_checked': claimsChecked,
       'credibility_reason': credibilityReason,
+      'credibility_updated_at': credibilityUpdatedAt?.toIso8601String(),
+      'bias_explanation': biasExplanation,
     };
   }
 }

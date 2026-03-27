@@ -47,6 +47,7 @@ import requests
 
 from app.core.config import settings
 from app.db.supabase import supabase
+from app.services.explainability import explain_bias
 
 
 POLITICAL_BIAS_SPACE = settings.HF_POLITICAL_BIAS_SPACE.strip()
@@ -66,6 +67,10 @@ _ANALYSIS_WINDOW_HOURS = 168  # 7 days
 
 # Safety cap per regular cycle — backfill has no cap.
 _MAX_ARTICLES_PER_CYCLE = 200
+
+# Minimum political bias confidence to run LIME explainability.
+# Below this threshold the classification is too uncertain to explain.
+_LIME_CONFIDENCE_THRESHOLD = 0.6
 
 _analysis_running = False
 
@@ -377,6 +382,11 @@ def _score_article(article: dict) -> dict:
     Three remote Space calls: sentiment, general bias, political bias.
     Source-level political leaning is a local DB lookup — no network.
     0.1s sleep between Space calls to avoid bursting the same Space.
+
+    LIME explainability runs after political bias scoring — only when
+    confidence >= _LIME_CONFIDENCE_THRESHOLD (0.6). Skipped for low-
+    confidence classifications where attribution would be unreliable.
+    LIME makes ~50 additional Space calls (~10–20s extra per article).
     """
     content = (article.get("content") or "")
     title = article.get("title") or ""
@@ -430,6 +440,23 @@ def _score_article(article: dict) -> dict:
         update_data["political_bias"] = political_bias_label
     if political_bias_score is not None:
         update_data["political_bias_score"] = political_bias_score
+
+    # LIME explainability — only runs when political bias confidence is
+    # high enough to produce reliable word attribution. Skipped otherwise.
+    if (
+        political_bias_label and political_bias_score is not None and political_bias_score >= _LIME_CONFIDENCE_THRESHOLD
+    ):
+        bias_explanation = explain_bias(
+            text=full_text,
+            predicted_label=political_bias_label,
+        )
+        if bias_explanation:
+            update_data["bias_explanation"] = bias_explanation
+            print(
+                f"LIME explanation: {len(bias_explanation)} words "
+                f"for {political_bias_label} "
+                f"(confidence={political_bias_score:.2%})"
+            )
 
     gc.collect()
     return {"id": article["id"], "update": update_data}

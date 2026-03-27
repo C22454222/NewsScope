@@ -21,6 +21,7 @@ class ArticleDetailScreen extends StatefulWidget {
   final int? claimsChecked;
   final String? credibilityReason;
   final String? generalBias;
+  final List<Map<String, dynamic>>? biasExplanation;
 
   const ArticleDetailScreen({
     super.key,
@@ -37,6 +38,7 @@ class ArticleDetailScreen extends StatefulWidget {
     this.claimsChecked,
     this.credibilityReason,
     this.generalBias,
+    this.biasExplanation,
   });
 
   factory ArticleDetailScreen.fromArticle(Article article) {
@@ -54,6 +56,7 @@ class ArticleDetailScreen extends StatefulWidget {
       claimsChecked: article.claimsChecked,
       credibilityReason: article.credibilityReason,
       generalBias: article.generalBias,
+      biasExplanation: article.biasExplanation,
     );
   }
 
@@ -140,6 +143,104 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
     return Colors.red[800]!;
   }
 
+  // ── LIME bias explanation chips ─────────────────────────────────────────────
+
+  /// Returns the colour associated with the article's political bias label.
+  Color _biasLabelColor() {
+    final label = (widget.generalBias ?? '').toUpperCase();
+    if (label.contains('LEFT')) return Colors.blue[700]!;
+    if (label.contains('RIGHT')) return Colors.red[700]!;
+    return Colors.teal[600]!;
+  }
+
+  Widget _buildBiasExplanationSection() {
+    final explanation = widget.biasExplanation;
+    if (explanation == null || explanation.isEmpty) return const SizedBox.shrink();
+
+    final labelColor = _biasLabelColor();
+    final labelText = widget.generalBias ?? 'this classification';
+
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.psychology_outlined, size: 18, color: labelColor),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Why "$labelText" was flagged',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Top words driving this classification',
+              style: TextStyle(color: Colors.grey[500], fontSize: 12),
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: explanation.map((e) {
+                final word = e['word']?.toString() ?? '';
+                final isTowards = e['direction'] == 'towards';
+                final weight = (e['weight'] as num?)?.toDouble() ?? 0.0;
+
+                // Opacity scales with weight — stronger words are more vivid.
+                final opacity = (0.4 + weight.clamp(0.0, 1.0) * 0.6);
+
+                return Tooltip(
+                  message: isTowards
+                      ? 'Pushes toward $labelText'
+                      : 'Pushes against $labelText',
+                  child: Chip(
+                    label: Text(
+                      word,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        color: isTowards ? Colors.white : Colors.grey[700],
+                      ),
+                    ),
+                    backgroundColor: isTowards
+                        ? labelColor.withValues(alpha: opacity)
+                        : Colors.grey[200],
+                    side: BorderSide(
+                      color: isTowards
+                          ? labelColor.withValues(alpha: 0.3)
+                          : Colors.grey[300]!,
+                      width: 1,
+                    ),
+                    padding: EdgeInsets.zero,
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                );
+              }).toList(),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Filled = pushes toward label  ·  Grey = pushes against',
+              style: TextStyle(color: Colors.grey[400], fontSize: 10),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── Spectrum bar ────────────────────────────────────────────────────────────
+
   Widget _buildSpectrumBar() {
     final pos = _biasScoreToPosition(widget.biasScore);
     final markerColor = _positionToColor(pos);
@@ -163,7 +264,8 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
                 ),
                 const Spacer(),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 10, vertical: 4),
                   decoration: BoxDecoration(
                     color: markerColor.withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(20),
@@ -218,7 +320,8 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
                             decoration: BoxDecoration(
                               color: Colors.white,
                               shape: BoxShape.circle,
-                              border: Border.all(color: markerColor, width: 2.5),
+                              border:
+                                  Border.all(color: markerColor, width: 2.5),
                               boxShadow: const [
                                 BoxShadow(
                                   color: Colors.black26,
@@ -235,11 +338,21 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text('Left', style: TextStyle(fontSize: 10, color: Colors.blue[800])),
-                        Text('C-Left', style: TextStyle(fontSize: 10, color: Colors.cyan[600])),
-                        Text('Centre', style: TextStyle(fontSize: 10, color: Colors.teal[600])),
-                        Text('C-Right', style: TextStyle(fontSize: 10, color: Colors.orange[600])),
-                        Text('Right', style: TextStyle(fontSize: 10, color: Colors.red[800])),
+                        Text('Left',
+                            style: TextStyle(
+                                fontSize: 10, color: Colors.blue[800])),
+                        Text('C-Left',
+                            style: TextStyle(
+                                fontSize: 10, color: Colors.cyan[600])),
+                        Text('Centre',
+                            style: TextStyle(
+                                fontSize: 10, color: Colors.teal[600])),
+                        Text('C-Right',
+                            style: TextStyle(
+                                fontSize: 10, color: Colors.orange[600])),
+                        Text('Right',
+                            style: TextStyle(
+                                fontSize: 10, color: Colors.red[800])),
                       ],
                     ),
                   ],
@@ -251,6 +364,8 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
       ),
     );
   }
+
+  // ── Credibility card ────────────────────────────────────────────────────────
 
   Widget _buildCredibilityCard() {
     final score = widget.credibilityScore;
@@ -289,15 +404,22 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
                       fontSize: 16,
                     ),
                   ),
-                  if (widget.claimsChecked != null && widget.claimsChecked! > 0)
+                  if (widget.claimsChecked != null &&
+                      widget.claimsChecked! > 0)
                     Text(
                       '${widget.claimsChecked} claim(s) verified',
-                      style: TextStyle(color: Colors.grey[600], fontSize: 13),
+                      style:
+                          TextStyle(color: Colors.grey[600], fontSize: 13),
                     ),
-                  if (widget.credibilityReason != null)
-                    Text(
-                      widget.credibilityReason!,
-                      style: TextStyle(color: Colors.grey[500], fontSize: 12),
+                  if (widget.credibilityReason != null &&
+                      widget.credibilityReason!.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        widget.credibilityReason!,
+                        style:
+                            TextStyle(color: Colors.grey[500], fontSize: 12),
+                      ),
                     ),
                 ],
               ),
@@ -307,6 +429,8 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
       ),
     );
   }
+
+  // ── Fact check section ──────────────────────────────────────────────────────
 
   Widget _buildFactCheckSection() {
     return ExpansionTile(
@@ -359,7 +483,8 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
         children: [
           Text(
             claim,
-            style: const TextStyle(fontStyle: FontStyle.italic, fontSize: 13),
+            style:
+                const TextStyle(fontStyle: FontStyle.italic, fontSize: 13),
             maxLines: 3,
             overflow: TextOverflow.ellipsis,
           ),
@@ -371,7 +496,8 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
               if (speaker != null && speaker != 'N/A') ...[
                 const SizedBox(width: 8),
                 Text('— $speaker',
-                    style: TextStyle(color: Colors.grey[600], fontSize: 12)),
+                    style: TextStyle(
+                        color: Colors.grey[600], fontSize: 12)),
               ],
               if (url != null) ...[
                 const Spacer(),
@@ -395,8 +521,11 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
     );
   }
 
+  // ── Article content card ────────────────────────────────────────────────────
+
   Widget _buildArticleContentCard() {
-    final wordCount = widget.content!.trim().split(RegExp(r'\s+')).length;
+    final wordCount =
+        widget.content!.trim().split(RegExp(r'\s+')).length;
     final readingMins = (wordCount / 200).ceil();
 
     return Card(
@@ -429,7 +558,8 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
                   ),
                   const Spacer(),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 8, vertical: 3),
                     decoration: BoxDecoration(
                       color: Colors.grey[100],
                       borderRadius: BorderRadius.circular(8),
@@ -464,6 +594,8 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
     );
   }
 
+  // ── Build ───────────────────────────────────────────────────────────────────
+
   @override
   Widget build(BuildContext context) {
     return PopScope(
@@ -479,7 +611,8 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 12, vertical: 6),
                 decoration: BoxDecoration(
                   color: Colors.blue.shade50,
                   borderRadius: BorderRadius.circular(16),
@@ -501,13 +634,15 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
                     ?.copyWith(fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 16),
-              // ── Chips ─────────────────────────────────────────────────
+
+              // ── Summary chips ──────────────────────────────────────────
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
                 children: [
                   Chip(
-                    avatar: Icon(Icons.balance, size: 16,
+                    avatar: Icon(Icons.balance,
+                        size: 16,
                         color: getBiasColor(widget.biasScore)),
                     label: Text(
                         'Political Leaning: ${getBiasLabel(widget.biasScore)}'),
@@ -527,8 +662,9 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
                       ),
                       label: Text(
                           'Sentiment: ${getSentimentLabel(widget.sentimentScore)}'),
-                      backgroundColor: getSentimentColor(widget.sentimentScore)
-                          .withAlpha((255 * 0.2).round()),
+                      backgroundColor:
+                          getSentimentColor(widget.sentimentScore)
+                              .withAlpha((255 * 0.2).round()),
                     ),
                   if (widget.generalBias != null)
                     Chip(
@@ -542,7 +678,9 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
                             : Colors.green[700],
                       ),
                       label: Text(
-                        widget.generalBias == 'BIASED' ? 'Biased' : 'Unbiased',
+                        widget.generalBias == 'BIASED'
+                            ? 'Biased'
+                            : 'Unbiased',
                       ),
                       backgroundColor: widget.generalBias == 'BIASED'
                           ? Colors.orange.withAlpha(40)
@@ -553,10 +691,18 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
               const SizedBox(height: 16),
               _buildSpectrumBar(),
               const SizedBox(height: 12),
+
+              // ── LIME explanation — shown directly below spectrum bar ──
+              _buildBiasExplanationSection(),
+              if (widget.biasExplanation != null &&
+                  widget.biasExplanation!.isNotEmpty)
+                const SizedBox(height: 12),
+
               _buildCredibilityCard(),
               const SizedBox(height: 8),
               _buildFactCheckSection(),
               const SizedBox(height: 16),
+
               if (widget.content != null && widget.content!.isNotEmpty)
                 _buildArticleContentCard()
               else

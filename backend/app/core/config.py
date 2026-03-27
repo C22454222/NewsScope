@@ -69,7 +69,7 @@ class Settings:
     )
 
     # ── Archiving ─────────────────────────────────────────────────────────────
-    ARCHIVE_DAYS: int = int(os.getenv("ARCHIVE_DAYS", "30"))
+    ARCHIVE_DAYS: int = int(os.getenv("ARCHIVE_DAYS", "7"))
     ARCHIVE_BUCKET: str = os.getenv(
         "ARCHIVE_BUCKET", "articles-archive"
     )

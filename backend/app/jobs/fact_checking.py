@@ -1,34 +1,30 @@
 """
 NewsScope Fact-Checking Service.
 
-CHANGES FROM v2:
+CHANGES FROM v3:
 
-1. CRITICAL FIX — ArticleResponse validation error:
-   batch_factcheck_recent() was selecting only 4 columns
-   (id, title, content, source) but ArticleResponse requires all columns.
-   Changed to select("*") so Pydantic gets every field it needs.
-   This was causing 100% of fact-checks to fail silently.
+1. structured_checks — compute_credibility_score() now returns a
+   'structured_checks' list of normalised dicts ready for insertion
+   into the fact_checks table. Previously only the raw JSONB blob
+   was returned; rows were never written to the relational table.
 
-2. QUERY QUALITY — headline sent as direct query:
-   build_search_queries() now sends the full headline (truncated to 100
-   chars) as query 1. Fact-checkers index claims by subject matter — a
-   direct headline match is far more likely to return a ClaimReview than
-   a bag of 5 extracted keywords. Keywords are still used for queries 2
-   and 3 as fallback coverage.
+2. credibility_updated_at — batch_factcheck_recent() now sets
+   credibility_updated_at on every article it processes so the
+   retroactive job can identify stale vs. never-checked articles.
 
-3. NAMED ENTITIES PRESERVED — _PROPER_NOUN_STOPWORDS slimmed down:
-   The previous list stripped trump, iran, israel, biden, russia, china
-   etc. — exactly the entities that appear in fact-checker databases.
-   These have been removed from the stopword list so they survive into
-   the keyword queries.
+3. fact_checks table writes — batch_factcheck_recent() deletes old
+   rows for each article then inserts fresh structured_checks rows
+   into the fact_checks table alongside the JSONB blob update.
 
-4. RULING SCORING — broader pattern matching:
-   Added "rated false", "not true", "inaccurate", "exaggerated",
-   "distorted" to the ruling normaliser to capture more fact-checker
-   verdict formats beyond the most common English phrases.
+4. retroactive_factcheck_all() — new function that queries articles
+   where credibility_updated_at IS NULL (never checked) or older
+   than _STALE_DAYS days (stale), and re-runs credibility scoring.
+   Called by the /admin/factcheck/retroactive endpoint.
 
-5. BATCH SELECT — select("*") instead of select("id,title,content,source"):
-   Full record needed for ArticleResponse instantiation.
+5. STALE_DAYS raised to 14 — article pool is 7 days, so articles
+   near the pool edge need a second check window. Fact-checkers
+   publish across a 1–14 day range; 7 days was too narrow to catch
+   slower organisations and policy-claim reviews.
 
 Flake8: 0 errors/warnings.
 """
@@ -46,8 +42,12 @@ from app.db.supabase import supabase
 
 
 _MAX_KEYWORD_QUERIES = 3
-
 _FACTCHECK_BATCH_SIZE = 100
+
+# Articles not checked in the last 14 days are considered stale.
+# Raised from 7 — fact-checkers publish across a 1–14 day window
+# and articles near the 7-day pool edge need a second pass.
+_STALE_DAYS = 14
 
 _GOOGLE_FACTCHECK_KEY = os.getenv("GOOGLE_FACTCHECK_API_KEY", "")
 _GOOGLE_FACTCHECK_URL = (
@@ -157,12 +157,10 @@ def build_search_queries(title: str, content: str) -> List[str]:
     """
     queries: List[str] = []
 
-    # Query 1: headline direct — best match against ClaimReview entries
     if title and title.strip():
         headline_q = title.strip()[:100]
         queries.append(headline_q)
 
-    # Query 2: keyword extraction from headline
     if title and title.strip():
         title_kws = _extract_keywords_from_text(title, max_words=5)
         if title_kws:
@@ -170,9 +168,10 @@ def build_search_queries(title: str, content: str) -> List[str]:
             if q2 not in queries:
                 queries.append(q2)
 
-    # Query 3: combined title + content keywords
     if len(queries) < _MAX_KEYWORD_QUERIES:
-        title_kws_short = _extract_keywords_from_text(title or "", max_words=3)
+        title_kws_short = _extract_keywords_from_text(
+            title or "", max_words=3
+        )
         content_kws = []
         if content and _is_valid_content(content):
             content_kws = _extract_keywords_from_text(
@@ -287,7 +286,9 @@ def ruling_to_score(ruling: str) -> Optional[float]:
 # ── Credibility scoring ───────────────────────────────────────────────────────
 
 
-async def compute_credibility_score(article: ArticleResponse) -> Dict[str, Any]:
+async def compute_credibility_score(
+    article: ArticleResponse,
+) -> Dict[str, Any]:
     """
     Compute a credibility score (0–100) for a given article.
 
@@ -295,6 +296,9 @@ async def compute_credibility_score(article: ArticleResponse) -> Dict[str, Any]:
       base  = _SOURCE_REPUTATION.get(source, 65)
       adj   = (mean valid fact-check scores - 0.5) * 40  → ±20 pts
       score = clamp(base + adj, 10, 100)
+
+    Returns a dict including 'structured_checks' — a list of normalised
+    rows ready for insertion into the fact_checks table.
     """
     source = getattr(article, "source", None) or ""
     base_score = _SOURCE_REPUTATION.get(source, 65.0)
@@ -312,6 +316,7 @@ async def compute_credibility_score(article: ArticleResponse) -> Dict[str, Any]:
                 f"Score based on source reputation ({source or 'unknown'})."
             ),
             "fact_checks": {},
+            "structured_checks": [],
             "claims_checked": 0,
         }
 
@@ -354,15 +359,66 @@ async def compute_credibility_score(article: ArticleResponse) -> Dict[str, Any]:
             f"Rated {verdict}."
         )
 
+    # Build normalised rows for the fact_checks relational table.
+    # Skips non-matches so only genuine ClaimReview hits are stored.
+    now = datetime.now(timezone.utc).isoformat()
+    structured_checks = []
+    for query, result in fact_checks.items():
+        ruling = result.get("ruling", "Unknown")
+        if ruling in ("No match", "API Error", "Unverified"):
+            continue
+        structured_checks.append({
+            "claim": result.get("matched_claim") or query,
+            "rating": ruling,
+            "source": result.get("publisher", "Unknown"),
+            "link": result.get("url"),
+            "checked_at": now,
+        })
+
     return {
         "score": score,
         "fact_checks": fact_checks,
+        "structured_checks": structured_checks,
         "claims_checked": total,
         "reason": reason,
     }
 
 
-# ── Batch re-check ────────────────────────────────────────────────────────────
+# ── Shared DB write helper ────────────────────────────────────────────────────
+
+
+def _persist_credibility(
+    article_id: str,
+    cred: Dict[str, Any],
+    now: str,
+) -> None:
+    """
+    Write credibility results to the articles row and insert normalised
+    rows into the fact_checks table. Deletes stale fact_checks rows first
+    to avoid duplicates on re-checks.
+    """
+    supabase.table("articles").update({
+        "credibility_score": cred["score"],
+        "fact_checks": cred["fact_checks"],
+        "claims_checked": cred["claims_checked"],
+        "credibility_reason": cred["reason"],
+        "credibility_updated_at": now,
+        "updated_at": now,
+    }).eq("id", article_id).execute()
+
+    structured = cred.get("structured_checks", [])
+    if structured:
+        supabase.table("fact_checks") \
+            .delete() \
+            .eq("article_id", article_id) \
+            .execute()
+        supabase.table("fact_checks").insert([
+            {**row, "article_id": article_id}
+            for row in structured
+        ]).execute()
+
+
+# ── Batch re-check (three-stage decay) ───────────────────────────────────────
 
 
 async def batch_factcheck_recent(hours: int = 48) -> List[Dict[str, Any]]:
@@ -370,10 +426,15 @@ async def batch_factcheck_recent(hours: int = 48) -> List[Dict[str, Any]]:
     Fact-check articles published in the last `hours` hours
     whose credibility score is at or below 80.1.
 
-    CRITICAL FIX: changed .select("id, title, content, source") to
-    .select("*") — ArticleResponse is a Pydantic model that requires
-    all columns. Selecting only 4 fields caused a validation error on
-    every single article, producing 0/100 scored every cycle.
+    Called by the scheduler at three frequencies to match the
+    real-world fact-checker publication curve:
+
+      Every 6h  → hours=24   catches same-day viral claim checks
+      Every 24h → hours=72   catches peak 1–3 day check window
+      Every 72h → retroactive_factcheck_all() for stale articles
+
+    Writes results to both the articles row (JSONB blob + scalar
+    fields) and the normalised fact_checks table.
     """
     cutoff = (
         datetime.now(timezone.utc) - timedelta(hours=hours)
@@ -381,7 +442,7 @@ async def batch_factcheck_recent(hours: int = 48) -> List[Dict[str, Any]]:
 
     recent: Optional[list] = (
         supabase.table("articles")
-        .select("*")          # ← was select("id, title, content, source")
+        .select("*")
         .gte("published_at", cutoff)
         .lte("credibility_score", 80.1)
         .order("published_at", desc=True)
@@ -394,25 +455,85 @@ async def batch_factcheck_recent(hours: int = 48) -> List[Dict[str, Any]]:
         print("No articles require fact-checking.")
         return []
 
-    print(f"Fact-checking {len(recent)} articles (48h window)...")
+    print(f"Fact-checking {len(recent)} articles ({hours}h window)...")
     results: List[Dict[str, Any]] = []
 
     for art in recent:
         try:
             cred = await compute_credibility_score(ArticleResponse(**art))
-            supabase.table("articles").update(
-                {
-                    "credibility_score": cred["score"],
-                    "fact_checks": cred["fact_checks"],
-                    "claims_checked": cred["claims_checked"],
-                    "credibility_reason": cred["reason"],
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                }
-            ).eq("id", art["id"]).execute()
+            now = datetime.now(timezone.utc).isoformat()
+            _persist_credibility(art["id"], cred, now)
             results.append({"id": art["id"], **cred})
         except Exception as exc:
             print(f"Fact-check failed [{art['id']}]: {exc}")
             continue
 
     print(f"Fact-check cycle complete. {len(results)}/{len(recent)} scored.")
+    return results
+
+
+# ── Retroactive / stale re-check ─────────────────────────────────────────────
+
+
+async def retroactive_factcheck_all(
+    limit: int = 500,
+) -> List[Dict[str, Any]]:
+    """
+    Re-check all articles that have never been fact-checked
+    (credibility_updated_at IS NULL) or haven't been checked in
+    the last _STALE_DAYS (14) days.
+
+    Scheduler calls this every 72h to catch slow fact-checkers
+    and policy-claim reviews that publish up to two weeks later.
+    Also used as a one-off backfill endpoint after deploy.
+    """
+    stale_cutoff = (
+        datetime.now(timezone.utc) - timedelta(days=_STALE_DAYS)
+    ).isoformat()
+
+    never_checked = (
+        supabase.table("articles")
+        .select("*")
+        .is_("credibility_updated_at", "null")
+        .limit(limit)
+        .execute()
+        .data
+    ) or []
+
+    remaining = limit - len(never_checked)
+    stale = []
+    if remaining > 0:
+        stale = (
+            supabase.table("articles")
+            .select("*")
+            .lt("credibility_updated_at", stale_cutoff)
+            .limit(remaining)
+            .execute()
+            .data
+        ) or []
+
+    articles = never_checked + stale
+    if not articles:
+        print("All articles are up to date.")
+        return []
+
+    print(
+        f"Retroactive fact-check: {len(articles)} articles "
+        f"({len(never_checked)} never checked, {len(stale)} stale)..."
+    )
+    results: List[Dict[str, Any]] = []
+
+    for art in articles:
+        try:
+            cred = await compute_credibility_score(ArticleResponse(**art))
+            now = datetime.now(timezone.utc).isoformat()
+            _persist_credibility(art["id"], cred, now)
+            results.append({"id": art["id"], **cred})
+        except Exception as exc:
+            print(f"Retroactive check failed [{art['id']}]: {exc}")
+            continue
+
+    print(
+        f"Retroactive complete. {len(results)}/{len(articles)} scored."
+    )
     return results

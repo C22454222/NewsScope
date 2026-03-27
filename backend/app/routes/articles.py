@@ -6,6 +6,8 @@ Category filtering uses CATEGORY_GROUP_MAP to resolve sub-categories
 (football, climate, film, etc.) to their parent group so Flutter's
 8-chip filter correctly matches all stored variants.
 
+Archive window: 7 days — weekly rolling article pool.
+
 Flake8: 0 errors/warnings.
 """
 
@@ -18,12 +20,15 @@ from app.db.supabase import supabase
 from app.jobs.fact_checking import (
     batch_factcheck_recent,
     compute_credibility_score,
+    retroactive_factcheck_all,
 )
 from app.schemas import ArticleCreate, ArticleResponse
 
 
 router = APIRouter(tags=["articles"])
 
+# Rolling archive window — 7 days for a weekly article pool.
+_ARCHIVE_DAYS = 7
 
 # Maps granular backend sub-categories → Flutter parent chip categories.
 # Ensures ?category=sport returns articles tagged football/rugby/gaa etc.
@@ -54,27 +59,50 @@ CATEGORY_GROUP_MAP: dict = {
 }
 
 
+def _archive_cutoff() -> str:
+    """ISO timestamp for the start of the rolling archive window."""
+    return (
+        datetime.now(timezone.utc) - timedelta(days=_ARCHIVE_DAYS)
+    ).isoformat()
+
+
+def _write_fact_check_rows(article_id: str, structured_checks: list) -> None:
+    """
+    Upsert normalised fact-check rows into the fact_checks table.
+    Deletes existing rows for the article first to avoid duplicates.
+    No-op if structured_checks is empty.
+    """
+    if not structured_checks:
+        return
+    supabase.table("fact_checks") \
+        .delete() \
+        .eq("article_id", article_id) \
+        .execute()
+    rows = [
+        {**row, "article_id": article_id}
+        for row in structured_checks
+    ]
+    supabase.table("fact_checks").insert(rows).execute()
+
+
 @router.get("")
 def get_articles(
     category: Optional[str] = Query(default=None),
     source: Optional[str] = Query(default=None),
 ) -> List[dict]:
     """
-    Recent articles (30d), optionally filtered by category and/or source.
+    Recent articles (7d rolling window), optionally filtered by
+    category and/or source.
 
     Category resolves sub-categories via CATEGORY_GROUP_MAP so
     ?category=sport returns articles tagged sport, football, rugby etc.
     Source matches the exact source name stored in the articles table,
     e.g. ?source=BBC+News or ?source=RTÉ+News.
     """
-    cutoff = (
-        datetime.now(timezone.utc) - timedelta(days=30)
-    ).isoformat()
-
     query = (
         supabase.table("articles")
         .select("*")
-        .gte("published_at", cutoff)
+        .gte("published_at", _archive_cutoff())
     )
 
     if category:
@@ -105,18 +133,13 @@ def get_comparison_articles(
     Category resolves sub-categories via CATEGORY_GROUP_MAP.
     Source matches the exact source name stored in the articles table.
     """
-    cutoff = (
-        datetime.now(timezone.utc) - timedelta(days=30)
-    ).isoformat()
-
     query = (
         supabase.table("articles")
         .select("*")
-        .gte("published_at", cutoff)
+        .gte("published_at", _archive_cutoff())
     )
 
     if topic:
-        # Search title and content — catches articles with empty content
         query = query.or_(
             f"title.ilike.%{topic}%,content.ilike.%{topic}%"
         )
@@ -138,6 +161,8 @@ def get_comparison_articles(
 @router.post("")
 async def add_article(article: ArticleCreate) -> dict:
     """Add article with automatic credibility enrichment."""
+    now = datetime.now(timezone.utc).isoformat()
+
     insert_data = {
         "source": article.source,
         "url": article.url,
@@ -146,9 +171,7 @@ async def add_article(article: ArticleCreate) -> dict:
         "bias_score": getattr(article, "bias_score", None),
         "sentiment_score": getattr(article, "sentiment_score", None),
         "general_bias": getattr(article, "general_bias", None),
-        "general_bias_score": getattr(
-            article, "general_bias_score", None
-        ),
+        "general_bias_score": getattr(article, "general_bias_score", None),
         "published_at": article.published_at,
         "content": article.content,
         "category": getattr(article, "category", None),
@@ -156,22 +179,26 @@ async def add_article(article: ArticleCreate) -> dict:
         "fact_checks": {},
         "claims_checked": 0,
         "credibility_reason": "Pending",
-        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "credibility_updated_at": None,
+        "updated_at": now,
     }
 
     cred = await compute_credibility_score(ArticleResponse(**insert_data))
-    insert_data.update(
-        {
-            "credibility_score": cred["score"],
-            "fact_checks": cred["fact_checks"],
-            "claims_checked": cred["claims_checked"],
-            "credibility_reason": cred["reason"],
-        }
-    )
+    insert_data.update({
+        "credibility_score": cred["score"],
+        "fact_checks": cred["fact_checks"],
+        "claims_checked": cred["claims_checked"],
+        "credibility_reason": cred["reason"],
+        "credibility_updated_at": now,
+    })
 
     resp = supabase.table("articles").insert(insert_data).execute()
     if not resp.data:
         raise HTTPException(status_code=500, detail="Insert failed")
+
+    article_id = resp.data[0]["id"]
+    _write_fact_check_rows(article_id, cred.get("structured_checks", []))
+
     return resp.data[0]
 
 
@@ -197,7 +224,10 @@ def get_article(article_id: str) -> dict:
 
 @router.post("/{article_id}/factcheck")
 async def factcheck_article(article_id: str) -> dict:
-    """Manually re-run fact-check for a single article."""
+    """
+    Manually re-run fact-check for a single article.
+    Updates both articles and fact_checks tables.
+    """
     resp = (
         supabase.table("articles")
         .select("*")
@@ -207,18 +237,39 @@ async def factcheck_article(article_id: str) -> dict:
     if not resp.data:
         raise HTTPException(status_code=404, detail="Article not found")
 
-    cred = await compute_credibility_score(
-        ArticleResponse(**resp.data[0])
-    )
+    now = datetime.now(timezone.utc).isoformat()
+    cred = await compute_credibility_score(ArticleResponse(**resp.data[0]))
 
-    supabase.table("articles").update(
-        {
-            "credibility_score": cred["score"],
-            "fact_checks": cred["fact_checks"],
-            "claims_checked": cred["claims_checked"],
-            "credibility_reason": cred["reason"],
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }
-    ).eq("id", article_id).execute()
+    supabase.table("articles").update({
+        "credibility_score": cred["score"],
+        "fact_checks": cred["fact_checks"],
+        "claims_checked": cred["claims_checked"],
+        "credibility_reason": cred["reason"],
+        "credibility_updated_at": now,
+        "updated_at": now,
+    }).eq("id", article_id).execute()
+
+    _write_fact_check_rows(article_id, cred.get("structured_checks", []))
 
     return cred
+
+
+@router.post("/admin/factcheck/recent")
+async def run_recent_factcheck(hours: int = 48) -> dict:
+    """
+    Re-run fact-checks for articles in the last `hours` hours
+    with credibility score at or below 80.1.
+    """
+    results = await batch_factcheck_recent(hours=hours)
+    return {"checked": len(results)}
+
+
+@router.post("/admin/factcheck/retroactive")
+async def run_retroactive_factcheck(limit: int = 500) -> dict:
+    """
+    Backfill fact-checks for all articles that have never been
+    checked or haven't been checked in the last 7 days.
+    Run once after deploy, then leave to the scheduler.
+    """
+    results = await retroactive_factcheck_all(limit=limit)
+    return {"checked": len(results)}
