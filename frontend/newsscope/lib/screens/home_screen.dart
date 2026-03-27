@@ -91,8 +91,6 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
   String? _selectedCategory;
   String? _selectedSource;
 
-  // Categories must match CATEGORIES list in categorisation.py (lowercased
-  // values sent to backend). Display label → backend value mapping below.
   static const List<Map<String, String>> _categories = [
     {'label': 'All', 'value': ''},
     {'label': 'Politics', 'value': 'politics'},
@@ -112,7 +110,6 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
     {'label': 'Opinion', 'value': 'opinion'},
   ];
 
-  // Display label → exact source name stored in DB.
   static const Map<String, String> _sourceMap = {
     'BBC': 'BBC News',
     'RTÉ': 'RTÉ News',
@@ -165,7 +162,27 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
     setState(_loadArticles);
   }
 
+  // FIX: Show confirmation dialog before signing out
   Future<void> _handleLogout() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Sign Out'),
+        content: const Text('Are you sure you want to sign out?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red[700]),
+            child: const Text('Sign Out'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
     await FirebaseAuth.instance.signOut();
     if (!mounted) return;
     Navigator.of(context).popUntil((route) => route.isFirst);
@@ -177,8 +194,6 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
     if (hour < 17) return 'Good afternoon';
     return 'Good evening';
   }
-
-  // ── Shared helpers ────────────────────────────────────────────────────────
 
   Widget _buildFilterLabel(String label) {
     return Padding(
@@ -234,8 +249,6 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
     );
   }
 
-  // ── Category chips ────────────────────────────────────────────────────────
-
   Widget _buildCategoryChips() {
     return SizedBox(
       height: 36,
@@ -264,8 +277,6 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
     );
   }
 
-  // ── Source chips ──────────────────────────────────────────────────────────
-
   Widget _buildSourceChips() {
     return SizedBox(
       height: 36,
@@ -293,8 +304,6 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
     );
   }
 
-  // ── AppBar title ──────────────────────────────────────────────────────────
-
   Widget _buildNewsScopeTitle() {
     return RichText(
       text: TextSpan(
@@ -316,8 +325,6 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
       ),
     );
   }
-
-  // ── Greeting card ─────────────────────────────────────────────────────────
 
   Widget _buildGreetingCard() {
     final name = _user?.displayName ?? 'Reader';
@@ -402,8 +409,6 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
     );
   }
 
-  // ── Date headers ──────────────────────────────────────────────────────────
-
   Widget _buildDateHeader(String headerText) {
     return Padding(
       padding: const EdgeInsets.only(top: 16.0, bottom: 8.0),
@@ -443,8 +448,6 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
     return '${parts[2]}/${parts[1]}/${parts[0]}';
   }
 
-  // ── Build ─────────────────────────────────────────────────────────────────
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -459,6 +462,7 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
           ),
           IconButton(
             icon: const Icon(Icons.logout),
+            // FIX: now shows confirmation dialog before signing out
             onPressed: _handleLogout,
             tooltip: 'Sign Out',
           ),

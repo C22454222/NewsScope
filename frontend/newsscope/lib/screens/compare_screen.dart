@@ -17,10 +17,7 @@ class CompareScreen extends StatefulWidget {
 class _CompareScreenState extends State<CompareScreen>
     with SingleTickerProviderStateMixin {
   final TextEditingController _searchController = TextEditingController();
-
-  // FIX: FocusNode added so we can programmatically dismiss the keyboard.
   final FocusNode _searchFocusNode = FocusNode();
-
   final ApiService _apiService = ApiService();
 
   late TabController _tabController;
@@ -94,7 +91,7 @@ class _CompareScreenState extends State<CompareScreen>
   @override
   void dispose() {
     _searchController.dispose();
-    _searchFocusNode.dispose(); // FIX: dispose the new FocusNode
+    _searchFocusNode.dispose();
     _tabController.dispose();
     super.dispose();
   }
@@ -105,8 +102,6 @@ class _CompareScreenState extends State<CompareScreen>
       _selectedSource != null;
 
   Future<void> _searchTopic() async {
-    // FIX: Dismiss keyboard immediately when search is triggered so it doesn't
-    // linger until the user presses "Done", and avoids the layout overflow.
     FocusScope.of(context).unfocus();
 
     if (!_hasAnyFilter) {
@@ -490,7 +485,6 @@ class _CompareScreenState extends State<CompareScreen>
             : 'Compare Coverage';
 
     return GestureDetector(
-      // FIX: Tapping anywhere outside the TextField dismisses the keyboard.
       onTap: () => FocusScope.of(context).unfocus(),
       child: Scaffold(
         appBar: AppBar(
@@ -505,17 +499,21 @@ class _CompareScreenState extends State<CompareScreen>
             ),
           ),
         ),
-        // FIX: resizeToAvoidBottomInset (default true) shrinks the Scaffold
-        // body when the keyboard opens. The former SizedBox(height:16) above
-        // Expanded was a fixed-height spacer that had nowhere to go once
-        // Expanded shrunk to 0 — causing exactly the 16 px overflow. Removing
-        // that spacer and folding the gap into the top padding of the results
-        // area eliminates the overflow entirely.
         body: Padding(
           padding: const EdgeInsets.all(16.0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              // FIX: Added instruction label above the filter chips
+              Text(
+                'Pick a category and / or outlet to get started',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: Colors.grey[600],
+                  height: 1.4,
+                ),
+              ),
+              const SizedBox(height: 10),
               _buildFilterLabel('CATEGORY'),
               const SizedBox(height: 6),
               _buildCategoryChips(),
@@ -541,9 +539,9 @@ class _CompareScreenState extends State<CompareScreen>
               const SizedBox(height: 12),
               TextField(
                 controller: _searchController,
-                focusNode: _searchFocusNode, // FIX: attach FocusNode
-                textInputAction: TextInputAction.search, // FIX: shows search key
-                onTapOutside: (_) => _searchFocusNode.unfocus(), // FIX
+                focusNode: _searchFocusNode,
+                textInputAction: TextInputAction.search,
+                onTapOutside: (_) => _searchFocusNode.unfocus(),
                 decoration: InputDecoration(
                   labelText: _hasAnyFilter
                       ? 'Add a keyword (optional)'
@@ -570,7 +568,8 @@ class _CompareScreenState extends State<CompareScreen>
                       : null,
                 ),
                 onChanged: (_) => setState(() {}),
-                onSubmitted: (_) => _searchTopic(), // FIX: also unfocuses via _searchTopic
+                // FIX: keyboard submit unfocuses via _searchTopic's FocusScope.unfocus()
+                onSubmitted: (_) => _searchTopic(),
               ),
               const SizedBox(height: 12),
               ElevatedButton.icon(
@@ -587,11 +586,9 @@ class _CompareScreenState extends State<CompareScreen>
                   ),
                 ),
               ),
-              // FIX: Removed SizedBox(height: 16) that was here.
-              // It was a fixed-height child that caused the Column to overflow
-              // by exactly 16 px when the keyboard reduced available height
-              // and Expanded had already shrunk to 0. The visual gap is
-              // preserved via the top padding inside _buildResultsBody().
+              // FIX: The old fixed SizedBox(height:16) here was causing the
+              // 16px overflow when the keyboard opened. It is removed entirely;
+              // the visual gap is provided by top padding inside _buildResultsBody.
               Expanded(
                 child: Padding(
                   padding: const EdgeInsets.only(top: 16),

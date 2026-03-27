@@ -383,13 +383,34 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   // ── Pie chart ─────────────────────────────────────────────────────────────
 
+  /// FIX: Rounds three percentages so they always sum to exactly 100.
+  /// Uses the "largest remainder" method to distribute rounding error.
+  List<int> _roundToHundred(double a, double b, double c) {
+    final floors = [a.floor(), b.floor(), c.floor()];
+    final remainders = [a - floors[0], b - floors[1], c - floors[2]];
+    int remainder = 100 - floors.reduce((x, y) => x + y);
+    // Give the extra points to the values with the largest fractional parts
+    final indices = [0, 1, 2]
+      ..sort((i, j) => remainders[j].compareTo(remainders[i]));
+    for (int i = 0; i < remainder; i++) {
+      floors[indices[i]]++;
+    }
+    return floors;
+  }
+
   Widget _buildPieChart() {
     final dist = _profile!.biasDistribution;
-    final left = (dist['left'] ?? 0.0).toDouble();
-    final center = (dist['center'] ?? 0.0).toDouble();
-    final right = (dist['right'] ?? 0.0).toDouble();
-    final total = left + center + right;
+    final leftRaw = (dist['left'] ?? 0.0).toDouble();
+    final centerRaw = (dist['center'] ?? 0.0).toDouble();
+    final rightRaw = (dist['right'] ?? 0.0).toDouble();
+    final total = leftRaw + centerRaw + rightRaw;
     if (total == 0) return const SizedBox.shrink();
+
+    // FIX: use largest-remainder rounding so labels always sum to 100
+    final rounded = _roundToHundred(leftRaw, centerRaw, rightRaw);
+    final left = rounded[0];
+    final center = rounded[1];
+    final right = rounded[2];
 
     return Card(
       elevation: 2,
@@ -408,8 +429,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   sections: [
                     if (left > 0)
                       PieChartSectionData(
-                        value: left,
-                        title: '${left.toInt()}%',
+                        // Use raw value for actual arc size, rounded int for label
+                        value: leftRaw,
+                        title: '$left%',
                         color: Colors.blue[800]!,
                         radius: 55,
                         titleStyle: const TextStyle(
@@ -420,8 +442,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       ),
                     if (center > 0)
                       PieChartSectionData(
-                        value: center,
-                        title: '${center.toInt()}%',
+                        value: centerRaw,
+                        title: '$center%',
                         color: Colors.teal[600]!,
                         radius: 55,
                         titleStyle: const TextStyle(
@@ -432,8 +454,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       ),
                     if (right > 0)
                       PieChartSectionData(
-                        value: right,
-                        title: '${right.toInt()}%',
+                        value: rightRaw,
+                        title: '$right%',
                         color: Colors.red[800]!,
                         radius: 55,
                         titleStyle: const TextStyle(
@@ -538,7 +560,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
               height: 240,
               child: Row(
                 children: [
-                  // ── Fixed Y-axis (does not scroll) ─────────────────────
                   SizedBox(
                     width: 28,
                     child: BarChart(
@@ -564,14 +585,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             ),
                           ),
                           bottomTitles: const AxisTitles(
-                              sideTitles:
-                                  SideTitles(showTitles: false)),
+                              sideTitles: SideTitles(showTitles: false)),
                           topTitles: const AxisTitles(
-                              sideTitles:
-                                  SideTitles(showTitles: false)),
+                              sideTitles: SideTitles(showTitles: false)),
                           rightTitles: const AxisTitles(
-                              sideTitles:
-                                  SideTitles(showTitles: false)),
+                              sideTitles: SideTitles(showTitles: false)),
                         ),
                         borderData: FlBorderData(show: false),
                         gridData: const FlGridData(show: false),
@@ -579,8 +597,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       ),
                     ),
                   ),
-
-                  // ── Horizontally scrollable bars + labels ───────────────
                   Expanded(
                     child: SingleChildScrollView(
                       scrollDirection: Axis.horizontal,
@@ -607,7 +623,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               touchTooltipData: BarTouchTooltipData(
                                 getTooltipColor: (_) =>
                                     Colors.blueGrey.shade800,
-                                // FIX: prevent tooltip escaping screen edges
                                 fitInsideHorizontally: true,
                                 fitInsideVertically: true,
                                 getTooltipItem: (group, groupIndex,
@@ -627,8 +642,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                         style: const TextStyle(
                                           color: Colors.white70,
                                           fontSize: 11,
-                                          fontWeight:
-                                              FontWeight.normal,
+                                          fontWeight: FontWeight.normal,
                                         ),
                                       ),
                                     ],
@@ -643,8 +657,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                   reservedSize: 52,
                                   getTitlesWidget: (value, meta) {
                                     final i = value.toInt();
-                                    if (i < 0 ||
-                                        i >= sources.length) {
+                                    if (i < 0 || i >= sources.length) {
                                       return const SizedBox.shrink();
                                     }
                                     final name = sources[i].key;
@@ -653,8 +666,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                         ? '${words[0]}\n${words[1]}'
                                         : words[0];
                                     return Padding(
-                                      padding: const EdgeInsets.only(
-                                          top: 6),
+                                      padding:
+                                          const EdgeInsets.only(top: 6),
                                       child: Text(
                                         label,
                                         textAlign: TextAlign.center,
@@ -688,14 +701,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               drawVerticalLine: false,
                               horizontalInterval: interval,
                               getDrawingHorizontalLine: (_) => FlLine(
-                                color: Colors.grey
-                                    .withValues(alpha: 0.15),
+                                color: Colors.grey.withValues(alpha: 0.15),
                                 strokeWidth: 1,
                               ),
                             ),
                             borderData: FlBorderData(show: false),
-                            barGroups: sources.asMap().entries
-                                .map((entry) {
+                            barGroups: sources.asMap().entries.map((entry) {
                               final i = entry.key;
                               final isTouched = i == _touchedBarIndex;
                               return BarChartGroupData(
@@ -704,11 +715,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                   BarChartRodData(
                                     toY: entry.value.value.toDouble(),
                                     color: isTouched
-                                        ? _sourceBarColor(
-                                                i, sources.length)
+                                        ? _sourceBarColor(i, sources.length)
                                             .withValues(alpha: 1.0)
-                                        : _sourceBarColor(
-                                                i, sources.length)
+                                        : _sourceBarColor(i, sources.length)
                                             .withValues(alpha: 0.82),
                                     width: 22,
                                     borderRadius:
@@ -750,7 +759,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final p = _profile!;
     return Column(
       children: [
-        // UPDATED icons: west/balance/east — directional and meaningful
         _buildDetailCard('Left Wing articles', '${p.leftCount}',
             Colors.blue[800]!, Icons.west),
         _buildDetailCard('Centre articles', '${p.centerCount}',
