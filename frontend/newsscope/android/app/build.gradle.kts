@@ -1,18 +1,17 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
-    // Flutter plugin must be applied after Android/Kotlin
     id("dev.flutter.flutter-gradle-plugin")
-    // Google Services plugin
     id("com.google.gms.google-services")
 }
 
 android {
-    namespace = "com.newsscope.app"         
+    namespace = "com.newsscope.app"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
+        coreLibraryDesugaringEnabled = true          // ← added
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
@@ -22,7 +21,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.newsscope.app"  
+        applicationId = "com.newsscope.app"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
@@ -41,6 +40,8 @@ flutter {
 }
 
 dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")  // ← added
+
     // Firebase BoM
     implementation(platform("com.google.firebase:firebase-bom:34.5.0"))
 
