@@ -575,7 +575,6 @@ class _CompareScreenState extends State<CompareScreen>
               ),
             ),
           ),
-          const SizedBox(height: 16),
         ],
       ),
     );
@@ -606,8 +605,9 @@ class _CompareScreenState extends State<CompareScreen>
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // Scrollable filter + search + button area
-              filterSection,
+              // Flexible lets this shrink when the keyboard reduces available
+              // height; the SingleChildScrollView inside handles the rest.
+              Flexible(child: filterSection),
               // Results area fills whatever space remains above the keyboard
               Expanded(
                 child: _isLoading
