@@ -10,6 +10,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/config.dart';
+import '../core/app_prefs.dart';
 
 // ── Local notifications plugin (singleton) ────────────────────────────────────
 // Initialised once in AppNotifications.init(); safe to call multiple times.
@@ -1086,6 +1087,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 onChanged: (v) async {
                   setState(() => _showCredibility = v);
                   await _saveBool('show_credibility', v);
+                  await AppPrefs.load();
                 },
                 iconColor: Colors.green[700],
               ),
@@ -1098,6 +1100,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 onChanged: (v) async {
                   setState(() => _showSentiment = v);
                   await _saveBool('show_sentiment', v);
+                  await AppPrefs.load();
                 },
                 iconColor: Colors.teal[600],
               ),
@@ -1110,6 +1113,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 onChanged: (v) async {
                   setState(() => _compactCards = v);
                   await _saveBool('compact_cards', v);
+                  await AppPrefs.load();
                 },
                 iconColor: Colors.indigo[600],
               ),

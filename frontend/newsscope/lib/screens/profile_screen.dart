@@ -27,7 +27,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   String? _errorMessage;
   int _touchedBarIndex = -1;
 
-  static const Color _scaffoldBg = Color(0xFFF0F2F5);
+  
 
   @override
   void initState() {
@@ -74,14 +74,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Widget build(BuildContext context) {
     if (_loading) {
       return Scaffold(
-          backgroundColor: _scaffoldBg,
+          
           body: const Center(child: CircularProgressIndicator()));
     }
 
     if (_errorMessage != null) {
       return Scaffold(
-        backgroundColor: _scaffoldBg,
-        appBar: AppBar(backgroundColor: _scaffoldBg, centerTitle: true,
+        
+        appBar: AppBar( centerTitle: true,
             title: _buildBiasProfileTitle()),
         body: Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
           const Icon(Icons.error_outline, size: 64, color: Colors.red),
@@ -95,8 +95,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
     if (_profile == null || _profile!.isEmpty) {
       return Scaffold(
-        backgroundColor: _scaffoldBg,
-        appBar: AppBar(backgroundColor: _scaffoldBg, centerTitle: true,
+        
+        appBar: AppBar( centerTitle: true,
             title: _buildBiasProfileTitle(), actions: [_settingsButton()]),
         body: Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
           Icon(Icons.auto_stories, size: 80, color: Colors.grey.shade300),
@@ -113,9 +113,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
 
     return Scaffold(
-      backgroundColor: _scaffoldBg,
+      
       appBar: AppBar(
-        backgroundColor: _scaffoldBg,
+        
         centerTitle: true,
         title: _buildBiasProfileTitle(),
         actions: [
@@ -206,7 +206,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           Container(width: 1, height: 32, color: Colors.white.withAlpha(25)),
           _buildHeaderStat('${p.readingTimeTotalMinutes}m', 'Read Time'),
           Container(width: 1, height: 32, color: Colors.white.withAlpha(25)),
-          _buildHeaderStat(getBiasLabel(p.avgBias), 'Leaning'),
+          _buildHeaderStat(p.mostReadSource.isNotEmpty ? p.mostReadSource.split(' ').first : '—', 'Top Source'),
         ]),
       ]),
     );

@@ -30,8 +30,6 @@ class _CompareScreenState extends State<CompareScreen>
   String? _selectedCategory;
   String? _selectedSource;
 
-  static const Color _scaffoldBg = Color(0xFFF0F2F5);
-
   static const List<Map<String, String>> _categories = [
     {'label': 'All', 'value': ''},
     {'label': 'Politics', 'value': 'politics'},
@@ -187,16 +185,21 @@ class _CompareScreenState extends State<CompareScreen>
     required bool isSelected,
     required VoidCallback onTap,
   }) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return GestureDetector(
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 180),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
         decoration: BoxDecoration(
-          color: isSelected ? Colors.blue[700] : Colors.grey[100],
+          color: isSelected
+              ? Colors.blue[700]
+              : (isDark ? Colors.grey[800] : Colors.grey[100]),
           borderRadius: BorderRadius.circular(20),
           border: Border.all(
-            color: isSelected ? Colors.blue[700]! : Colors.grey[300]!,
+            color: isSelected
+                ? Colors.blue[700]!
+                : (isDark ? Colors.grey[600]! : Colors.grey[300]!),
           ),
         ),
         child: Row(
@@ -211,7 +214,9 @@ class _CompareScreenState extends State<CompareScreen>
               style: TextStyle(
                 fontSize: 12,
                 fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-                color: isSelected ? Colors.white : Colors.grey[700],
+                color: isSelected
+                    ? Colors.white
+                    : (isDark ? Colors.grey[300] : Colors.grey[700]),
               ),
             ),
           ],
@@ -321,9 +326,10 @@ class _CompareScreenState extends State<CompareScreen>
     List<dynamic>? r,
   ) {
     final activeColor = _tabColors[_activeTab];
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
       decoration: BoxDecoration(
-        color: Colors.grey[200],
+        color: isDark ? Colors.grey[850] : Colors.grey[200],
         borderRadius: BorderRadius.circular(12),
       ),
       child: TabBar(
@@ -486,109 +492,19 @@ class _CompareScreenState extends State<CompareScreen>
                 '${_selectedSource != null ? " · ${_sourceMap.entries.firstWhere((e) => e.value == _selectedSource, orElse: () => MapEntry(_selectedSource!, _selectedSource!)).key}" : ""}'
             : 'Compare Coverage';
 
-    // The top filter section (everything above the results area).
-    // Wrapping in SingleChildScrollView lets it scroll/compress when the
-    // keyboard appears, eliminating the overflow banner.
-    final filterSection = SingleChildScrollView(
-      physics: const ClampingScrollPhysics(),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            'Pick a category and / or outlet to get started',
-            style: TextStyle(
-              fontSize: 13,
-              color: Colors.grey[600],
-              height: 1.4,
-            ),
-          ),
-          const SizedBox(height: 10),
-          _buildFilterLabel('CATEGORY'),
-          const SizedBox(height: 6),
-          _buildCategoryChips(),
-          const SizedBox(height: 10),
-          _buildFilterLabel('OUTLET'),
-          const SizedBox(height: 6),
-          _buildSourceChips(),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(child: Divider(color: Colors.grey[300])),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: Text(
-                  'or refine with a keyword',
-                  style: TextStyle(fontSize: 11, color: Colors.grey[500]),
-                ),
-              ),
-              Expanded(child: Divider(color: Colors.grey[300])),
-            ],
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _searchController,
-            focusNode: _searchFocusNode,
-            textInputAction: TextInputAction.search,
-            onTapOutside: (_) => _searchFocusNode.unfocus(),
-            decoration: InputDecoration(
-              filled: true,
-              fillColor: Colors.white,
-              labelText: _hasAnyFilter
-                  ? 'Add a keyword (optional)'
-                  : 'Enter a topic to compare',
-              hintText: 'e.g., climate, housing, election',
-              prefixIcon: const Icon(Icons.search),
-              border: const OutlineInputBorder(),
-              suffixIcon: _searchController.text.isNotEmpty
-                  ? IconButton(
-                      icon: const Icon(Icons.clear),
-                      onPressed: () {
-                        _searchController.clear();
-                        setState(() {});
-                        if (_hasAnyFilter) {
-                          _searchTopic();
-                        } else {
-                          setState(() {
-                            _rawResults = null;
-                            _errorMessage = null;
-                          });
-                        }
-                      },
-                    )
-                  : null,
-            ),
-            onChanged: (_) => setState(() {}),
-            onSubmitted: (_) => _searchTopic(),
-          ),
-          const SizedBox(height: 12),
-          ElevatedButton.icon(
-            onPressed: _isLoading ? null : _searchTopic,
-            icon: const Icon(Icons.compare_arrows),
-            label: Text(buttonLabel),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.blue[700],
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(vertical: 14),
-              textStyle: const TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
+    // Use viewInsets to shrink the filter section when the keyboard appears,
+    // instead of relying on resizeToAvoidBottomInset. This gives us precise
+    // control: the filter section scrolls, the results area stays stable,
+    // and no overflow banner appears.
+    final keyboardHeight = MediaQuery.of(context).viewInsets.bottom;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return GestureDetector(
       onTap: () => FocusScope.of(context).unfocus(),
       child: Scaffold(
-        backgroundColor: _scaffoldBg,
-        // resizeToAvoidBottomInset: true (default) — lets Flutter shrink the
-        // available height when the keyboard appears. Combined with the
-        // SingleChildScrollView above, the filter section scrolls up and the
-        // Expanded results area shrinks gracefully. No overflow banner.
+        // Disable Flutter's automatic resize so we handle insets manually.
+        resizeToAvoidBottomInset: false,
         appBar: AppBar(
-          backgroundColor: _scaffoldBg,
           centerTitle: true,
           title: Text(
             'Story Comparison',
@@ -601,14 +517,118 @@ class _CompareScreenState extends State<CompareScreen>
           ),
         ),
         body: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+          // Add bottom padding equal to the keyboard height so content
+          // is never hidden behind the keyboard.
+          padding: EdgeInsets.fromLTRB(16, 0, 16, keyboardHeight),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // Flexible lets this shrink when the keyboard reduces available
-              // height; the SingleChildScrollView inside handles the rest.
-              Flexible(child: filterSection),
-              // Results area fills whatever space remains above the keyboard
+              // Filter section — constrained so it never overlaps results.
+              // AnimatedContainer smoothly adjusts height as keyboard appears.
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                curve: Curves.easeOut,
+                // When keyboard is visible, reserve less height for filters.
+                constraints: BoxConstraints(
+                  maxHeight: keyboardHeight > 0
+                      ? MediaQuery.of(context).size.height * 0.40
+                      : double.infinity,
+                ),
+                child: SingleChildScrollView(
+                  physics: const ClampingScrollPhysics(),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const SizedBox(height: 4),
+                      Text(
+                        'Pick a category and / or outlet to get started',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: Colors.grey[600],
+                          height: 1.4,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      _buildFilterLabel('CATEGORY'),
+                      const SizedBox(height: 6),
+                      _buildCategoryChips(),
+                      const SizedBox(height: 10),
+                      _buildFilterLabel('OUTLET'),
+                      const SizedBox(height: 6),
+                      _buildSourceChips(),
+                      const SizedBox(height: 16),
+                      Row(
+                        children: [
+                          Expanded(child: Divider(color: Colors.grey[300])),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                            child: Text(
+                              'or refine with a keyword',
+                              style: TextStyle(
+                                  fontSize: 11, color: Colors.grey[500]),
+                            ),
+                          ),
+                          Expanded(child: Divider(color: Colors.grey[300])),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: _searchController,
+                        focusNode: _searchFocusNode,
+                        textInputAction: TextInputAction.search,
+                        onTapOutside: (_) => _searchFocusNode.unfocus(),
+                        decoration: InputDecoration(
+                          filled: true,
+                          fillColor: isDark ? Colors.grey[850] : Colors.white,
+                          labelText: _hasAnyFilter
+                              ? 'Add a keyword (optional)'
+                              : 'Enter a topic to compare',
+                          hintText: 'e.g., climate, housing, election',
+                          prefixIcon: const Icon(Icons.search),
+                          border: const OutlineInputBorder(),
+                          suffixIcon: _searchController.text.isNotEmpty
+                              ? IconButton(
+                                  icon: const Icon(Icons.clear),
+                                  onPressed: () {
+                                    _searchController.clear();
+                                    setState(() {});
+                                    if (_hasAnyFilter) {
+                                      _searchTopic();
+                                    } else {
+                                      setState(() {
+                                        _rawResults = null;
+                                        _errorMessage = null;
+                                      });
+                                    }
+                                  },
+                                )
+                              : null,
+                        ),
+                        onChanged: (_) => setState(() {}),
+                        onSubmitted: (_) => _searchTopic(),
+                      ),
+                      const SizedBox(height: 12),
+                      ElevatedButton.icon(
+                        onPressed: _isLoading ? null : _searchTopic,
+                        icon: const Icon(Icons.compare_arrows),
+                        label: Text(buttonLabel),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.blue[700],
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          textStyle: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                  ),
+                ),
+              ),
+
+              // Results area fills all remaining space.
               Expanded(
                 child: _isLoading
                     ? const Center(child: CircularProgressIndicator())

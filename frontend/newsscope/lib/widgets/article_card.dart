@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../models/article.dart';
 import '../utils/score_helpers.dart';
+import '../core/app_prefs.dart'; // <-- new import
 
 class ArticleCard extends StatelessWidget {
   final Article article;
@@ -34,10 +35,20 @@ class ArticleCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Re-read prefs on every build so settings changes take effect immediately.
+    final showCredibility = AppPrefs.showCredibility;
+    final showSentiment = AppPrefs.showSentiment;
+    final compact = AppPrefs.compactCards;
+
     final displayTitle = _sanitiseTitle(article.title, article.url);
     final biasColor = getBiasColor(article.biasScore);
     final sentimentColor = getSentimentColor(article.sentimentScore);
     final credibilityColor = getCredibilityColor(article.credibilityScore);
+
+    // Compact mode: tighter padding, single-line title, no description pills
+    final padding = compact ? 10.0 : 16.0;
+    final titleMaxLines = compact ? 1 : 2;
+    final titleFontSize = compact ? 13.0 : 15.0;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -60,20 +71,20 @@ class ArticleCard extends StatelessWidget {
           borderRadius: BorderRadius.circular(12),
           onTap: onTap,
           child: Padding(
-            padding: const EdgeInsets.all(16),
+            padding: EdgeInsets.all(padding),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
                   displayTitle,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontWeight: FontWeight.bold,
-                    fontSize: 15,
+                    fontSize: titleFontSize,
                   ),
-                  maxLines: 2,
+                  maxLines: titleMaxLines,
                   overflow: TextOverflow.ellipsis,
                 ),
-                const SizedBox(height: 8),
+                SizedBox(height: compact ? 4 : 8),
                 Row(
                   children: [
                     Icon(Icons.source, size: 13, color: Colors.grey[500]),
@@ -81,14 +92,17 @@ class ArticleCard extends StatelessWidget {
                     Expanded(
                       child: Text(
                         article.source,
-                        style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                        style: TextStyle(
+                            fontSize: 12, color: Colors.grey[600]),
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
-                    if (article.category != null && article.category!.isNotEmpty) ...[
+                    if (article.category != null &&
+                        article.category!.isNotEmpty) ...[
                       const SizedBox(width: 8),
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 7, vertical: 2),
                         decoration: BoxDecoration(
                           color: Colors.blue[50],
                           borderRadius: BorderRadius.circular(6),
@@ -106,47 +120,57 @@ class ArticleCard extends StatelessWidget {
                     const SizedBox(width: 8),
                     Text(
                       _formatDate(article.publishedAt),
-                      style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+                      style:
+                          TextStyle(fontSize: 11, color: Colors.grey[500]),
                     ),
                   ],
                 ),
-                const SizedBox(height: 10),
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 6,
-                  children: [
-                    if (article.biasScore != null)
-                      _ScorePill(
-                        label: 'Political Leaning: ${getBiasLabelShort(article.biasScore)}',
-                        color: biasColor,
-                        icon: Icons.balance,
-                      ),
-                    if (article.sentimentScore != null)
-                      _ScorePill(
-                        label: 'Sentiment: ${getSentimentLabel(article.sentimentScore)}',
-                        color: sentimentColor,
-                        icon: (article.sentimentScore ?? 0) > 0
-                            ? Icons.sentiment_satisfied
-                            : Icons.sentiment_dissatisfied,
-                      ),
-                    if (article.credibilityScore != null)
-                      _ScorePill(
-                        label: '${article.credibilityScore!.round()}% credible',
-                        color: credibilityColor,
-                        icon: Icons.fact_check_outlined,
-                      ),
-                    if (article.generalBias != null)
-                      _ScorePill(
-                        label: article.generalBias == 'BIASED' ? 'Biased' : 'Unbiased',
-                        color: article.generalBias == 'BIASED'
-                            ? Colors.orange[700]!
-                            : Colors.green[700]!,
-                        icon: article.generalBias == 'BIASED'
-                            ? Icons.warning_amber
-                            : Icons.check_circle_outline,
-                      ),
-                  ],
-                ),
+                // In compact mode we skip the score pills row entirely
+                if (!compact) ...[
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: [
+                      if (article.biasScore != null)
+                        _ScorePill(
+                          label:
+                              'Political Leaning: ${getBiasLabelShort(article.biasScore)}',
+                          color: biasColor,
+                          icon: Icons.balance,
+                        ),
+                      if (showSentiment && article.sentimentScore != null)
+                        _ScorePill(
+                          label:
+                              'Sentiment: ${getSentimentLabel(article.sentimentScore)}',
+                          color: sentimentColor,
+                          icon: (article.sentimentScore ?? 0) > 0
+                              ? Icons.sentiment_satisfied
+                              : Icons.sentiment_dissatisfied,
+                        ),
+                      if (showCredibility &&
+                          article.credibilityScore != null)
+                        _ScorePill(
+                          label:
+                              '${article.credibilityScore!.round()}% credible',
+                          color: credibilityColor,
+                          icon: Icons.fact_check_outlined,
+                        ),
+                      if (article.generalBias != null)
+                        _ScorePill(
+                          label: article.generalBias == 'BIASED'
+                              ? 'Biased'
+                              : 'Unbiased',
+                          color: article.generalBias == 'BIASED'
+                              ? Colors.orange[700]!
+                              : Colors.green[700]!,
+                          icon: article.generalBias == 'BIASED'
+                              ? Icons.warning_amber
+                              : Icons.check_circle_outline,
+                        ),
+                    ],
+                  ),
+                ],
               ],
             ),
           ),

@@ -65,7 +65,7 @@ class ArticleDetailScreen extends StatefulWidget {
 }
 
 class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
-  static const Color _scaffoldBg = Color(0xFFF0F2F5);
+  
 
   final ApiService _api = ApiService();
   Timer? _trackingTimer;
@@ -605,9 +605,9 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
         if (didPop && !_hasTracked) await _trackReadingTime();
       },
       child: Scaffold(
-        backgroundColor: _scaffoldBg,
+        
         appBar: AppBar(
-          backgroundColor: _scaffoldBg,
+          
           title: const Text('Article'),
         ),
         body: SingleChildScrollView(

@@ -6,6 +6,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 
 import 'screens/auth_gate.dart';
 import 'screens/settings_screen.dart'; // for AppTheme
+import 'core/app_prefs.dart';
 
 // ── FCM background message handler ────────────────────────────────────────────
 // Must be a top-level function (not a class method). Flutter runs this in a
@@ -31,6 +32,7 @@ void main() async {
 
   // Load the persisted theme preference before the first frame is painted.
   await AppTheme.load();
+  await AppPrefs.load();
 
   runApp(const NewsScopeApp());
 }
