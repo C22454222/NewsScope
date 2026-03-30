@@ -1,6 +1,9 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:http/http.dart' as http;
 import 'package:permission_handler/permission_handler.dart';
@@ -8,19 +11,93 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/config.dart';
 
-// ── App-wide theme notifier ────────────────────────────────────────────────
-// In your main.dart, call AppTheme.load() before runApp(), then wrap
-// MaterialApp with ValueListenableBuilder<ThemeMode>:
-//
-//   ValueListenableBuilder<ThemeMode>(
-//     valueListenable: AppTheme.notifier,
-//     builder: (_, mode, __) => MaterialApp(
-//       themeMode: mode,
-//       theme: ThemeData.light(),
-//       darkTheme: ThemeData.dark(),
-//       ...
-//     ),
-//   )
+// ── Local notifications plugin (singleton) ────────────────────────────────────
+// Initialised once in AppNotifications.init(); safe to call multiple times.
+final FlutterLocalNotificationsPlugin _localNotifications =
+    FlutterLocalNotificationsPlugin();
+
+// ── App-wide notification helper ──────────────────────────────────────────────
+class AppNotifications {
+  AppNotifications._();
+
+  /// Call once from main() after Firebase.initializeApp().
+  static Future<void> init() async {
+    // ── Android channel ──────────────────────────────────────────────────────
+    // On Android 8+ (Oreo) a NotificationChannel must exist before any
+    // notification can be shown. Samsung devices honour the same channel API.
+    const androidChannel = AndroidNotificationChannel(
+      'news_updates',          // id  — must match FCM payload channel_id
+      'News Updates',          // human-readable name shown in device settings
+      description: 'Breaking news alerts from NewsScope',
+      importance: Importance.high,
+      playSound: true,
+    );
+
+    final androidPlugin = _localNotifications
+        .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>();
+    await androidPlugin?.createNotificationChannel(androidChannel);
+
+    // ── Initialise the plugin ────────────────────────────────────────────────
+    const initSettings = InitializationSettings(
+      android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+      iOS: DarwinInitializationSettings(
+        requestAlertPermission: false, // we ask via FCM instead
+        requestBadgePermission: false,
+        requestSoundPermission: false,
+      ),
+    );
+    await _localNotifications.initialize(initSettings);
+
+    // ── Foreground FCM messages ──────────────────────────────────────────────
+    // By default FCM does NOT show a heads-up notification when the app is in
+    // the foreground on Android. We show one manually via flutter_local_notifications.
+    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+      final notification = message.notification;
+      if (notification == null) return;
+
+      _localNotifications.show(
+        notification.hashCode,
+        notification.title,
+        notification.body,
+        NotificationDetails(
+          android: AndroidNotificationDetails(
+            'news_updates',
+            'News Updates',
+            channelDescription: 'Breaking news alerts from NewsScope',
+            importance: Importance.high,
+            priority: Priority.high,
+            icon: '@mipmap/ic_launcher',
+            // Show a small icon on Samsung's status bar properly.
+            styleInformation: const DefaultStyleInformation(true, true),
+          ),
+          iOS: const DarwinNotificationDetails(),
+        ),
+      );
+    });
+  }
+
+  /// Show a local test notification — handy for verifying the channel works.
+  static Future<void> showTest() async {
+    await _localNotifications.show(
+      0,
+      'NewsScope',
+      'Notifications are working! 🎉',
+      const NotificationDetails(
+        android: AndroidNotificationDetails(
+          'news_updates',
+          'News Updates',
+          importance: Importance.high,
+          priority: Priority.high,
+          icon: '@mipmap/ic_launcher',
+        ),
+        iOS: DarwinNotificationDetails(),
+      ),
+    );
+  }
+}
+
+// ── App-wide theme notifier ────────────────────────────────────────────────────
 class AppTheme {
   AppTheme._();
 
@@ -42,6 +119,7 @@ class AppTheme {
   static bool get isDark => notifier.value == ThemeMode.dark;
 }
 
+// ── Settings Screen ────────────────────────────────────────────────────────────
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
 
@@ -50,17 +128,16 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  static const Color _scaffoldBg = Color(0xFFF0F2F5);
-
   User? get user => FirebaseAuth.instance.currentUser;
 
-  // ── Preferences ────────────────────────────────────────────────────────────
+  // ── Preferences ─────────────────────────────────────────────────────────────
   bool _notificationsEnabled = false;
   bool _compactCards         = false;
   bool _showCredibility      = true;
   bool _showSentiment        = true;
   bool _darkMode             = false;
   int  _dailyGoal            = 3;
+  int  _todayCount           = 0;
 
   static const List<int> _goalOptions = [1, 3, 5, 10, 20];
 
@@ -71,6 +148,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
     super.initState();
     _displayName = user?.displayName;
     _loadPreferences();
+    // Keep local _darkMode in sync with the global notifier while this
+    // screen is alive (e.g. if theme is toggled from another entry point).
+    AppTheme.notifier.addListener(_onThemeChanged);
+  }
+
+  @override
+  void dispose() {
+    AppTheme.notifier.removeListener(_onThemeChanged);
+    super.dispose();
+  }
+
+  void _onThemeChanged() {
+    if (!mounted) return;
+    setState(() => _darkMode = AppTheme.isDark);
   }
 
   Future<void> _loadPreferences() async {
@@ -83,6 +174,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _showSentiment        = prefs.getBool('show_sentiment')        ?? true;
       _darkMode             = prefs.getBool('dark_mode')             ?? false;
       _dailyGoal            = prefs.getInt('daily_goal')             ?? 3;
+      _todayCount           = prefs.getInt('articles_today')         ?? 0;
     });
   }
 
@@ -100,56 +192,84 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _setNotifications(bool value) async {
     if (value) {
+      // ── Step 1: request OS-level permission ─────────────────────────────
+      // On Android 13+ (API 33) POST_NOTIFICATIONS is a runtime permission.
+      // On older Android and Samsung One UI it is granted automatically, but
+      // asking anyway is harmless.
+      bool osGranted = true;
+      if (Platform.isAndroid) {
+        final status = await Permission.notification.request();
+        osGranted = status.isGranted;
+      }
+
+      // ── Step 2: request FCM permission (required on iOS; no-op on Android) ─
       final settings = await FirebaseMessaging.instance.requestPermission(
         alert: true, badge: true, sound: true,
       );
-      final granted =
+      final fcmGranted =
           settings.authorizationStatus == AuthorizationStatus.authorized ||
           settings.authorizationStatus == AuthorizationStatus.provisional;
-      if (!granted) {
+
+      if (!osGranted || !fcmGranted) {
         if (!mounted) return;
+        // User denied — offer to open system settings.
         final openSettings = await showDialog<bool>(
           context: context,
           builder: (context) => AlertDialog(
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16)),
             title: const Text('Notifications Blocked'),
             content: const Text(
-              'NewsScope needs notification permission. Open Settings to enable it.',
+              'NewsScope needs notification permission.\n\n'
+              'On Samsung devices you may also need to enable '
+              '"Allow notifications" inside the app\'s system settings.',
               style: TextStyle(height: 1.5),
             ),
             actions: [
-              TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+              TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text('Cancel')),
               TextButton(
                 onPressed: () => Navigator.pop(context, true),
-                child: Text('Open Settings', style: TextStyle(color: Colors.blue[700])),
+                child: Text('Open Settings',
+                    style: TextStyle(color: Colors.blue[700])),
               ),
             ],
           ),
         );
         if (openSettings == true) await openAppSettings();
-        return;
+        return; // do NOT toggle the switch on
       }
-      await FirebaseMessaging.instance.subscribeToTopic('news_updates');
+
+      // ── Step 3: subscribe to FCM topic ──────────────────────────────────
+      await FirebaseMessaging.instance
+          .subscribeToTopic('news_updates');
+
+      // ── Step 4: send a test notification so the user sees it works ──────
+      await AppNotifications.showTest();
     } else {
-      await FirebaseMessaging.instance.unsubscribeFromTopic('news_updates');
+      await FirebaseMessaging.instance
+          .unsubscribeFromTopic('news_updates');
     }
+
     await _saveBool('notifications_enabled', value);
     if (!mounted) return;
     setState(() => _notificationsEnabled = value);
     _showSnackBar(
-        value ? 'Notifications enabled' : 'Notifications disabled',
-        color: Colors.green[700]);
+      value ? 'Notifications enabled' : 'Notifications disabled',
+      color: Colors.green[700],
+    );
   }
 
   // ── Theme toggle ───────────────────────────────────────────────────────────
 
   Future<void> _setDarkMode(bool value) async {
-    await AppTheme.set(value);
-    if (!mounted) return;
-    setState(() => _darkMode = value);
+    await AppTheme.set(value); // updates notifier + SharedPreferences
+    // _onThemeChanged() will call setState for _darkMode automatically.
     _showSnackBar(
-        value ? 'Dark mode enabled' : 'Light mode enabled',
-        color: Colors.green[700]);
+      value ? 'Dark mode enabled' : 'Light mode enabled',
+      color: Colors.green[700],
+    );
   }
 
   // ── Reading goal ───────────────────────────────────────────────────────────
@@ -158,7 +278,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final selected = await showDialog<int>(
       context: context,
       builder: (context) => SimpleDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('Daily Reading Goal'),
         children: _goalOptions.map((goal) {
           final isCurrent = goal == _dailyGoal;
@@ -166,8 +287,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
             onPressed: () => Navigator.pop(context, goal),
             child: Row(children: [
               Icon(
-                isCurrent ? Icons.radio_button_checked : Icons.radio_button_unchecked,
-                color: isCurrent ? Colors.blue[700] : Colors.grey[400],
+                isCurrent
+                    ? Icons.radio_button_checked
+                    : Icons.radio_button_unchecked,
+                color:
+                    isCurrent ? Colors.blue[700] : Colors.grey[400],
                 size: 20,
               ),
               const SizedBox(width: 12),
@@ -175,8 +299,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 '$goal article${goal == 1 ? '' : 's'} per day',
                 style: TextStyle(
                   fontSize: 14,
-                  fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
-                  color: isCurrent ? Colors.blue[700] : Colors.grey[800],
+                  fontWeight:
+                      isCurrent ? FontWeight.bold : FontWeight.normal,
+                  color:
+                      isCurrent ? Colors.blue[700] : Colors.grey[800],
                 ),
               ),
             ]),
@@ -188,8 +314,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() => _dailyGoal = selected);
     await _saveInt('daily_goal', selected);
     _showSnackBar(
-        'Goal set to $selected article${selected == 1 ? '' : 's'} per day',
-        color: Colors.green[700]);
+      'Goal set to $selected article${selected == 1 ? '' : 's'} per day',
+      color: Colors.green[700],
+    );
   }
 
   // ── Clear reading history ──────────────────────────────────────────────────
@@ -198,7 +325,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16)),
         title: const Text('Clear Reading History'),
         content: const Text(
           'This will permanently delete all your reading history and reset '
@@ -212,7 +340,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               child: const Text('Cancel')),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            style: TextButton.styleFrom(foregroundColor: Colors.red[700]),
+            style:
+                TextButton.styleFrom(foregroundColor: Colors.red[700]),
             child: const Text('Clear History',
                 style: TextStyle(fontWeight: FontWeight.bold)),
           ),
@@ -222,14 +351,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (confirmed != true || !mounted) return;
     try {
       final idToken = await user?.getIdToken();
-      final uid    = user?.uid;
+      final uid = user?.uid;
       if (idToken != null && uid != null) {
         await http.delete(
           Uri.parse('${AppConfig.baseUrl}/users/$uid/history'),
           headers: {'Authorization': 'Bearer $idToken'},
         );
       }
+      // Also clear the local today counter
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt('articles_today', 0);
       if (!mounted) return;
+      setState(() => _todayCount = 0);
       _showSnackBar('Reading history cleared', color: Colors.green[700]);
     } catch (e) {
       if (!mounted) return;
@@ -244,7 +377,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final result = await showDialog<String>(
       context: context,
       barrierDismissible: true,
-      builder: (_) => _EditDisplayNameDialog(initialValue: currentName),
+      builder: (_) =>
+          _EditDisplayNameDialog(initialValue: currentName),
     );
     if (!mounted || result == null) return;
     final newName = result.trim();
@@ -275,133 +409,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
           color: Colors.green[700]);
     } catch (e) {
       if (!mounted) return;
-      _showSnackBar('Failed to send reset email: $e', color: Colors.red);
+      _showSnackBar('Failed to send reset email: $e',
+          color: Colors.red);
     }
-  }
-
-  // ── Privacy policy ─────────────────────────────────────────────────────────
-
-  void _showPrivacyPolicy() {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (context) => DraggableScrollableSheet(
-        expand: false,
-        initialChildSize: 0.7,
-        maxChildSize: 0.95,
-        builder: (_, scrollController) => Column(
-          children: [
-            const SizedBox(height: 12),
-            Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                    color: Colors.grey[300],
-                    borderRadius: BorderRadius.circular(2))),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
-              child: Row(children: [
-                Icon(Icons.privacy_tip_outlined, color: Colors.blue[700]),
-                const SizedBox(width: 10),
-                Text('Privacy Policy & GDPR',
-                    style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.grey[800])),
-              ]),
-            ),
-            const Divider(),
-            Expanded(
-              child: ListView(
-                controller: scrollController,
-                padding: const EdgeInsets.fromLTRB(20, 8, 20, 40),
-                children: [
-                  _privacySection('Overview',
-                      'NewsScope ("we", "us", "our") is a news analysis application developed as a Final Year Project at Technological University Dublin. We are committed to protecting your personal data and processing it in compliance with the General Data Protection Regulation (GDPR) (EU) 2016/679 and applicable Irish data protection law.'),
-                  _privacySection('Data Controller',
-                      'The data controller for NewsScope is the developer at Technological University Dublin. For data protection queries, contact the developer through the University.'),
-                  _privacySection('What Personal Data We Collect',
-                      'We collect the following personal data:\n\n'
-                      '• Email address — for authentication purposes.\n'
-                      '• Display name — the name you choose to show in the app.\n'
-                      '• Article reading history — which articles you read and for how long, used solely to generate your Bias Profile.\n'
-                      '• Firebase UID — a unique identifier used to link your data securely.\n\n'
-                      'We do not collect your full name, phone number, payment information, or location data.'),
-                  _privacySection('Legal Basis for Processing (GDPR Article 6)',
-                      'We process your personal data on the following legal bases:\n\n'
-                      '• Contractual necessity — to provide the NewsScope service you signed up for.\n'
-                      '• Legitimate interests — to improve the service and detect misuse.\n'
-                      '• Consent — for optional push notifications, which you may withdraw at any time in Settings.'),
-                  _privacySection('How We Use Your Data',
-                      'Your data is used exclusively to:\n\n'
-                      '• Authenticate your account and maintain a secure session.\n'
-                      '• Calculate and display your personal Bias Profile and reading statistics.\n'
-                      '• Send push notifications about new articles (only if you have opted in).\n\n'
-                      'We do not use your data for advertising, commercial profiling, or automated decision-making that produces legal effects.'),
-                  _privacySection('Data Sharing & Third Parties',
-                      'We use the following third-party services. Each has its own privacy policy:\n\n'
-                      '• Firebase (Google LLC) — authentication and push notifications, processed under Google\'s Standard Contractual Clauses for GDPR compliance.\n'
-                      '• Supabase — secure database storage for reading history and bias profile data, with servers within the EU.\n'
-                      '• News providers (BBC, RTÉ, The Guardian, etc.) — article content is sourced from these providers; your identity is never shared with them.\n\n'
-                      'We do not sell, rent, or trade your personal data to any third party under any circumstances.'),
-                  _privacySection('Data Retention',
-                      'Your personal data is retained for as long as your account is active. You may delete your account at any time via Settings → Account Actions → Delete Account. Upon deletion, your reading history, Bias Profile, and credentials are permanently removed within 30 days.'),
-                  _privacySection('International Data Transfers',
-                      'Firebase may process data outside the European Economic Area (EEA). Google LLC participates in the EU–U.S. Data Privacy Framework and provides Standard Contractual Clauses to ensure GDPR-compliant transfers.'),
-                  _privacySection('Your Rights Under GDPR',
-                      'As a data subject you have the right to:\n\n'
-                      '• Access — request a copy of your personal data.\n'
-                      '• Rectification — correct inaccurate data (e.g. display name) in Settings.\n'
-                      '• Erasure ("right to be forgotten") — delete your account and all data via Settings.\n'
-                      '• Restriction — request that we limit processing of your data.\n'
-                      '• Data portability — receive your data in a structured, machine-readable format.\n'
-                      '• Object — object to processing based on legitimate interests.\n'
-                      '• Withdraw consent — for notifications, withdraw at any time in Settings.\n\n'
-                      'To exercise these rights, contact the developer at Technological University Dublin.'),
-                  _privacySection('Cookies & Tracking',
-                      'The NewsScope mobile app does not use cookies. Firebase may use device identifiers for authentication token management. No third-party advertising trackers are used.'),
-                  _privacySection('Security',
-                      'We implement appropriate technical and organisational measures to protect your data, including:\n\n'
-                      '• Firebase Authentication with industry-standard token management.\n'
-                      '• HTTPS encryption for all API communications.\n'
-                      '• Row-level security policies on our Supabase database so users can only access their own data.'),
-                  _privacySection('Children\'s Privacy',
-                      'NewsScope is not directed at children under 13. We do not knowingly collect personal data from children. If you believe a child has provided data, contact us immediately for removal.'),
-                  _privacySection('Complaints',
-                      'If you believe we have not handled your personal data appropriately, you have the right to lodge a complaint with the Irish Data Protection Commission (DPC) at www.dataprotection.ie.'),
-                  const SizedBox(height: 12),
-                  Text(
-                    'Last updated: March 2026 · NewsScope v1.0.0 Beta\nTechnological University Dublin — Final Year Project',
-                    style: TextStyle(fontSize: 11, color: Colors.grey[400]),
-                    textAlign: TextAlign.center,
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _privacySection(String title, String body) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 20),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text(title,
-            style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.bold,
-                color: Colors.blue[800])),
-        const SizedBox(height: 6),
-        Text(body,
-            style: TextStyle(
-                fontSize: 13, color: Colors.grey[700], height: 1.55)),
-      ]),
-    );
   }
 
   // ── Logout ─────────────────────────────────────────────────────────────────
@@ -410,7 +420,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16)),
         title: const Text('Sign Out'),
         content: const Text('Are you sure you want to sign out?'),
         actions: [
@@ -419,16 +430,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
               child: const Text('Cancel')),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Sign Out', style: TextStyle(color: Colors.red)),
+            style:
+                TextButton.styleFrom(foregroundColor: Colors.red[700]),
+            child: const Text('Sign Out'),
           ),
         ],
       ),
     );
-    if (confirmed == true && mounted) {
-      await FirebaseAuth.instance.signOut();
-      if (!mounted) return;
-      Navigator.of(context).popUntil((route) => route.isFirst);
-    }
+    if (confirmed != true || !mounted) return;
+    await FirebaseAuth.instance.signOut();
+    if (!mounted) return;
+    Navigator.of(context).popUntil((route) => route.isFirst);
   }
 
   // ── Delete account ─────────────────────────────────────────────────────────
@@ -437,11 +449,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16)),
         title: const Text('Delete Account',
             style: TextStyle(color: Colors.red)),
         content: const Text(
-          'This will permanently delete your account and all reading history. This cannot be undone.',
+          'This will permanently delete your account and all reading '
+          'history. This cannot be undone.',
           style: TextStyle(height: 1.5),
         ),
         actions: [
@@ -452,7 +466,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             onPressed: () => Navigator.pop(context, true),
             child: const Text('Delete',
                 style: TextStyle(
-                    color: Colors.red, fontWeight: FontWeight.bold)),
+                    color: Colors.red,
+                    fontWeight: FontWeight.bold)),
           ),
         ],
       ),
@@ -466,7 +481,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _attemptDeleteAccount(String uid) async {
     try {
       final isGoogleUser =
-          user?.providerData.any((p) => p.providerId == 'google.com') ?? false;
+          user?.providerData.any((p) => p.providerId == 'google.com') ??
+              false;
       if (isGoogleUser) {
         final success = await _reauthWithGoogle();
         if (!success) return;
@@ -485,7 +501,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (!mounted) return;
       if (e.code == 'requires-recent-login') {
         final isGoogleUser =
-            user?.providerData.any((p) => p.providerId == 'google.com') ??
+            user?.providerData
+                .any((p) => p.providerId == 'google.com') ??
                 false;
         if (isGoogleUser) {
           final success = await _reauthWithGoogle();
@@ -507,8 +524,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<bool> _reauthWithGoogle() async {
     try {
-      final googleSignIn = GoogleSignIn();
-      final googleUser   = await googleSignIn.signIn();
+      final googleSignIn  = GoogleSignIn();
+      final googleUser    = await googleSignIn.signIn();
       if (googleUser == null) return false;
       final googleAuth = await googleUser.authentication;
       final credential = GoogleAuthProvider.credential(
@@ -518,7 +535,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       return true;
     } catch (_) {
       if (mounted) {
-        _showSnackBar('Google re-authentication failed.', color: Colors.red);
+        _showSnackBar('Google re-authentication failed.',
+            color: Colors.red);
       }
       return false;
     }
@@ -529,7 +547,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final password = await showDialog<String>(
       context: context,
       barrierDismissible: false,
-      builder: (_) => _ReauthPasswordDialog(email: user?.email ?? ''),
+      builder: (_) =>
+          _ReauthPasswordDialog(email: user?.email ?? ''),
     );
     if (password == null || password.isEmpty) return false;
     try {
@@ -550,6 +569,99 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  // ── Privacy policy ─────────────────────────────────────────────────────────
+
+  void _showPrivacyPolicy() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+          borderRadius:
+              BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (context) => DraggableScrollableSheet(
+        expand: false,
+        initialChildSize: 0.7,
+        maxChildSize: 0.95,
+        builder: (_, scrollController) => Column(
+          children: [
+            const SizedBox(height: 12),
+            Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                    color: Colors.grey[300],
+                    borderRadius: BorderRadius.circular(2))),
+            Padding(
+              padding:
+                  const EdgeInsets.fromLTRB(20, 16, 20, 8),
+              child: Row(children: [
+                Icon(Icons.privacy_tip_outlined,
+                    color: Colors.blue[700]),
+                const SizedBox(width: 10),
+                Text('Privacy Policy & GDPR',
+                    style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.grey[800])),
+              ]),
+            ),
+            const Divider(),
+            Expanded(
+              child: ListView(
+                controller: scrollController,
+                padding:
+                    const EdgeInsets.fromLTRB(20, 8, 20, 40),
+                children: [
+                  _privacySection('Overview',
+                      'NewsScope ("we", "us", "our") is a news analysis application developed as a Final Year Project at Technological University Dublin. We are committed to protecting your personal data in compliance with GDPR (EU) 2016/679.'),
+                  _privacySection('Data Controller',
+                      'The data controller is the developer at Technological University Dublin. For data protection queries, contact the developer through the University.'),
+                  _privacySection('What Personal Data We Collect',
+                      'Email address, display name, article reading history, and Firebase UID. We do not collect payment information or precise location data.'),
+                  _privacySection('Your Rights Under GDPR',
+                      'You have the right to access, rectify, erase, restrict, and port your data. To exercise these rights or withdraw consent for notifications, use Settings or contact the developer.'),
+                  _privacySection('Data Sharing',
+                      'We use Firebase (Google LLC) and Supabase. We do not sell, rent, or trade your personal data to any third party.'),
+                  _privacySection('Data Retention',
+                      'Your data is retained while your account is active. Delete your account via Settings → Account Actions → Delete Account.'),
+                  const SizedBox(height: 12),
+                  Text(
+                    'Last updated: March 2026 · NewsScope v1.0.0 Beta\n'
+                    'Technological University Dublin — Final Year Project',
+                    style: TextStyle(
+                        fontSize: 11, color: Colors.grey[400]),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _privacySection(String title, String body) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 20),
+      child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title,
+                style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.grey[800])),
+            const SizedBox(height: 6),
+            Text(body,
+                style: TextStyle(
+                    fontSize: 13,
+                    color: Colors.grey[600],
+                    height: 1.5)),
+          ]),
+    );
+  }
+
   // ── Snackbar ───────────────────────────────────────────────────────────────
 
   void _showSnackBar(String message, {Color? color}) {
@@ -562,7 +674,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     ));
   }
 
-  // ── Shared widget builders ─────────────────────────────────────────────────
+  // ── Widget builders ────────────────────────────────────────────────────────
 
   Widget _buildSectionHeader(String title) {
     return Padding(
@@ -588,17 +700,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return ListTile(
       leading: CircleAvatar(
         radius: 18,
-        backgroundColor: (iconColor ?? Colors.blue[700]!).withAlpha(25),
-        child: Icon(icon, size: 18, color: iconColor ?? Colors.blue[700]),
+        backgroundColor:
+            (iconColor ?? Colors.blue[700]!).withAlpha(25),
+        child: Icon(icon,
+            size: 18, color: iconColor ?? Colors.blue[700]),
       ),
       title: Text(title,
           style: TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w500,
-              color: titleColor ?? Colors.grey[800])),
+              color: titleColor)),
       subtitle: subtitle != null
           ? Text(subtitle,
-              style: TextStyle(fontSize: 12, color: Colors.grey[500]))
+              style: TextStyle(
+                  fontSize: 12, color: Colors.grey[500]))
           : null,
       trailing: trailing ??
           (onTap != null
@@ -620,16 +735,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return SwitchListTile(
       secondary: CircleAvatar(
         radius: 18,
-        backgroundColor: (iconColor ?? Colors.blue[700]!).withAlpha(25),
-        child: Icon(icon, size: 18, color: iconColor ?? Colors.blue[700]),
+        backgroundColor:
+            (iconColor ?? Colors.blue[700]!).withAlpha(25),
+        child: Icon(icon,
+            size: 18, color: iconColor ?? Colors.blue[700]),
       ),
       title: Text(title,
-          style: TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w500,
-              color: Colors.grey[800])),
+          style: const TextStyle(
+              fontSize: 14, fontWeight: FontWeight.w500)),
       subtitle: Text(subtitle,
-          style: TextStyle(fontSize: 12, color: Colors.grey[500])),
+          style:
+              TextStyle(fontSize: 12, color: Colors.grey[500])),
       activeThumbColor: Colors.blue[700],
       activeTrackColor: Colors.blue[300],
       value: value,
@@ -637,14 +753,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  // ── Goal progress tile ─────────────────────────────────────────────────────
-  // Reads today's article count from SharedPreferences key 'articles_today'.
-  // Increment that key from your article-open logic and reset it daily.
-
-  Widget _buildGoalProgressTile(int todayCount) {
-    final pct =
-        (_dailyGoal > 0 ? (todayCount / _dailyGoal).clamp(0.0, 1.0) : 0.0);
-    final done = todayCount >= _dailyGoal;
+  Widget _buildGoalProgressTile() {
+    final pct = (_dailyGoal > 0
+        ? (_todayCount / _dailyGoal).clamp(0.0, 1.0)
+        : 0.0);
+    final done = _todayCount >= _dailyGoal;
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
@@ -652,44 +765,59 @@ class _SettingsScreenState extends State<SettingsScreen> {
         CircleAvatar(
           radius: 18,
           backgroundColor:
-              (done ? Colors.green[700]! : Colors.purple[600]!).withAlpha(25),
+              (done ? Colors.green[700]! : Colors.purple[600]!)
+                  .withAlpha(25),
           child: Icon(
-            done ? Icons.check_circle_outline : Icons.today_outlined,
+            done
+                ? Icons.check_circle_outline
+                : Icons.today_outlined,
             size: 18,
-            color: done ? Colors.green[700] : Colors.purple[600],
+            color:
+                done ? Colors.green[700] : Colors.purple[600],
           ),
         ),
         const SizedBox(width: 16),
         Expanded(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-              Text(
-                done ? 'Goal reached today! 🎉' : 'Today\'s progress',
-                style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w500,
-                    color: Colors.grey[800]),
-              ),
-              Text(
-                '$todayCount / $_dailyGoal',
-                style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.bold,
-                    color: done ? Colors.green[700] : Colors.purple[600]),
-              ),
-            ]),
-            const SizedBox(height: 6),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(4),
-              child: LinearProgressIndicator(
-                value: pct,
-                minHeight: 6,
-                backgroundColor: Colors.grey[200],
-                valueColor: AlwaysStoppedAnimation(
-                    done ? Colors.green[600]! : Colors.purple[400]!),
-              ),
-            ),
-          ]),
+          child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                    mainAxisAlignment:
+                        MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        done
+                            ? 'Goal reached today! 🎉'
+                            : "Today's progress",
+                        style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                            color: Colors.grey[800]),
+                      ),
+                      Text(
+                        '$_todayCount / $_dailyGoal',
+                        style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: done
+                                ? Colors.green[700]
+                                : Colors.purple[600]),
+                      ),
+                    ]),
+                const SizedBox(height: 6),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: LinearProgressIndicator(
+                    value: pct,
+                    minHeight: 6,
+                    backgroundColor: Colors.grey[200],
+                    valueColor: AlwaysStoppedAnimation(
+                        done
+                            ? Colors.green[600]!
+                            : Colors.purple[400]!),
+                  ),
+                ),
+              ]),
         ),
       ]),
     );
@@ -738,56 +866,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
       icon: Icons.fact_check_outlined,
       color: Color(0xFF388E3C),
       definition:
-          'A 0–100 score estimating how reliable an article is, based on source reputation and fact-check results. Above 70 = Reliable. 40–70 = Mixed. Below 40 = Low.'
-    ),
-    (
-      term: 'Biased',
-      icon: Icons.warning_amber,
-      color: Color(0xFFE64A19),
-      definition:
-          'Indicates the article uses one-sided framing, emotionally charged language, or selective facts beyond what is typical for its leaning. An article can lean Left but still be Unbiased if it presents information fairly.'
-    ),
-    (
-      term: 'Unbiased',
-      icon: Icons.check_circle_outline,
-      color: Color(0xFF388E3C),
-      definition:
-          'The article presents information without significant one-sided framing. Unbiased does not mean neutral in leaning — it means the information is fairly presented.'
+          'A 0–100 score estimating how reliable an article is. Above 70 = Reliable. 40–70 = Mixed. Below 40 = Low.'
     ),
     (
       term: 'Bias Profile',
       icon: Icons.pie_chart,
       color: Color(0xFF1565C0),
       definition:
-          'Your personal reading summary showing the distribution of political leanings, sentiment, and sources across every article you have read. Updated automatically as you read.'
-    ),
-    (
-      term: 'Ideological Spectrum',
-      icon: Icons.linear_scale,
-      color: Color(0xFF1565C0),
-      definition:
-          'The colour gradient bar on each article page. The marker position reflects the article\'s political bias score on a continuous scale from Far Left to Far Right.'
+          'Your personal reading summary showing the distribution of political leanings, sentiment, and sources across every article you have read.'
     ),
     (
       term: 'Story Comparison',
       icon: Icons.compare_arrows,
       color: Color(0xFF00796B),
       definition:
-          'The Compare tab groups articles on the same topic or category by political leaning (Left, Centre, Right), letting you see how different outlets frame the same story.'
-    ),
-    (
-      term: 'Fact Check',
-      icon: Icons.verified_outlined,
-      color: Color(0xFF388E3C),
-      definition:
-          'NewsScope cross-references key claims in articles against a fact-checking database. Each claim receives a ruling: True, Mostly True, Half True, Mostly False, or False.'
+          'The Compare tab groups articles on the same topic by political leaning (Left, Centre, Right), letting you see how different outlets frame the same story.'
     ),
     (
       term: 'LIME Explanation',
       icon: Icons.psychology_outlined,
       color: Color(0xFF6A1B9A),
       definition:
-          'LIME (Local Interpretable Model-Agnostic Explanations) is the AI technique used to show which specific words most strongly influenced the political bias classification for an article.'
+          'LIME (Local Interpretable Model-Agnostic Explanations) shows which specific words most strongly influenced the political bias classification for an article.'
     ),
   ];
 
@@ -795,7 +895,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 16),
       elevation: 1,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12)),
       child: ExpansionTile(
         leading: CircleAvatar(
           radius: 18,
@@ -809,8 +910,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 fontWeight: FontWeight.w500,
                 color: Colors.grey[800])),
         subtitle: Text('${_glossaryTerms.length} terms explained',
-            style: TextStyle(fontSize: 12, color: Colors.grey[500])),
-        childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            style:
+                TextStyle(fontSize: 12, color: Colors.grey[500])),
+        childrenPadding:
+            const EdgeInsets.fromLTRB(16, 0, 16, 16),
         children: _glossaryTerms.map((t) {
           return Padding(
             padding: const EdgeInsets.only(top: 14),
@@ -823,12 +926,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   decoration: BoxDecoration(
                       color: t.color.withAlpha(25),
                       borderRadius: BorderRadius.circular(8)),
-                  child: Icon(t.icon, size: 18, color: t.color),
+                  child:
+                      Icon(t.icon, size: 18, color: t.color),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                    crossAxisAlignment:
+                        CrossAxisAlignment.start,
                     children: [
                       Text(t.term,
                           style: TextStyle(
@@ -857,17 +962,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   Widget build(BuildContext context) {
     final isGoogleUser =
-        user?.providerData.any((p) => p.providerId == 'google.com') ?? false;
-
-    // Read today's article count — replace 0 with your cached prefs value
-    // e.g. SharedPreferences.getInstance().then((p) => p.getInt('articles_today') ?? 0)
-    // For now we pass 0 synchronously; load it in initState if you need live count.
-    const int todayCount = 0;
+        user?.providerData
+            .any((p) => p.providerId == 'google.com') ??
+            false;
 
     return Scaffold(
-      backgroundColor: _scaffoldBg,
       appBar: AppBar(
-        backgroundColor: _scaffoldBg,
         centerTitle: true,
         title: Text('Settings',
             style: TextStyle(
@@ -878,7 +978,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       body: ListView(
         children: [
 
-          // ── Account ──────────────────────────────────────────────────
+          // ── Account ────────────────────────────────────────────────
           _buildSectionHeader('Account'),
           Card(
             margin: const EdgeInsets.symmetric(horizontal: 16),
@@ -922,25 +1022,40 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ]),
           ),
 
-          // ── Notifications ─────────────────────────────────────────────
+          // ── Notifications ──────────────────────────────────────────
           _buildSectionHeader('Notifications'),
           Card(
             margin: const EdgeInsets.symmetric(horizontal: 16),
             elevation: 1,
             shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(12)),
-            child: _buildSwitch(
-              icon: Icons.notifications_outlined,
-              title: 'Breaking News Alerts',
-              subtitle: _notificationsEnabled
-                  ? 'You\'ll be notified when new articles are analysed'
-                  : 'Tap to enable push notifications',
-              value: _notificationsEnabled,
-              onChanged: _setNotifications,
-            ),
+            child: Column(children: [
+              _buildSwitch(
+                icon: Icons.notifications_outlined,
+                title: 'Breaking News Alerts',
+                subtitle: _notificationsEnabled
+                    ? 'Tap to disable push notifications'
+                    : 'Tap to enable push notifications',
+                value: _notificationsEnabled,
+                onChanged: _setNotifications,
+              ),
+              if (_notificationsEnabled) ...[
+                const Divider(height: 1, indent: 56),
+                // Shortcut tile for Samsung users who may need to check
+                // the system notification settings manually.
+                _buildTile(
+                  icon: Icons.settings_outlined,
+                  title: 'Notification Settings',
+                  subtitle:
+                      'Manage channels, sounds & importance in system settings',
+                  iconColor: Colors.orange[700],
+                  onTap: openAppSettings,
+                ),
+              ],
+            ]),
           ),
 
-          // ── Display Preferences ───────────────────────────────────────
+          // ── Display Preferences ────────────────────────────────────
           _buildSectionHeader('Display Preferences'),
           Card(
             margin: const EdgeInsets.symmetric(horizontal: 16),
@@ -1001,7 +1116,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ]),
           ),
 
-          // ── Reading Goals ─────────────────────────────────────────────
+          // ── Reading Goals ──────────────────────────────────────────
           _buildSectionHeader('Reading Goals'),
           Card(
             margin: const EdgeInsets.symmetric(horizontal: 16),
@@ -1016,34 +1131,38 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     '$_dailyGoal article${_dailyGoal == 1 ? '' : 's'} per day',
                 iconColor: Colors.purple[600],
                 onTap: _handleReadingGoal,
-                trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: Colors.purple[50],
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: Colors.purple[200]!),
-                    ),
-                    child: Text(
-                      '$_dailyGoal',
-                      style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.purple[700]),
-                    ),
-                  ),
-                  const SizedBox(width: 4),
-                  Icon(Icons.chevron_right,
-                      color: Colors.grey[400], size: 20),
-                ]),
+                trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.purple[50],
+                          borderRadius:
+                              BorderRadius.circular(20),
+                          border: Border.all(
+                              color: Colors.purple[200]!),
+                        ),
+                        child: Text(
+                          '$_dailyGoal',
+                          style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.purple[700]),
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      Icon(Icons.chevron_right,
+                          color: Colors.grey[400], size: 20),
+                    ]),
               ),
               const Divider(height: 1, indent: 56),
-              _buildGoalProgressTile(todayCount),
+              _buildGoalProgressTile(),
             ]),
           ),
 
-          // ── Data & Privacy ────────────────────────────────────────────
+          // ── Data & Privacy ─────────────────────────────────────────
           _buildSectionHeader('Data & Privacy'),
           Card(
             margin: const EdgeInsets.symmetric(horizontal: 16),
@@ -1072,7 +1191,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ]),
           ),
 
-          // ── About ─────────────────────────────────────────────────────
+          // ── About ──────────────────────────────────────────────────
           _buildSectionHeader('About'),
           Card(
             margin: const EdgeInsets.symmetric(horizontal: 16),
@@ -1096,11 +1215,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ]),
           ),
 
-          // ── Glossary ──────────────────────────────────────────────────
+          // ── Glossary ───────────────────────────────────────────────
           _buildSectionHeader('Glossary'),
           _buildGlossarySection(),
 
-          // ── Account Actions ───────────────────────────────────────────
+          // ── Account Actions ────────────────────────────────────────
           _buildSectionHeader('Account Actions'),
           Card(
             margin: const EdgeInsets.symmetric(horizontal: 16),
@@ -1134,7 +1253,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           Center(
             child: Text(
               'NewsScope v1.0.0 Beta · TU Dublin · 2026',
-              style: TextStyle(fontSize: 11, color: Colors.grey[400]),
+              style:
+                  TextStyle(fontSize: 11, color: Colors.grey[400]),
             ),
           ),
           const SizedBox(height: 24),
@@ -1150,10 +1270,12 @@ class _ReauthPasswordDialog extends StatefulWidget {
   final String email;
   const _ReauthPasswordDialog({required this.email});
   @override
-  State<_ReauthPasswordDialog> createState() => _ReauthPasswordDialogState();
+  State<_ReauthPasswordDialog> createState() =>
+      _ReauthPasswordDialogState();
 }
 
-class _ReauthPasswordDialogState extends State<_ReauthPasswordDialog> {
+class _ReauthPasswordDialogState
+    extends State<_ReauthPasswordDialog> {
   late final TextEditingController _controller;
   bool _obscure = true;
   @override
@@ -1169,17 +1291,19 @@ class _ReauthPasswordDialogState extends State<_ReauthPasswordDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      shape:
-          RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16)),
       title: const Text('Confirm Your Password'),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'Enter your password for ${widget.email} to confirm account deletion.',
+            'Enter your password for ${widget.email} to confirm deletion.',
             style: TextStyle(
-                fontSize: 13, color: Colors.grey[600], height: 1.4),
+                fontSize: 13,
+                color: Colors.grey[600],
+                height: 1.4),
           ),
           const SizedBox(height: 16),
           TextField(
@@ -1192,8 +1316,9 @@ class _ReauthPasswordDialogState extends State<_ReauthPasswordDialog> {
               labelText: 'Password',
               border: const OutlineInputBorder(),
               suffixIcon: IconButton(
-                icon: Icon(
-                    _obscure ? Icons.visibility_off : Icons.visibility),
+                icon: Icon(_obscure
+                    ? Icons.visibility_off
+                    : Icons.visibility),
                 onPressed: () =>
                     setState(() => _obscure = !_obscure),
               ),
@@ -1208,8 +1333,8 @@ class _ReauthPasswordDialogState extends State<_ReauthPasswordDialog> {
         TextButton(
           onPressed: () =>
               Navigator.of(context).pop(_controller.text.trim()),
-          style:
-              TextButton.styleFrom(foregroundColor: Colors.red[700]),
+          style: TextButton.styleFrom(
+              foregroundColor: Colors.red[700]),
           child: const Text('Confirm Delete',
               style: TextStyle(fontWeight: FontWeight.bold)),
         ),
@@ -1228,19 +1353,22 @@ class _EditDisplayNameDialog extends StatefulWidget {
       _EditDisplayNameDialogState();
 }
 
-class _EditDisplayNameDialogState extends State<_EditDisplayNameDialog> {
+class _EditDisplayNameDialogState
+    extends State<_EditDisplayNameDialog> {
   late final TextEditingController _controller;
   late final FocusNode _focusNode;
   @override
   void initState() {
     super.initState();
-    _controller = TextEditingController(text: widget.initialValue);
-    _focusNode  = FocusNode();
+    _controller =
+        TextEditingController(text: widget.initialValue);
+    _focusNode = FocusNode();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _focusNode.requestFocus();
       _controller.selection = TextSelection(
-          baseOffset: 0, extentOffset: _controller.text.length);
+          baseOffset: 0,
+          extentOffset: _controller.text.length);
     });
   }
   @override
@@ -1256,8 +1384,8 @@ class _EditDisplayNameDialogState extends State<_EditDisplayNameDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      shape:
-          RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16)),
       title: const Text('Edit Display Name'),
       content: TextField(
         controller: _controller,

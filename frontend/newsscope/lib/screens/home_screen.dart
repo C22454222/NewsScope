@@ -8,6 +8,7 @@ import '../services/api_service.dart';
 import '../screens/article_detail_screen.dart';
 import '../screens/compare_screen.dart';
 import '../screens/profile_screen.dart';
+import '../screens/settings_screen.dart';
 import '../widgets/article_card.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -19,16 +20,21 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   int _currentIndex = 0;
-  int _profileKey = 0;
+  int _profileKey   = 0;
   late List<Widget> _screens;
 
   @override
   void initState() {
     super.initState();
+    _rebuildScreens();
+  }
+
+  void _rebuildScreens() {
     _screens = [
       HomeFeedTab(onArticleRead: _handleArticleRead),
       CompareScreen(onArticleRead: _handleArticleRead),
       ProfileScreen(key: ValueKey(_profileKey)),
+      const SettingsScreen(),
     ];
   }
 
@@ -51,20 +57,16 @@ class _HomeScreenState extends State<HomeScreen> {
         currentIndex: _currentIndex,
         selectedItemColor: Colors.blue[700],
         unselectedItemColor: Colors.grey[500],
-        // FIX: Slightly tinted background so the bar blends with the
-        //      soft scaffold colour used on all screens.
-        backgroundColor: Colors.white,
-        elevation: 8,
+        type: BottomNavigationBarType.fixed, // required for 4+ items
         items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.home), label: 'Home'),
           BottomNavigationBarItem(
-            icon: Icon(Icons.compare_arrows),
-            label: 'Compare',
-          ),
+              icon: Icon(Icons.home), label: 'Home'),
           BottomNavigationBarItem(
-            icon: Icon(Icons.person),
-            label: 'Profile',
-          ),
+              icon: Icon(Icons.compare_arrows), label: 'Compare'),
+          BottomNavigationBarItem(
+              icon: Icon(Icons.person), label: 'Profile'),
+          BottomNavigationBarItem(
+              icon: Icon(Icons.settings), label: 'Settings'),
         ],
         onTap: _onTabTapped,
       ),
@@ -84,9 +86,6 @@ class HomeFeedTab extends StatefulWidget {
 }
 
 class _HomeFeedTabState extends State<HomeFeedTab> {
-  // ── Consistent soft background ─────────────────────────────────────────────
-  static const Color _scaffoldBg = Color(0xFFF0F2F5);
-
   User? _user;
   StreamSubscription<User?>? _userSub;
 
@@ -97,37 +96,37 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
   String? _selectedSource;
 
   static const List<Map<String, String>> _categories = [
-    {'label': 'All', 'value': ''},
-    {'label': 'Politics', 'value': 'politics'},
-    {'label': 'World', 'value': 'world'},
-    {'label': 'US', 'value': 'us'},
-    {'label': 'UK', 'value': 'uk'},
-    {'label': 'Ireland', 'value': 'ireland'},
-    {'label': 'Europe', 'value': 'europe'},
-    {'label': 'Business', 'value': 'business'},
-    {'label': 'Tech', 'value': 'tech'},
-    {'label': 'Science', 'value': 'science'},
-    {'label': 'Health', 'value': 'health'},
-    {'label': 'Environment', 'value': 'environment'},
-    {'label': 'Sport', 'value': 'sport'},
+    {'label': 'All',           'value': ''},
+    {'label': 'Politics',      'value': 'politics'},
+    {'label': 'World',         'value': 'world'},
+    {'label': 'US',            'value': 'us'},
+    {'label': 'UK',            'value': 'uk'},
+    {'label': 'Ireland',       'value': 'ireland'},
+    {'label': 'Europe',        'value': 'europe'},
+    {'label': 'Business',      'value': 'business'},
+    {'label': 'Tech',          'value': 'tech'},
+    {'label': 'Science',       'value': 'science'},
+    {'label': 'Health',        'value': 'health'},
+    {'label': 'Environment',   'value': 'environment'},
+    {'label': 'Sport',         'value': 'sport'},
     {'label': 'Entertainment', 'value': 'entertainment'},
-    {'label': 'Crime', 'value': 'crime'},
-    {'label': 'Opinion', 'value': 'opinion'},
+    {'label': 'Crime',         'value': 'crime'},
+    {'label': 'Opinion',       'value': 'opinion'},
   ];
 
   static const Map<String, String> _sourceMap = {
-    'BBC': 'BBC News',
-    'RTÉ': 'RTÉ News',
-    'Guardian': 'The Guardian',
-    'CNN': 'CNN',
-    'Irish Times': 'The Irish Times',
-    'AP News': 'AP News',
-    'Sky News': 'Sky News',
-    'Independent': 'The Independent',
-    'NPR': 'NPR',
-    'DW': 'Deutsche Welle',
-    'GB News': 'GB News',
-    'Fox News': 'Fox News',
+    'BBC':          'BBC News',
+    'RTÉ':          'RTÉ News',
+    'Guardian':     'The Guardian',
+    'CNN':          'CNN',
+    'Irish Times':  'The Irish Times',
+    'AP News':      'AP News',
+    'Sky News':     'Sky News',
+    'Independent':  'The Independent',
+    'NPR':          'NPR',
+    'DW':           'Deutsche Welle',
+    'GB News':      'GB News',
+    'Fox News':     'Fox News',
   };
 
   static const List<String> _sourceLabels = [
@@ -153,10 +152,10 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
   }
 
   void _loadArticles() {
-    final backendCategory = (_selectedCategory == null ||
-            _selectedCategory!.isEmpty)
-        ? null
-        : _selectedCategory;
+    final backendCategory =
+        (_selectedCategory == null || _selectedCategory!.isEmpty)
+            ? null
+            : _selectedCategory;
     _articlesFuture = _apiService.getArticles(
       category: backendCategory,
       source: _selectedSource,
@@ -175,12 +174,12 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
         content: const Text('Are you sure you want to sign out?'),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            style: TextButton.styleFrom(foregroundColor: Colors.red[700]),
+            style: TextButton.styleFrom(
+                foregroundColor: Colors.red[700]),
             child: const Text('Sign Out'),
           ),
         ],
@@ -199,6 +198,8 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
     return 'Good evening';
   }
 
+  // ── Filter label ────────────────────────────────────────────────────────────
+
   Widget _buildFilterLabel(String label) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
@@ -214,6 +215,8 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
     );
   }
 
+  // ── Chips ────────────────────────────────────────────────────────────────────
+
   Widget _buildChip({
     required String label,
     required bool isSelected,
@@ -223,12 +226,15 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 180),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+        padding:
+            const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
         decoration: BoxDecoration(
           color: isSelected ? Colors.blue[700] : Colors.grey[100],
           borderRadius: BorderRadius.circular(20),
           border: Border.all(
-            color: isSelected ? Colors.blue[700]! : Colors.grey[300]!,
+            color: isSelected
+                ? Colors.blue[700]!
+                : Colors.grey[300]!,
           ),
         ),
         child: Row(
@@ -242,9 +248,12 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
               label,
               style: TextStyle(
                 fontSize: 12,
-                fontWeight:
-                    isSelected ? FontWeight.w600 : FontWeight.normal,
-                color: isSelected ? Colors.white : Colors.grey[700],
+                fontWeight: isSelected
+                    ? FontWeight.w600
+                    : FontWeight.normal,
+                color: isSelected
+                    ? Colors.white
+                    : Colors.grey[700],
               ),
             ),
           ],
@@ -257,24 +266,28 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
     return SizedBox(
       height: 36,
       child: ListView.separated(
-        padding: const EdgeInsets.symmetric(horizontal: 16),
         scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 16),
         itemCount: _categories.length,
         separatorBuilder: (_, _) => const SizedBox(width: 8),
         itemBuilder: (context, index) {
-          final cat = _categories[index];
-          final label = cat['label']!;
-          final value = cat['value']!;
+          final cat      = _categories[index];
+          final label    = cat['label']!;
+          final value    = cat['value']!;
           final isSelected = value.isEmpty
-              ? (_selectedCategory == null || _selectedCategory!.isEmpty)
+              ? (_selectedCategory == null ||
+                  _selectedCategory!.isEmpty)
               : _selectedCategory == value;
           return _buildChip(
             label: label,
             isSelected: isSelected,
-            onTap: () => setState(() {
-              _selectedCategory = value.isEmpty ? null : value;
-              _loadArticles();
-            }),
+            onTap: () {
+              setState(() {
+                _selectedCategory =
+                    value.isEmpty ? null : value;
+                _loadArticles();
+              });
+            },
           );
         },
       ),
@@ -285,45 +298,52 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
     return SizedBox(
       height: 36,
       child: ListView.separated(
-        padding: const EdgeInsets.symmetric(horizontal: 16),
         scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 16),
         itemCount: _sourceLabels.length,
         separatorBuilder: (_, _) => const SizedBox(width: 8),
         itemBuilder: (context, index) {
           final label = _sourceLabels[index];
-          final value = label == 'All' ? null : _sourceMap[label];
           final isSelected = label == 'All'
               ? _selectedSource == null
               : _sourceMap[label] == _selectedSource;
           return _buildChip(
             label: label,
             isSelected: isSelected,
-            onTap: () => setState(() {
-              _selectedSource = value;
-              _loadArticles();
-            }),
+            onTap: () {
+              setState(() {
+                _selectedSource =
+                    label == 'All' ? null : _sourceMap[label];
+                _loadArticles();
+              });
+            },
           );
         },
       ),
     );
   }
 
+  // ── Greeting card ────────────────────────────────────────────────────────────
+
   Widget _buildNewsScopeTitle() {
     return RichText(
       text: TextSpan(
-        style: const TextStyle(
-          fontSize: 22,
-          fontWeight: FontWeight.bold,
-          letterSpacing: 0.5,
-        ),
         children: [
-          const TextSpan(
+          TextSpan(
             text: 'News',
-            style: TextStyle(color: Colors.black87),
+            style: TextStyle(
+              fontSize: 22,
+              fontWeight: FontWeight.bold,
+              color: Colors.blue[800],
+            ),
           ),
           TextSpan(
             text: 'Scope',
-            style: TextStyle(color: Colors.blue[800]),
+            style: TextStyle(
+              fontSize: 22,
+              fontWeight: FontWeight.w300,
+              color: Colors.blue[500],
+            ),
           ),
         ],
       ),
@@ -331,24 +351,30 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
   }
 
   Widget _buildGreetingCard() {
-    final name = _user?.displayName ?? 'Reader';
-    final now = DateTime.now();
-    const dayNames = [
-      'Monday', 'Tuesday', 'Wednesday', 'Thursday',
-      'Friday', 'Saturday', 'Sunday',
+    final name = (_user?.displayName?.isNotEmpty == true)
+        ? _user!.displayName!.split(' ').first
+        : 'there';
+    final now       = DateTime.now();
+    const months    = [
+      'Jan','Feb','Mar','Apr','May','Jun',
+      'Jul','Aug','Sep','Oct','Nov','Dec',
     ];
-    const monthNames = [
-      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    const days      = [
+      'Monday','Tuesday','Wednesday','Thursday',
+      'Friday','Saturday','Sunday',
     ];
-    final dayName = dayNames[now.weekday - 1];
-    final monthName = monthNames[now.month - 1];
+    final monthName = months[now.month - 1];
+    final dayName   = days[now.weekday - 1];
 
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(20, 18, 20, 18),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: const Color(0xFF0D1B3E),
+        gradient: LinearGradient(
+          colors: [Colors.blue[700]!, Colors.blue[500]!],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
@@ -444,7 +470,8 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
       '${dt.year}-${dt.month.toString().padLeft(2, '0')}-'
       '${dt.day.toString().padLeft(2, '0')}';
 
-  String _headerText(String key, String todayKey, String yesterdayKey) {
+  String _headerText(
+      String key, String todayKey, String yesterdayKey) {
     if (key == todayKey) return 'Today';
     if (key == yesterdayKey) return 'Yesterday';
     if (key == 'Unknown Date') return 'Unknown Date';
@@ -455,9 +482,7 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: _scaffoldBg,
       appBar: AppBar(
-        backgroundColor: _scaffoldBg,
         centerTitle: true,
         title: _buildNewsScopeTitle(),
         actions: [
@@ -490,8 +515,10 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
             child: FutureBuilder<List<Article>>(
               future: _articlesFuture,
               builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
+                if (snapshot.connectionState ==
+                    ConnectionState.waiting) {
+                  return const Center(
+                      child: CircularProgressIndicator());
                 }
                 if (snapshot.hasError) {
                   return Center(
@@ -512,16 +539,19 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                     ),
                   );
                 }
-                if (!snapshot.hasData || snapshot.data!.isEmpty) {
+                if (!snapshot.hasData ||
+                    snapshot.data!.isEmpty) {
                   return Center(
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         Icon(Icons.article_outlined,
-                            size: 64, color: Colors.grey.shade300),
+                            size: 64,
+                            color: Colors.grey.shade300),
                         const SizedBox(height: 16),
                         Text('No articles found.',
-                            style: TextStyle(color: Colors.grey[500])),
+                            style: TextStyle(
+                                color: Colors.grey[500])),
                         const SizedBox(height: 16),
                         ElevatedButton(
                           onPressed: _refreshArticles,
@@ -532,18 +562,18 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                   );
                 }
 
-                final articles = snapshot.data!;
-                final now = DateTime.now();
-                final todayKey = _dateKey(now);
-                final yesterdayKey =
-                    _dateKey(now.subtract(const Duration(days: 1)));
+                final articles   = snapshot.data!;
+                final now        = DateTime.now();
+                final todayKey   = _dateKey(now);
+                final yestKey    = _dateKey(
+                    now.subtract(const Duration(days: 1)));
 
                 final grouped = <String, List<Article>>{};
-                for (final article in articles) {
-                  final key = article.publishedAt != null
-                      ? _dateKey(article.publishedAt!)
+                for (final a in articles) {
+                  final key = a.publishedAt != null
+                      ? _dateKey(a.publishedAt!)
                       : 'Unknown Date';
-                  grouped.putIfAbsent(key, () => []).add(article);
+                  grouped.putIfAbsent(key, () => []).add(a);
                 }
 
                 final sortedKeys = grouped.keys.toList()
@@ -556,15 +586,18 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                 return RefreshIndicator(
                   onRefresh: _refreshArticles,
                   child: ListView.builder(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16),
                     itemCount: sortedKeys.length,
                     itemBuilder: (context, i) {
-                      final dateKey = sortedKeys[i];
-                      final sectionArticles = grouped[dateKey]!;
-                      final header =
-                          _headerText(dateKey, todayKey, yesterdayKey);
+                      final dateKey        = sortedKeys[i];
+                      final sectionArticles =
+                          grouped[dateKey]!;
+                      final header = _headerText(
+                          dateKey, todayKey, yestKey);
                       return Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                        crossAxisAlignment:
+                            CrossAxisAlignment.start,
                         children: [
                           _buildDateHeader(header),
                           ...sectionArticles.map(
@@ -575,8 +608,9 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                                   context,
                                   MaterialPageRoute(
                                     builder: (_) =>
-                                        ArticleDetailScreen.fromArticle(
-                                            article),
+                                        ArticleDetailScreen
+                                            .fromArticle(
+                                                article),
                                   ),
                                 );
                                 widget.onArticleRead();
