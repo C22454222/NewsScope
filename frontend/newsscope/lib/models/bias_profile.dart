@@ -1,4 +1,7 @@
 /// Typed model for the /api/bias-profile response.
+///
+/// Mirrors the Pydantic BiasProfile schema exactly — every field
+/// returned by the backend is parsed and typed here.
 class BiasProfile {
   final double avgBias;
   final double avgSentiment;
@@ -12,6 +15,10 @@ class BiasProfile {
   final int positiveCount;
   final int neutralCount;
   final int negativeCount;
+
+  /// Top-12 sources by article count.
+  /// Powers the source breakdown bar chart on the profile screen.
+  /// Null when the user has read fewer than 1 article.
   final Map<String, int>? sourceBreakdown;
 
   const BiasProfile({
@@ -44,7 +51,8 @@ class BiasProfile {
       leftCount: (json['left_count'] as num?)?.toInt() ?? 0,
       centerCount: (json['center_count'] as num?)?.toInt() ?? 0,
       rightCount: (json['right_count'] as num?)?.toInt() ?? 0,
-      mostReadSource: json['most_read_source']?.toString() ?? 'N/A',
+      mostReadSource:
+          json['most_read_source']?.toString() ?? 'N/A',
       biasDistribution: rawDist.map(
         (k, v) => MapEntry(k, (v as num).toDouble()),
       ),

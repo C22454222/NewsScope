@@ -29,15 +29,29 @@ class ApiService {
 
   // ── User registration ─────────────────────────────────────────────────────
 
+  /// Upserts the user record in Supabase.
+  ///
+  /// Sends display_name so the users.display_name column stays in sync
+  /// with Firebase without requiring a separate PUT call. The backend
+  /// ON CONFLICT (email) upsert will update the field on every login.
   Future<void> registerUser({
     required String uid,
     required String email,
+    String? displayName,
   }) async {
     try {
+      final body = <String, dynamic>{
+        'id': uid,
+        'email': email,
+      };
+      if (displayName != null && displayName.isNotEmpty) {
+        body['display_name'] = displayName;
+      }
+
       final response = await http.post(
         Uri.parse('$_baseUrl/users'),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'id': uid, 'email': email}),
+        body: jsonEncode(body),
       );
       if (response.statusCode != 200) {
         debugPrint('Failed to register user: ${response.statusCode}');
@@ -189,9 +203,13 @@ class ApiService {
 
   // ── Article comparison ────────────────────────────────────────────────────
 
+  /// POST /api/articles/compare
+  ///
+  /// The [limit] parameter has been removed — the backend controls
+  /// per-band limits internally and the ComparisonRequest schema
+  /// has no limit field. Sending it was a no-op.
   Future<Map<String, dynamic>?> compareArticles(
     String topic, {
-    int limit = 5,
     String? category,
     String? source,
   }) async {

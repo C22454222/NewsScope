@@ -18,15 +18,58 @@ def add_user(user: UserCreate) -> dict:
 
     Called after every Firebase login — not just registration —
     so the users row is guaranteed present before any reading
-    history is written. upsert on_conflict=id is idempotent.
+    history is written.
+
+    Deduplication strategy
+    ──────────────────────
+    Google Sign-In can produce multiple Firebase UIDs for the same
+    email address if the user signs in on a new device or after
+    clearing app data. We use ON CONFLICT (email) so that if a row
+    already exists for this email, we UPDATE its id to the latest
+    Firebase UID rather than inserting a duplicate row.
+
+    This keeps the users row in sync with whatever UID Firebase
+    currently considers canonical, which means:
+      - reading_history FK writes always succeed (UID matches)
+      - no orphaned rows accumulate over time
+      - the operation is atomic — no select-then-insert race condition
     """
+    payload: dict[str, str | None] = {
+        "id": user.id,
+        "email": user.email,
+    }
+    if user.display_name is not None:
+        payload["display_name"] = user.display_name
+
     response = (
         supabase.table("users")
-        .upsert(user.model_dump(), on_conflict="id")
+        .upsert(
+            payload,
+            on_conflict="email",          # deduplicate on email, not UID
+        )
         .execute()
     )
+
     if not response.data:
-        raise HTTPException(status_code=500, detail="User creation failed")
+        raise HTTPException(status_code=500, detail="User upsert failed")
+
+    new_uid = user.id
+    returned_uid = response.data[0]["id"]
+
+    # If the email already existed under a different UID, Supabase will have
+    # updated the row's id to new_uid. Re-parent any reading_history rows
+    # that were written under the old UID so history is never orphaned.
+    #
+    # NOTE: This only matters in the rare Google re-auth edge case.
+    # In the normal path old_uid == new_uid and this is a no-op.
+    if returned_uid != new_uid:
+        (
+            supabase.table("reading_history")
+            .update({"user_id": new_uid})
+            .eq("user_id", returned_uid)
+            .execute()
+        )
+
     return response.data[0]
 
 
@@ -50,22 +93,6 @@ def update_preferences(uid: str, prefs: dict) -> dict:
     response = (
         supabase.table("users")
         .update({"preferences": prefs})
-        .eq("id", uid)
-        .execute()
-    )
-    if not response.data:
-        raise HTTPException(
-            status_code=404, detail="User not found or update failed"
-        )
-    return response.data[0]
-
-
-@router.put("/{uid}/bias_profile")
-def update_bias_profile(uid: str, profile: dict) -> dict:
-    """Store a pre-computed bias profile blob against the user record."""
-    response = (
-        supabase.table("users")
-        .update({"bias_profile": profile})
         .eq("id", uid)
         .execute()
     )

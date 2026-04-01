@@ -1,45 +1,83 @@
 /// NewsScope Article model.
-/// Fields match the backend ArticleResponse schema including
-/// credibility, fact-checks, general bias, and LIME explainability columns.
+///
+/// Fields match the backend ArticleResponse schema and the Supabase
+/// articles table exactly. Every column in the DB is represented here.
+///
+/// Field mapping (DB column → Dart field):
+///   id                    → id
+///   source                → source
+///   source_id             → sourceId
+///   url                   → url
+///   title                 → title
+///   content               → content
+///   bias_score            → biasScore        (source-level [-1,+1])
+///   bias_intensity        → biasIntensity
+///   sentiment_score       → sentimentScore
+///   published_at          → publishedAt
+///   created_at            → createdAt
+///   updated_at            → updatedAt
+///   category              → category
+///   general_bias          → generalBias
+///   general_bias_score    → generalBiasScore
+///   political_bias        → politicalBias    (RoBERTa article-level label)
+///   political_bias_score  → politicalBiasScore
+///   credibility_score     → credibilityScore
+///   fact_checks           → factChecks       (JSONB)
+///   claims_checked        → claimsChecked
+///   credibility_reason    → credibilityReason
+///   credibility_updated_at→ credibilityUpdatedAt
+///   bias_explanation      → biasExplanation  (LIME JSONB list)
 class Article {
   final String id;
+  final String? sourceId;
+  final String source;
+  final String url;
   final String title;
   final String? content;
-  final String? description;
-  final String url;
-  final String source;
   final DateTime? publishedAt;
-  final double? sentimentScore;
+  final DateTime? createdAt;
+  final DateTime? updatedAt;
+
+  // NLP scores
   final double? biasScore;
   final double? biasIntensity;
+  final double? sentimentScore;
+
+  // Classification
   final String? category;
   final String? generalBias;
   final double? generalBiasScore;
+  final String? politicalBias;           // added: DB political_bias column
+  final double? politicalBiasScore;      // added: DB political_bias_score column
 
-  // Credibility + fact-checking fields
+  // Credibility + fact-checking
   final double? credibilityScore;
   final Map<String, dynamic>? factChecks;
   final int? claimsChecked;
   final String? credibilityReason;
   final DateTime? credibilityUpdatedAt;
 
-  // LIME bias explainability — top words driving political bias classification
+  // LIME bias explainability
   final List<Map<String, dynamic>>? biasExplanation;
 
   Article({
     required this.id,
+    this.sourceId,
+    required this.source,
+    required this.url,
     required this.title,
     this.content,
-    this.description,
-    required this.url,
-    required this.source,
     this.publishedAt,
-    this.sentimentScore,
+    this.createdAt,
+    this.updatedAt,
     this.biasScore,
     this.biasIntensity,
+    this.sentimentScore,
     this.category,
     this.generalBias,
     this.generalBiasScore,
+    this.politicalBias,
+    this.politicalBiasScore,
     this.credibilityScore,
     this.factChecks,
     this.claimsChecked,
@@ -51,33 +89,26 @@ class Article {
   factory Article.fromJson(Map<String, dynamic> json) {
     return Article(
       id: json['id']?.toString() ?? '',
-      title: json['title'] ?? 'No Title',
-      content: json['content'],
-      description: json['description'],
-      url: json['url'] ?? '',
+      sourceId: json['source_id']?.toString(),
+      // source may arrive as a nested object from some endpoints
       source: json['source'] is Map
           ? (json['source']['name'] ?? 'Unknown Source')
-          : (json['source'] ?? 'Unknown Source'),
-      publishedAt: json['published_at'] != null
-          ? DateTime.tryParse(json['published_at'])
-          : null,
-      sentimentScore: json['sentiment_score'] != null
-          ? (json['sentiment_score'] as num).toDouble()
-          : null,
-      biasScore: json['bias_score'] != null
-          ? (json['bias_score'] as num).toDouble()
-          : null,
-      biasIntensity: json['bias_intensity'] != null
-          ? (json['bias_intensity'] as num).toDouble()
-          : null,
+          : (json['source']?.toString() ?? 'Unknown Source'),
+      url: json['url']?.toString() ?? '',
+      title: json['title']?.toString() ?? 'No Title',
+      content: json['content']?.toString(),
+      publishedAt: _parseDate(json['published_at']),
+      createdAt: _parseDate(json['created_at']),
+      updatedAt: _parseDate(json['updated_at']),
+      biasScore: _toDouble(json['bias_score']),
+      biasIntensity: _toDouble(json['bias_intensity']),
+      sentimentScore: _toDouble(json['sentiment_score']),
       category: json['category']?.toString(),
       generalBias: json['general_bias']?.toString(),
-      generalBiasScore: json['general_bias_score'] != null
-          ? (json['general_bias_score'] as num).toDouble()
-          : null,
-      credibilityScore: json['credibility_score'] != null
-          ? (json['credibility_score'] as num).toDouble()
-          : null,
+      generalBiasScore: _toDouble(json['general_bias_score']),
+      politicalBias: json['political_bias']?.toString(),
+      politicalBiasScore: _toDouble(json['political_bias_score']),
+      credibilityScore: _toDouble(json['credibility_score']),
       factChecks: json['fact_checks'] is Map
           ? Map<String, dynamic>.from(json['fact_checks'])
           : null,
@@ -85,9 +116,7 @@ class Article {
           ? (json['claims_checked'] as num).toInt()
           : null,
       credibilityReason: json['credibility_reason']?.toString(),
-      credibilityUpdatedAt: json['credibility_updated_at'] != null
-          ? DateTime.tryParse(json['credibility_updated_at'])
-          : null,
+      credibilityUpdatedAt: _parseDate(json['credibility_updated_at']),
       biasExplanation: json['bias_explanation'] != null
           ? List<Map<String, dynamic>>.from(
               (json['bias_explanation'] as List).map(
@@ -101,18 +130,22 @@ class Article {
   Map<String, dynamic> toJson() {
     return {
       'id': id,
+      'source_id': sourceId,
+      'source': source,
+      'url': url,
       'title': title,
       'content': content,
-      'description': description,
-      'url': url,
-      'source': source,
       'published_at': publishedAt?.toIso8601String(),
-      'sentiment_score': sentimentScore,
+      'created_at': createdAt?.toIso8601String(),
+      'updated_at': updatedAt?.toIso8601String(),
       'bias_score': biasScore,
       'bias_intensity': biasIntensity,
+      'sentiment_score': sentimentScore,
       'category': category,
       'general_bias': generalBias,
       'general_bias_score': generalBiasScore,
+      'political_bias': politicalBias,
+      'political_bias_score': politicalBiasScore,
       'credibility_score': credibilityScore,
       'fact_checks': factChecks,
       'claims_checked': claimsChecked,
@@ -120,5 +153,17 @@ class Article {
       'credibility_updated_at': credibilityUpdatedAt?.toIso8601String(),
       'bias_explanation': biasExplanation,
     };
+  }
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
+
+  static DateTime? _parseDate(dynamic value) {
+    if (value == null) return null;
+    return DateTime.tryParse(value.toString());
+  }
+
+  static double? _toDouble(dynamic value) {
+    if (value == null) return null;
+    return (value as num).toDouble();
   }
 }
