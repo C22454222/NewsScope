@@ -80,8 +80,9 @@ from app.jobs.analysis import analyze_unscored_articles
 from app.jobs.archiving import archive_old_articles
 from app.jobs.fact_checking import batch_factcheck_recent
 from app.jobs.ingestion import run_ingestion_cycle, set_main_event_loop
-from app.jobs.keep_alive import keep_alive, start_keep_alive  # keep_alive added
+from app.jobs.keep_alive import keep_alive, start_keep_alive
 from app.routes import articles, sources, users
+from app.routes.articles import CATEGORY_GROUP_MAP
 from app.schemas import (
     BiasProfile,
     ComparisonRequest,
@@ -305,7 +306,6 @@ async def lifespan(app: FastAPI):
     )
 
     # Analysis safety net at :20 — only does work if chain failed.
-    # analyze_unscored_articles() is idempotent (NULL filter).
     scheduler.add_job(
         _sync_analysis_safety_net,
         trigger=CronTrigger(minute=20),
@@ -316,7 +316,6 @@ async def lifespan(app: FastAPI):
     )
 
     # Fact-check at :45 — after chained pipeline (~15-20 min) is done.
-    # Pure I/O, no heavy job lock. Moved from :40 → :45 for extra buffer.
     scheduler.add_job(
         _sync_factcheck,
         trigger=CronTrigger(minute=45),
@@ -340,7 +339,6 @@ async def lifespan(app: FastAPI):
     print(f"Environment: {env}")
 
     if env == "production":
-        # start_keep_alive is guarded — calling twice is a safe no-op.
         start_keep_alive()
         print("Keep-alive enabled (pings every 14 minutes)")
         # Fire an immediate ping so there is no 14-minute gap on cold deploy.
@@ -421,7 +419,6 @@ async def _run_startup_sequence() -> None:
         print("Lock already held at startup — skipping.")
         return
 
-    # _scheduled_ingestion handles the full chain: ingest → analyse.
     try:
         await _scheduled_ingestion()
         print("Startup pipeline complete (ingestion + analysis).")
@@ -432,6 +429,11 @@ async def _run_startup_sequence() -> None:
 
 
 # ── App ───────────────────────────────────────────────────────────────────────
+# IMPORTANT: app must be defined BEFORE any @app decorators below.
+# Defining it after caused a NameError crash on Render redeploy because
+# Python executes module top-to-bottom — decorators referencing `app`
+# before it is assigned raise NameError and crash the worker process,
+# which manifests as the TCP connection reset seen in Render health checks.
 
 app = FastAPI(title="NewsScope API", version="1.0.0", lifespan=lifespan)
 
@@ -531,7 +533,11 @@ async def track_reading(
 ):
     """
     Track article reading time and snapshot scores for bias profile.
-    Scores copied from article row at read time — stable after archiving.
+
+    Scores are copied from the article row at read time so they remain
+    stable after archiving. Uses INSERT (not upsert) because the
+    reading_history table has no unique constraint on (user_id, article_id)
+    — multiple reads of the same article are valid and expected.
     """
     try:
         article_data = (
@@ -548,16 +554,21 @@ async def track_reading(
             "user_id": user_id,
             "article_id": data.article_id,
             "time_spent_seconds": data.time_spent_seconds,
-            "opened_at": datetime.utcnow().isoformat(),
+            # datetime.now(timezone.utc) replaces deprecated datetime.utcnow()
+            "opened_at": datetime.now(timezone.utc).isoformat(),
             "bias_score": scores.get("bias_score"),
             "sentiment_score": scores.get("sentiment_score"),
             "source": scores.get("source"),
             "general_bias": scores.get("general_bias"),
         }
-        response = supabase.table("reading_history").upsert(
-            payload, on_conflict="user_id,article_id"
-        ).execute()
-        print(f"Reading tracked: {data.article_id} ({data.time_spent_seconds}s)")
+        # Plain insert — no upsert. The schema has no unique constraint on
+        # (user_id, article_id), so upsert on_conflict="user_id,article_id"
+        # was silently failing with a Supabase 409 / constraint error.
+        response = supabase.table("reading_history").insert(payload).execute()
+        print(
+            f"Reading tracked: {data.article_id} "
+            f"({data.time_spent_seconds}s)"
+        )
         return {"success": True, "data": response.data}
     except Exception as exc:
         print(f"Error tracking reading: {exc}")
@@ -573,7 +584,10 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
     try:
         response = (
             supabase.table("reading_history")
-            .select("time_spent_seconds, bias_score, sentiment_score, source")
+            .select(
+                "time_spent_seconds, bias_score, sentiment_score, "
+                "source, general_bias"
+            )
             .eq("user_id", user_id)
             .execute()
         )
@@ -680,6 +694,14 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
 
 @app.post("/api/articles/compare", response_model=ComparisonResponse)
 async def compare_articles(request: ComparisonRequest):
+    """
+    Group articles by political leaning for the Compare screen.
+
+    Category filtering uses CATEGORY_GROUP_MAP — same as GET /articles —
+    so ?category=sport returns articles tagged sport, football, rugby etc.
+    Previously this endpoint filtered on category directly (exact match),
+    which caused mismatches with the granular sub-categories stored in DB.
+    """
     try:
         query = (
             supabase.table("articles")
@@ -687,13 +709,22 @@ async def compare_articles(request: ComparisonRequest):
             .not_.is_("bias_score", "null")
             .order("published_at", desc=True)
         )
+
         if request.topic:
             query = query.or_(
                 f"title.ilike.%{request.topic}%,"
                 f"content.ilike.%{request.topic}%"
             )
+
         if request.category:
-            query = query.eq("category", request.category)
+            # Resolve sub-categories via CATEGORY_GROUP_MAP so that
+            # compare works identically to the home feed filter.
+            related = [
+                k for k, v in CATEGORY_GROUP_MAP.items()
+                if v == request.category
+            ] + [request.category]
+            query = query.in_("category", related)
+
         if request.source:
             query = query.eq("source", request.source)
 

@@ -4,7 +4,7 @@ NewsScope Articles API Router.
 Credibility scoring + fact-checking endpoints.
 Category filtering uses CATEGORY_GROUP_MAP to resolve sub-categories
 (football, climate, film, etc.) to their parent group so Flutter's
-8-chip filter correctly matches all stored variants.
+chip filter correctly matches all stored variants.
 
 Archive window: 7 days — weekly rolling article pool.
 
@@ -32,7 +32,7 @@ _ARCHIVE_DAYS = 7
 
 # Maps granular backend sub-categories → Flutter parent chip categories.
 # Ensures ?category=sport returns articles tagged football/rugby/gaa etc.
-# Mirrors the 8 chips in HomeFeedTab._categories (lowercased).
+# Mirrors the chip categories in HomeFeedTab._categories (lowercased).
 CATEGORY_GROUP_MAP: dict = {
     # sport
     "football": "sport",
@@ -166,15 +166,20 @@ async def add_article(article: ArticleCreate) -> dict:
     insert_data = {
         "source": article.source,
         "url": article.url,
-        "title": getattr(article, "title", None),
-        "description": getattr(article, "description", None),
-        "bias_score": getattr(article, "bias_score", None),
-        "sentiment_score": getattr(article, "sentiment_score", None),
-        "general_bias": getattr(article, "general_bias", None),
-        "general_bias_score": getattr(article, "general_bias_score", None),
-        "published_at": article.published_at,
+        "title": article.title,
         "content": article.content,
-        "category": getattr(article, "category", None),
+        "bias_score": article.bias_score,
+        "bias_intensity": article.bias_intensity,
+        "sentiment_score": article.sentiment_score,
+        "general_bias": article.general_bias,
+        "general_bias_score": article.general_bias_score,
+        "political_bias": article.political_bias,
+        "political_bias_score": article.political_bias_score,
+        "published_at": (
+            article.published_at.isoformat()
+            if article.published_at else None
+        ),
+        "category": article.category,
         "credibility_score": 80.0,
         "fact_checks": {},
         "claims_checked": 0,

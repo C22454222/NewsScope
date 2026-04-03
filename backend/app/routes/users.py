@@ -87,22 +87,6 @@ def get_user(uid: str) -> dict:
     return response.data[0]
 
 
-@router.put("/{uid}/preferences")
-def update_preferences(uid: str, prefs: dict) -> dict:
-    """Update the user's saved preferences (e.g. region, topics)."""
-    response = (
-        supabase.table("users")
-        .update({"preferences": prefs})
-        .eq("id", uid)
-        .execute()
-    )
-    if not response.data:
-        raise HTTPException(
-            status_code=404, detail="User not found or update failed"
-        )
-    return response.data[0]
-
-
 @router.delete("/{uid}")
 def delete_user(uid: str) -> dict:
     """
