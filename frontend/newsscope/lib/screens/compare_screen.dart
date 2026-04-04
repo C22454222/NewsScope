@@ -531,7 +531,7 @@ class _CompareScreenState extends State<CompareScreen>
                 // When keyboard is visible, reserve less height for filters.
                 constraints: BoxConstraints(
                   maxHeight: keyboardHeight > 0
-                      ? MediaQuery.of(context).size.height * 0.40
+                      ? MediaQuery.of(context).size.height * 0.28
                       : double.infinity,
                 ),
                 child: SingleChildScrollView(

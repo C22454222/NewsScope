@@ -72,8 +72,11 @@ FEED_NAME_MAP: Dict[str, str] = {
     "https://www.rte.ie/news/rss/news-headlines.xml": "RTÉ News",
     "https://www.irishtimes.com/cmlink/news-1.1319192": "The Irish Times",
     "https://www.independent.ie/rss/": "The Independent",
+    "https://www.independent.co.uk/news/uk/rss": "The Independent",
     "https://feeds.skynews.com/feeds/rss/home.xml": "Sky News",
+    "https://feeds.skynews.com/feeds/rss/uk.xml": "Sky News",
     "https://rss.dw.com/rdf/rss-en-all": "Deutsche Welle",
+    "https://www.npr.org/rss/rss.php?id=1001": "NPR",
 }
 
 # Supplementary feeds for broader coverage per source.
@@ -257,6 +260,7 @@ def normalize_article(
     bias_score: Optional[float] = None,
     sentiment_score: Optional[float] = None,
 ) -> Dict[str, Any]:
+    source_name = _canonicalize_source(source_name)
     ts = None
     if published_at:
         try:
@@ -275,7 +279,25 @@ def normalize_article(
     }
 
 
+# Normalise variant source names to the canonical 12.
+# RSS feed titles and NewsAPI can return non-canonical names that
+# would otherwise create duplicate rows in the sources table.
+_CANONICAL_NAMES: Dict[str, str] = {
+    "UK News - The latest headlines from the UK | Sky News": "Sky News",
+    "NPR Topics: News": "NPR",
+    "The Independent UK": "The Independent",
+    "News Headlines": "RTÉ News",
+    "Unknown Source": "Unknown Source",
+}
+
+
+def _canonicalize_source(name: str) -> str:
+    """Map variant source names to the canonical 12."""
+    return _CANONICAL_NAMES.get(name, name)
+
+
 def upsert_source(name: str) -> Optional[str]:
+    name = _canonicalize_source(name)
     existing = (
         supabase.table("sources")
         .select("id")
@@ -505,6 +527,17 @@ def _scrape_cnn(url: str) -> Optional[str]:
         cleaned = clean_text(content)
         if len(cleaned) > 150:
             return cleaned
+
+    # Final fallback: newspaper3k extraction
+    try:
+        na = Article(url)
+        na.download()
+        na.parse()
+        if na.text and len(na.text) > 150:
+            return clean_text(na.text)
+    except Exception:
+        pass
+
     return None
 
 
@@ -844,6 +877,17 @@ def _scrape_irish_times(url: str) -> Optional[str]:
         cleaned = clean_text(content)
         if len(cleaned) > 150:
             return cleaned
+
+    # Final fallback: newspaper3k extraction
+    try:
+        na = Article(url)
+        na.download()
+        na.parse()
+        if na.text and len(na.text) > 150:
+            return clean_text(na.text)
+    except Exception:
+        pass
+
     return None
 
 
@@ -931,6 +975,17 @@ def _scrape_sky_news(url: str) -> Optional[str]:
         cleaned = clean_text(content)
         if len(cleaned) > 150:
             return cleaned
+
+    # Final fallback: newspaper3k extraction
+    try:
+        na = Article(url)
+        na.download()
+        na.parse()
+        if na.text and len(na.text) > 150:
+            return clean_text(na.text)
+    except Exception:
+        pass
+
     return None
 
 

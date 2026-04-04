@@ -137,10 +137,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _showCredibility      = true;
   bool _showSentiment        = true;
   bool _darkMode             = false;
-  int  _dailyGoal            = 3;
-  int  _todayCount           = 0;
-
-  static const List<int> _goalOptions = [1, 3, 5, 10, 20];
 
   String? _displayName;
 
@@ -174,19 +170,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _showCredibility      = prefs.getBool('show_credibility')      ?? true;
       _showSentiment        = prefs.getBool('show_sentiment')        ?? true;
       _darkMode             = prefs.getBool('dark_mode')             ?? false;
-      _dailyGoal            = prefs.getInt('daily_goal')             ?? 3;
-      _todayCount           = prefs.getInt('articles_today')         ?? 0;
     });
   }
 
   Future<void> _saveBool(String key, bool value) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(key, value);
-  }
-
-  Future<void> _saveInt(String key, int value) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(key, value);
   }
 
   // ── Notifications ──────────────────────────────────────────────────────────
@@ -273,53 +262,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  // ── Reading goal ───────────────────────────────────────────────────────────
-
-  Future<void> _handleReadingGoal() async {
-    final selected = await showDialog<int>(
-      context: context,
-      builder: (context) => SimpleDialog(
-        shape:
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Daily Reading Goal'),
-        children: _goalOptions.map((goal) {
-          final isCurrent = goal == _dailyGoal;
-          return SimpleDialogOption(
-            onPressed: () => Navigator.pop(context, goal),
-            child: Row(children: [
-              Icon(
-                isCurrent
-                    ? Icons.radio_button_checked
-                    : Icons.radio_button_unchecked,
-                color:
-                    isCurrent ? Colors.blue[700] : Colors.grey[400],
-                size: 20,
-              ),
-              const SizedBox(width: 12),
-              Text(
-                '$goal article${goal == 1 ? '' : 's'} per day',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight:
-                      isCurrent ? FontWeight.bold : FontWeight.normal,
-                  color:
-                      isCurrent ? Colors.blue[700] : Colors.grey[800],
-                ),
-              ),
-            ]),
-          );
-        }).toList(),
-      ),
-    );
-    if (selected == null || !mounted) return;
-    setState(() => _dailyGoal = selected);
-    await _saveInt('daily_goal', selected);
-    _showSnackBar(
-      'Goal set to $selected article${selected == 1 ? '' : 's'} per day',
-      color: Colors.green[700],
-    );
-  }
-
   // ── Clear reading history ──────────────────────────────────────────────────
 
   Future<void> _handleClearHistory() async {
@@ -359,11 +301,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           headers: {'Authorization': 'Bearer $idToken'},
         );
       }
-      // Also clear the local today counter
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setInt('articles_today', 0);
       if (!mounted) return;
-      setState(() => _todayCount = 0);
       _showSnackBar('Reading history cleared', color: Colors.green[700]);
     } catch (e) {
       if (!mounted) return;
@@ -754,76 +692,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Widget _buildGoalProgressTile() {
-    final pct = (_dailyGoal > 0
-        ? (_todayCount / _dailyGoal).clamp(0.0, 1.0)
-        : 0.0);
-    final done = _todayCount >= _dailyGoal;
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
-      child: Row(children: [
-        CircleAvatar(
-          radius: 18,
-          backgroundColor:
-              (done ? Colors.green[700]! : Colors.purple[600]!)
-                  .withAlpha(25),
-          child: Icon(
-            done
-                ? Icons.check_circle_outline
-                : Icons.today_outlined,
-            size: 18,
-            color:
-                done ? Colors.green[700] : Colors.purple[600],
-          ),
-        ),
-        const SizedBox(width: 16),
-        Expanded(
-          child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                    mainAxisAlignment:
-                        MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        done
-                            ? 'Goal reached today! 🎉'
-                            : "Today's progress",
-                        style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w500,
-                            color: Colors.grey[800]),
-                      ),
-                      Text(
-                        '$_todayCount / $_dailyGoal',
-                        style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
-                            color: done
-                                ? Colors.green[700]
-                                : Colors.purple[600]),
-                      ),
-                    ]),
-                const SizedBox(height: 6),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(4),
-                  child: LinearProgressIndicator(
-                    value: pct,
-                    minHeight: 6,
-                    backgroundColor: Colors.grey[200],
-                    valueColor: AlwaysStoppedAnimation(
-                        done
-                            ? Colors.green[600]!
-                            : Colors.purple[400]!),
-                  ),
-                ),
-              ]),
-        ),
-      ]),
-    );
-  }
-
   // ── Glossary ───────────────────────────────────────────────────────────────
 
   static const _glossaryTerms = [
@@ -1117,52 +985,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 },
                 iconColor: Colors.indigo[600],
               ),
-            ]),
-          ),
-
-          // ── Reading Goals ──────────────────────────────────────────
-          _buildSectionHeader('Reading Goals'),
-          Card(
-            margin: const EdgeInsets.symmetric(horizontal: 16),
-            elevation: 1,
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12)),
-            child: Column(children: [
-              _buildTile(
-                icon: Icons.track_changes_outlined,
-                title: 'Daily Reading Goal',
-                subtitle:
-                    '$_dailyGoal article${_dailyGoal == 1 ? '' : 's'} per day',
-                iconColor: Colors.purple[600],
-                onTap: _handleReadingGoal,
-                trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 10, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: Colors.purple[50],
-                          borderRadius:
-                              BorderRadius.circular(20),
-                          border: Border.all(
-                              color: Colors.purple[200]!),
-                        ),
-                        child: Text(
-                          '$_dailyGoal',
-                          style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.purple[700]),
-                        ),
-                      ),
-                      const SizedBox(width: 4),
-                      Icon(Icons.chevron_right,
-                          color: Colors.grey[400], size: 20),
-                    ]),
-              ),
-              const Divider(height: 1, indent: 56),
-              _buildGoalProgressTile(),
             ]),
           ),
 

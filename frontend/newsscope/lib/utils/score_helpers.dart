@@ -75,8 +75,13 @@ String getRulingEmoji(String ruling) {
 
 String formatCategory(String? category) {
   if (category == null || category.isEmpty) return '';
+  const preserve = {'us': 'US', 'uk': 'UK', 'eu': 'EU', 'gaa': 'GAA'};
   return category
       .split(' ')
-      .map((w) => w.isEmpty ? '' : w[0].toUpperCase() + w.substring(1))
+      .map((w) {
+        final lower = w.toLowerCase();
+        if (preserve.containsKey(lower)) return preserve[lower]!;
+        return w.isEmpty ? '' : w[0].toUpperCase() + w.substring(1);
+      })
       .join(' ');
 }

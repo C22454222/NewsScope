@@ -22,6 +22,7 @@ class ArticleDetailScreen extends StatefulWidget {
   final String? credibilityReason;
   final String? generalBias;
   final List<Map<String, dynamic>>? biasExplanation;
+  final String? category;
 
   const ArticleDetailScreen({
     super.key,
@@ -39,6 +40,7 @@ class ArticleDetailScreen extends StatefulWidget {
     this.credibilityReason,
     this.generalBias,
     this.biasExplanation,
+    this.category,
   });
 
   factory ArticleDetailScreen.fromArticle(Article article) {
@@ -57,6 +59,7 @@ class ArticleDetailScreen extends StatefulWidget {
       credibilityReason: article.credibilityReason,
       generalBias: article.generalBias,
       biasExplanation: article.biasExplanation,
+      category: article.category,
     );
   }
 
@@ -615,21 +618,45 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Source badge
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(
-                  color: Colors.blue.shade50,
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Text(
-                  widget.sourceName,
-                  style: TextStyle(
-                    color: Colors.blue.shade700,
-                    fontWeight: FontWeight.w600,
+              // Source badge + category
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.blue.shade50,
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Text(
+                      widget.sourceName,
+                      style: TextStyle(
+                        color: Colors.blue.shade700,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                   ),
-                ),
+                  if (widget.category != null && widget.category!.isNotEmpty)
+                    Container(
+                      padding:
+                          const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: Colors.blue[50],
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: Colors.blue[200]!),
+                      ),
+                      child: Text(
+                        formatCategory(widget.category),
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.blue[700],
+                        ),
+                      ),
+                    ),
+                ],
               ),
               const SizedBox(height: 12),
 

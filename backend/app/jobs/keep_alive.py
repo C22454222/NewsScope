@@ -174,11 +174,11 @@ def start_keep_alive() -> None:
         }
     )
     _scheduler.add_listener(_job_error_listener, EVENT_JOB_ERROR)
-    _scheduler.add_job(keep_alive, "interval", minutes=14)
-    _scheduler.add_job(ping_spaces, "interval", minutes=10)
+    _scheduler.add_job(keep_alive, "interval", minutes=10)
+    _scheduler.add_job(ping_spaces, "interval", minutes=8)
     _scheduler.start()
 
     print(
         "Keep-alive scheduler started "
-        "(Render ping every 14 min, Space pings every 10 min)"
+        "(Render ping every 10 min, Space pings every 8 min)"
     )
