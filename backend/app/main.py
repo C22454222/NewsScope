@@ -1,7 +1,7 @@
 """
 NewsScope FastAPI application entry points.
 
-SCHEDULING OVERVIEW (v6 — chain-first, cron-as-safety-net):
+SCHEDULING OVERVIEW (v7 — chain-first, memory-safe fact-check gating):
 
   PIPELINE (chained, fires automatically each cycle):
     :00  Ingestion starts   (CronTrigger minute=0)
@@ -11,8 +11,9 @@ SCHEDULING OVERVIEW (v6 — chain-first, cron-as-safety-net):
          ↓ on completion
          Analysis fires immediately — no fixed wait, no wasted minutes.
          Completes in ~10-15 minutes (200 articles × 8 concurrent HF calls).
+         LIME runs inside analysis for high-confidence articles (~20-30 min).
          ↓ on completion
-         Pipeline done. Total wall time: ~15-20 minutes per hour.
+         Pipeline done. Total wall time: ~25-40 minutes per hour.
 
   SAFETY NETS (cron — only fire if chained call failed/was skipped):
     :20  Analysis safety net  (CronTrigger minute=20)
@@ -21,31 +22,35 @@ SCHEDULING OVERVIEW (v6 — chain-first, cron-as-safety-net):
          only picks up articles with sentiment_score IS NULL, so it
          never double-scores articles the chain already handled.
 
-    :45  Fact-check           (CronTrigger minute=45)
-         Pure async I/O (Google API). No heavy job lock needed.
-         Runs after analysis is reliably complete (chained ~15-20 min,
-         safety net at :20 adds another buffer). Was :40, moved to :45
-         to give analysis 5 extra minutes on busy cycles.
+    :50  Fact-check           (CronTrigger minute=50)
+         Waits for _heavy_job_lock before running — prevents memory
+         overlap with LIME explanations which are CPU-heavy despite
+         fact-checking itself being I/O-bound. Moved from :45 to :50
+         to give LIME 50 minutes to complete on busy cycles.
 
     03:00 Archiving           (CronTrigger hour=3)
           Once daily. Lightweight DB-only operation.
 
-WHY CHAINED NOT CRON FOR ANALYSIS?
-  The previous CronTrigger at :20 was a timing guess — if ingestion
-  somehow ran slow, analysis fired while scraping was still mid-chunk.
-  The lock blocked it, causing silent skips and delayed scoring.
-  Chaining guarantees analysis always starts the instant ingestion
-  finishes, regardless of how long ingestion took. The :20 cron stays
-  purely as a safety net for failure recovery.
+WHY FACT-CHECK NOW USES THE LOCK:
+  v6 classified fact-checking as "pure I/O" and exempted it from the
+  heavy job lock. This was correct for the Google API calls themselves,
+  but when fact-checking runs concurrently with LIME (which makes ~50
+  HTTP calls per article inside the analysis pipeline), the combined
+  memory footprint of response buffers + Supabase row fetches exceeds
+  512MB on Render free tier, causing OOM kills. Gating fact-checking
+  behind the same lock ensures it only runs after analysis (including
+  LIME) has fully completed and freed its memory.
 
 MEMORY MODEL (512MB Render free tier):
   - Ingestion peak: 4 workers × ~15MB DOM = ~60MB per chunk of 5.
     Total ingestion footprint: ~100MB above baseline.
   - Analysis peak: 8 concurrent HF response buffers ≈ negligible.
+    LIME peak: 50 perturbation calls per article, sequential.
     Real cost is the Supabase row fetch — capped to 48h × 200 rows.
   - Fact-check: httpx async client, one open connection. Negligible.
+    But must NOT overlap with LIME — combined buffers exceed 512MB.
   - Combined baseline (FastAPI + Supabase + APScheduler): ~80MB.
-  - Headroom on 512MB: ~280MB — sufficient for chained pipeline.
+  - Headroom on 512MB: ~280MB — sufficient for sequential pipeline.
   - Analysis starts after ingestion RAM is freed (gc.collect() in
     run_ingestion_cycle finalizer), so no memory overlap.
 
@@ -53,7 +58,7 @@ KEEP-ALIVE:
   - start_keep_alive() is guarded by a module-level _scheduler global —
     calling it twice is a no-op, preventing duplicate scheduler threads.
   - An immediate ping fires on startup via asyncio.to_thread so there
-    is no 14-minute gap between deploy and the first keep-alive ping.
+    is no 10-minute gap between deploy and the first keep-alive ping.
 
 Flake8: 0 errors/warnings.
 """
@@ -97,7 +102,7 @@ _main_loop: Optional[asyncio.AbstractEventLoop] = None
 
 # ── Job guards ────────────────────────────────────────────────────────────────
 # _heavy_job_lock: atomic threading.Lock — prevents any two heavy jobs
-# (ingestion, analysis) from running simultaneously.
+# (ingestion, analysis, fact-checking) from running simultaneously.
 # acquire(blocking=False) is the only safe pattern — boolean flags
 # had a check-then-act race between APScheduler thread pool workers.
 _ingestion_running = False
@@ -105,8 +110,10 @@ _analysis_running = False
 _heavy_job_lock = threading.Lock()
 
 
-# Redeploy guard: skip startup ingestion if DB updated < 30 min ago.
-_REDEPLOY_GUARD_MINUTES = 30
+# Redeploy guard: skip startup ingestion if DB updated < 45 min ago.
+# Raised from 30 to 45 to give more breathing room after code pushes
+# where LIME explanations may still be running from the previous cycle.
+_REDEPLOY_GUARD_MINUTES = 45
 
 
 def init_firebase() -> None:
@@ -136,7 +143,7 @@ def _sync_ingestion() -> None:
     Sync bridge — runs _scheduled_ingestion on the main event loop.
     Fires at :00 via CronTrigger. After ingestion completes, analysis
     is chained immediately inside _scheduled_ingestion.
-    Lock is held for full ingestion + analysis duration.
+    Lock is held for full ingestion + analysis + LIME duration.
     """
     if not _heavy_job_lock.acquire(blocking=False):
         print("Heavy job in progress — skipping scheduled ingestion.")
@@ -184,11 +191,20 @@ def _sync_analysis_safety_net() -> None:
 def _sync_factcheck() -> None:
     """
     Sync bridge — runs batch_factcheck_recent on the main event loop.
-    Fires at :45 via CronTrigger — after chained ingestion+analysis
-    (~15-20 min) and the :20 analysis safety net.
-    No heavy job lock — fact-checking is pure I/O (Google API calls).
+    Fires at :50 via CronTrigger — after chained ingestion+analysis+LIME
+    (~25-40 min) and the :20 analysis safety net.
+
+    Now gated behind _heavy_job_lock to prevent memory overlap with
+    LIME explanations. LIME makes ~50 HTTP calls per article and holds
+    response buffers in memory; running fact-checking (100 articles ×
+    3 Google API calls each) concurrently pushes past 512MB on Render
+    free tier, causing OOM kills and health check timeouts.
     """
+    if not _heavy_job_lock.acquire(blocking=False):
+        print("Heavy job in progress — skipping scheduled fact-check.")
+        return
     if _main_loop is None or not _main_loop.is_running():
+        _heavy_job_lock.release()
         print("Fact-check bridge: no running loop, skipping.")
         return
     future = asyncio.run_coroutine_threadsafe(
@@ -198,12 +214,15 @@ def _sync_factcheck() -> None:
         future.result(timeout=1800)
     except Exception as exc:
         print(f"Scheduled fact-check error: {exc}")
+    finally:
+        _heavy_job_lock.release()
 
 
 def _sync_archive() -> None:
     """
     Sync bridge — runs archive_old_articles on the main event loop.
-    No heavy job lock — archiving only reads/deletes old DB rows.
+    No heavy job lock — archiving only reads/deletes old DB rows
+    and uploads JSON to Supabase Storage. Negligible memory footprint.
     """
     if _main_loop is None or not _main_loop.is_running():
         print("Archive bridge: no running loop, skipping.")
@@ -273,9 +292,9 @@ async def lifespan(app: FastAPI):
     FastAPI lifespan context manager.
 
     Scheduled job timing:
-      :00  ingestion → chains analysis immediately on completion
+      :00  ingestion → chains analysis+LIME immediately on completion
       :20  analysis safety net — idempotent, only scores NULL articles
-      :45  fact-check — pure I/O, no lock needed (moved from :40)
+      :50  fact-check — gated behind heavy_job_lock (moved from :45)
       03:00 archiving — once daily, lightweight
 
     On startup: ingestion runs once immediately (with redeploy guard),
@@ -284,7 +303,7 @@ async def lifespan(app: FastAPI):
     Keep-alive:
       start_keep_alive() is guarded — safe to call multiple times.
       An immediate ping fires instantly on startup so there is no
-      14-minute cold gap between deploy and the first scheduled ping.
+      10-minute cold gap between deploy and the first scheduled ping.
     """
     global _main_loop
 
@@ -315,10 +334,12 @@ async def lifespan(app: FastAPI):
         replace_existing=True,
     )
 
-    # Fact-check at :45 — after chained pipeline (~15-20 min) is done.
+    # Fact-check at :50 — gated behind heavy_job_lock to prevent
+    # memory overlap with LIME. Moved from :45 to give analysis
+    # 50 minutes to complete including LIME on busy cycles.
     scheduler.add_job(
         _sync_factcheck,
-        trigger=CronTrigger(minute=45),
+        trigger=CronTrigger(minute=50),
         id="factcheck",
         max_instances=1,
         coalesce=True,
@@ -340,8 +361,8 @@ async def lifespan(app: FastAPI):
 
     if env == "production":
         start_keep_alive()
-        print("Keep-alive enabled (pings every 14 minutes)")
-        # Fire an immediate ping so there is no 14-minute gap on cold deploy.
+        print("Keep-alive enabled (pings every 10 minutes)")
+        # Fire an immediate ping so there is no 10-minute gap on cold deploy.
         asyncio.create_task(asyncio.to_thread(keep_alive))
     else:
         print("Keep-alive disabled in development")
@@ -395,7 +416,7 @@ async def _run_startup_sequence() -> None:
     """
     Startup sequence: ingest → chain analysis immediately → done.
 
-    If redeploy guard fires (ingestion ran < 30 min ago), skip ingestion
+    If redeploy guard fires (ingestion ran < 45 min ago), skip ingestion
     and run analysis only — articles are already in DB, just need scoring.
     Subsequent runs follow the hourly cron schedule.
     """
