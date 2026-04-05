@@ -5,6 +5,7 @@ Matches the Supabase PostgreSQL schema exactly:
   - articles: all NLP output columns including bias_explanation JSONB
   - fact_checks: relational table with article_id FK
   - reading_history: snapshot columns for bias profile calculation
+    (bias_score, sentiment_score, source, general_bias, credibility_score)
   - sources: outlet metadata with bias_rating check constraint
   - users: id (Firebase UID), email, created_at, updated_at, display_name
 
@@ -182,6 +183,7 @@ class ReadingHistory(BaseModel):
     sentiment_score: Optional[float] = None
     source: Optional[str] = None
     general_bias: Optional[str] = None
+    credibility_score: Optional[float] = None     # added: snapshot column
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -196,6 +198,11 @@ class BiasProfile(BaseModel):
     Computed live from reading_history snapshot columns — never stored.
     source_breakdown: top-12 sources by article count.
     Powers the bar chart on the Flutter profile screen.
+
+    avg_credibility: mean credibility score of articles the user has
+    read (0-100 scale). Uses the snapshot column in reading_history so
+    it stays stable after articles are archived. None when the user has
+    no scored articles yet.
     """
 
     avg_bias: float
@@ -211,6 +218,7 @@ class BiasProfile(BaseModel):
     neutral_count: int = 0
     negative_count: int = 0
     source_breakdown: Optional[Dict[str, int]] = None
+    avg_credibility: Optional[float] = None       # added: powers profile header
 
 
 # ── Fact checks ───────────────────────────────────────────────────────────────

@@ -5,7 +5,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 
 import 'screens/auth_gate.dart';
-import 'screens/settings_screen.dart'; // for AppTheme
+import 'screens/settings_screen.dart'; // for AppTheme and AppNotifications
 import 'core/app_prefs.dart';
 
 // ── FCM background message handler ────────────────────────────────────────────
@@ -29,6 +29,11 @@ void main() async {
 
   // Register the background message handler BEFORE any other FCM calls.
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+
+  // Initialise the local notifications plugin and create the Android
+  // channel. Must run before any notification can be shown — on Android 8+
+  // notifications without a channel are silently dropped.
+  await AppNotifications.init();
 
   // Load the persisted theme preference before the first frame is painted.
   await AppTheme.load();

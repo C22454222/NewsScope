@@ -165,27 +165,27 @@ class _SignInScreenState extends State<SignInScreen> {
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 24),
+            padding: const EdgeInsets.symmetric(horizontal: 20),
             child: Form(
               key: _formKey,
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 12),
 
                   // ── Hero card ──────────────────────────────────────────
                   Container(
                     width: double.infinity,
-                    padding: const EdgeInsets.fromLTRB(24, 28, 24, 28),
+                    padding: const EdgeInsets.fromLTRB(20, 18, 20, 18),
                     decoration: BoxDecoration(
                       color: const Color(0xFF0D1B3E),
-                      borderRadius: BorderRadius.circular(20),
+                      borderRadius: BorderRadius.circular(18),
                       boxShadow: [
                         BoxShadow(
                           color: Colors.black.withAlpha(60),
-                          blurRadius: 16,
-                          offset: const Offset(0, 6),
+                          blurRadius: 14,
+                          offset: const Offset(0, 4),
                         ),
                       ],
                     ),
@@ -193,25 +193,25 @@ class _SignInScreenState extends State<SignInScreen> {
                       children: [
                         // Logo
                         Container(
-                          width: 64,
-                          height: 64,
+                          width: 52,
+                          height: 52,
                           decoration: BoxDecoration(
                             color: Colors.white.withAlpha(18),
-                            borderRadius: BorderRadius.circular(18),
+                            borderRadius: BorderRadius.circular(14),
                             border: Border.all(
                                 color: Colors.white.withAlpha(50),
                                 width: 1.5),
                           ),
                           child: const Icon(Icons.newspaper,
-                              size: 34, color: Colors.white),
+                              size: 28, color: Colors.white),
                         ),
-                        const SizedBox(height: 16),
+                        const SizedBox(height: 12),
                         // App name
                         RichText(
                           textAlign: TextAlign.center,
                           text: TextSpan(
                             style: const TextStyle(
-                                fontSize: 30,
+                                fontSize: 26,
                                 fontWeight: FontWeight.bold,
                                 letterSpacing: 0.5),
                             children: [
@@ -225,20 +225,20 @@ class _SignInScreenState extends State<SignInScreen> {
                             ],
                           ),
                         ),
-                        const SizedBox(height: 8),
+                        const SizedBox(height: 6),
                         Text(
                           'Bias-aware news analysis',
                           textAlign: TextAlign.center,
                           style: TextStyle(
-                            fontSize: 13,
+                            fontSize: 12,
                             color: Colors.white.withAlpha(160),
                             letterSpacing: 0.3,
                           ),
                         ),
-                        const SizedBox(height: 4),
+                        const SizedBox(height: 6),
                         Container(
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 3),
+                              horizontal: 10, vertical: 2),
                           decoration: BoxDecoration(
                             color: Colors.blue[700]!.withAlpha(80),
                             borderRadius: BorderRadius.circular(20),
@@ -248,7 +248,7 @@ class _SignInScreenState extends State<SignInScreen> {
                           child: Text(
                             'Beta',
                             style: TextStyle(
-                              fontSize: 11,
+                              fontSize: 10,
                               color: Colors.blue[200],
                               fontWeight: FontWeight.w600,
                               letterSpacing: 1,
@@ -258,7 +258,7 @@ class _SignInScreenState extends State<SignInScreen> {
                       ],
                     ),
                   ),
-                  const SizedBox(height: 28),
+                  const SizedBox(height: 14),
 
                   // ── Feature highlights ─────────────────────────────────
                   Row(
@@ -276,7 +276,7 @@ class _SignInScreenState extends State<SignInScreen> {
                               Icons.pie_chart, 'Your Profile')),
                     ],
                   ),
-                  const SizedBox(height: 28),
+                  const SizedBox(height: 14),
 
                   // ── Sign in card ───────────────────────────────────────
                   Card(
@@ -284,23 +284,23 @@ class _SignInScreenState extends State<SignInScreen> {
                     shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(16)),
                     child: Padding(
-                      padding: const EdgeInsets.fromLTRB(20, 24, 20, 20),
+                      padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
                           Text(
                             'Sign in to your account',
                             style: TextStyle(
-                              fontSize: 16,
+                              fontSize: 15,
                               fontWeight: FontWeight.bold,
                               color: Colors.grey[800],
                             ),
                           ),
-                          const SizedBox(height: 18),
+                          const SizedBox(height: 14),
 
                           // Email
                           _buildLabel('Email'),
-                          const SizedBox(height: 6),
+                          const SizedBox(height: 5),
                           TextFormField(
                             controller: _emailController,
                             validator: _validateEmail,
@@ -316,11 +316,11 @@ class _SignInScreenState extends State<SignInScreen> {
                               icon: Icons.email_outlined,
                             ),
                           ),
-                          const SizedBox(height: 14),
+                          const SizedBox(height: 12),
 
                           // Password
                           _buildLabel('Password'),
-                          const SizedBox(height: 6),
+                          const SizedBox(height: 5),
                           TextFormField(
                             controller: _passwordController,
                             validator: _validatePassword,
@@ -356,10 +356,11 @@ class _SignInScreenState extends State<SignInScreen> {
                               style: TextButton.styleFrom(
                                 foregroundColor: Colors.blue[700],
                                 padding: const EdgeInsets.symmetric(
-                                    horizontal: 0, vertical: 8),
+                                    horizontal: 0, vertical: 4),
+                                minimumSize: const Size(0, 32),
                               ),
                               child: const Text('Forgot password?',
-                                  style: TextStyle(fontSize: 13)),
+                                  style: TextStyle(fontSize: 12)),
                             ),
                           ),
 
@@ -373,18 +374,18 @@ class _SignInScreenState extends State<SignInScreen> {
                                     backgroundColor: Colors.blue[700],
                                     foregroundColor: Colors.white,
                                     padding: const EdgeInsets.symmetric(
-                                        vertical: 15),
+                                        vertical: 13),
                                     shape: RoundedRectangleBorder(
                                         borderRadius:
                                             BorderRadius.circular(10)),
                                     elevation: 2,
                                     textStyle: const TextStyle(
-                                        fontSize: 16,
+                                        fontSize: 15,
                                         fontWeight: FontWeight.w600),
                                   ),
                                   child: const Text('Sign In'),
                                 ),
-                          const SizedBox(height: 16),
+                          const SizedBox(height: 12),
 
                           Row(children: [
                             Expanded(
@@ -394,13 +395,13 @@ class _SignInScreenState extends State<SignInScreen> {
                                   horizontal: 12),
                               child: Text('or',
                                   style: TextStyle(
-                                      fontSize: 13,
+                                      fontSize: 12,
                                       color: Colors.grey[500])),
                             ),
                             Expanded(
                                 child: Divider(color: Colors.grey[300])),
                           ]),
-                          const SizedBox(height: 16),
+                          const SizedBox(height: 12),
 
                           OutlinedButton.icon(
                             onPressed:
@@ -409,14 +410,14 @@ class _SignInScreenState extends State<SignInScreen> {
                             label: const Text('Continue with Google'),
                             style: OutlinedButton.styleFrom(
                               padding:
-                                  const EdgeInsets.symmetric(vertical: 14),
+                                  const EdgeInsets.symmetric(vertical: 12),
                               side: BorderSide(color: Colors.grey[300]!),
                               foregroundColor: Colors.grey[800],
                               backgroundColor: Colors.white,
                               shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(10)),
                               textStyle: const TextStyle(
-                                  fontSize: 15,
+                                  fontSize: 14,
                                   fontWeight: FontWeight.w500),
                             ),
                           ),
@@ -424,14 +425,14 @@ class _SignInScreenState extends State<SignInScreen> {
                       ),
                     ),
                   ),
-                  const SizedBox(height: 20),
+                  const SizedBox(height: 10),
 
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       Text("Don't have an account?",
                           style: TextStyle(
-                              color: Colors.grey[600], fontSize: 14)),
+                              color: Colors.grey[600], fontSize: 13)),
                       TextButton(
                         onPressed: () => Navigator.push(
                             context,
@@ -440,14 +441,15 @@ class _SignInScreenState extends State<SignInScreen> {
                         style: TextButton.styleFrom(
                             foregroundColor: Colors.blue[700],
                             padding: const EdgeInsets.symmetric(
-                                horizontal: 6)),
+                                horizontal: 6),
+                            minimumSize: const Size(0, 32)),
                         child: const Text('Sign Up',
                             style:
                                 TextStyle(fontWeight: FontWeight.w600)),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 12),
                 ],
               ),
             ),
@@ -461,7 +463,7 @@ class _SignInScreenState extends State<SignInScreen> {
 
   Widget _buildFeatureChip(IconData icon, String label) {
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 10),
+      padding: const EdgeInsets.symmetric(vertical: 8),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(10),
@@ -469,8 +471,8 @@ class _SignInScreenState extends State<SignInScreen> {
       ),
       child: Column(
         children: [
-          Icon(icon, size: 20, color: Colors.blue[700]),
-          const SizedBox(height: 4),
+          Icon(icon, size: 18, color: Colors.blue[700]),
+          const SizedBox(height: 3),
           Text(
             label,
             textAlign: TextAlign.center,

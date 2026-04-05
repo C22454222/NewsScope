@@ -21,6 +21,11 @@ class BiasProfile {
   /// Null when the user has read fewer than 1 article.
   final Map<String, int>? sourceBreakdown;
 
+  /// Average credibility score of all articles the user has read.
+  /// Null when the backend endpoint has not yet been updated to return it,
+  /// in which case the profile screen falls back to read time.
+  final double? avgCredibility;
+
   const BiasProfile({
     required this.avgBias,
     required this.avgSentiment,
@@ -35,6 +40,7 @@ class BiasProfile {
     required this.neutralCount,
     required this.negativeCount,
     this.sourceBreakdown,
+    this.avgCredibility,
   });
 
   factory BiasProfile.fromJson(Map<String, dynamic> json) {
@@ -64,6 +70,7 @@ class BiasProfile {
       sourceBreakdown: rawSources?.map(
         (k, v) => MapEntry(k, (v as num).toInt()),
       ),
+      avgCredibility: (json['avg_credibility'] as num?)?.toDouble(),
     );
   }
 

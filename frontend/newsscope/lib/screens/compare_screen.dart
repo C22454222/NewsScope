@@ -492,18 +492,14 @@ class _CompareScreenState extends State<CompareScreen>
                 '${_selectedSource != null ? " · ${_sourceMap.entries.firstWhere((e) => e.value == _selectedSource, orElse: () => MapEntry(_selectedSource!, _selectedSource!)).key}" : ""}'
             : 'Compare Coverage';
 
-    // Use viewInsets to shrink the filter section when the keyboard appears,
-    // instead of relying on resizeToAvoidBottomInset. This gives us precise
-    // control: the filter section scrolls, the results area stays stable,
-    // and no overflow banner appears.
-    final keyboardHeight = MediaQuery.of(context).viewInsets.bottom;
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return GestureDetector(
       onTap: () => FocusScope.of(context).unfocus(),
       child: Scaffold(
-        // Disable Flutter's automatic resize so we handle insets manually.
-        resizeToAvoidBottomInset: false,
+        // Default resizeToAvoidBottomInset (true) lets Flutter handle the
+        // keyboard naturally — the body shrinks and the SingleChildScrollView
+        // inside absorbs the reduced height without overflow.
         appBar: AppBar(
           centerTitle: true,
           title: Text(
@@ -515,25 +511,23 @@ class _CompareScreenState extends State<CompareScreen>
               color: Colors.blue[800],
             ),
           ),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.refresh),
+              tooltip: 'Refresh',
+              onPressed: _hasAnyFilter && !_isLoading ? _searchTopic : null,
+            ),
+          ],
         ),
         body: Padding(
-          // Add bottom padding equal to the keyboard height so content
-          // is never hidden behind the keyboard.
-          padding: EdgeInsets.fromLTRB(16, 0, 16, keyboardHeight),
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // Filter section — constrained so it never overlaps results.
-              // AnimatedContainer smoothly adjusts height as keyboard appears.
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                curve: Curves.easeOut,
-                // When keyboard is visible, reserve less height for filters.
-                constraints: BoxConstraints(
-                  maxHeight: keyboardHeight > 0
-                      ? MediaQuery.of(context).size.height * 0.28
-                      : double.infinity,
-                ),
+              // Filter section — Flexible so it can shrink when keyboard opens.
+              // SingleChildScrollView inside absorbs any overflow naturally.
+              Flexible(
+                flex: 0,
                 child: SingleChildScrollView(
                   physics: const ClampingScrollPhysics(),
                   child: Column(
@@ -556,7 +550,7 @@ class _CompareScreenState extends State<CompareScreen>
                       _buildFilterLabel('OUTLET'),
                       const SizedBox(height: 6),
                       _buildSourceChips(),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 14),
                       Row(
                         children: [
                           Expanded(child: Divider(color: Colors.grey[300])),
@@ -571,7 +565,7 @@ class _CompareScreenState extends State<CompareScreen>
                           Expanded(child: Divider(color: Colors.grey[300])),
                         ],
                       ),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: 10),
                       TextField(
                         controller: _searchController,
                         focusNode: _searchFocusNode,
@@ -586,6 +580,9 @@ class _CompareScreenState extends State<CompareScreen>
                           hintText: 'e.g., climate, housing, election',
                           prefixIcon: const Icon(Icons.search),
                           border: const OutlineInputBorder(),
+                          isDense: true,
+                          contentPadding: const EdgeInsets.symmetric(
+                              vertical: 12, horizontal: 12),
                           suffixIcon: _searchController.text.isNotEmpty
                               ? IconButton(
                                   icon: const Icon(Icons.clear),
@@ -607,7 +604,7 @@ class _CompareScreenState extends State<CompareScreen>
                         onChanged: (_) => setState(() {}),
                         onSubmitted: (_) => _searchTopic(),
                       ),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: 10),
                       ElevatedButton.icon(
                         onPressed: _isLoading ? null : _searchTopic,
                         icon: const Icon(Icons.compare_arrows),
@@ -615,14 +612,14 @@ class _CompareScreenState extends State<CompareScreen>
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.blue[700],
                           foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          padding: const EdgeInsets.symmetric(vertical: 13),
                           textStyle: const TextStyle(
-                            fontSize: 15,
+                            fontSize: 14,
                             fontWeight: FontWeight.w600,
                           ),
                         ),
                       ),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: 10),
                     ],
                   ),
                 ),

@@ -7,7 +7,6 @@ import 'package:fl_chart/fl_chart.dart';
 import '../models/bias_profile.dart';
 import '../services/api_service.dart';
 import '../utils/score_helpers.dart';
-import 'settings_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -63,13 +62,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
         letterSpacing: 0.3, color: Colors.blue[800]),
   );
 
-  Widget _settingsButton() => IconButton(
-    icon: const Icon(Icons.settings),
-    tooltip: 'Settings',
-    onPressed: () => Navigator.push(
-        context, MaterialPageRoute(builder: (_) => const SettingsScreen())),
-  );
-
   @override
   Widget build(BuildContext context) {
     if (_loading) {
@@ -97,7 +89,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       return Scaffold(
         
         appBar: AppBar( centerTitle: true,
-            title: _buildBiasProfileTitle(), actions: [_settingsButton()]),
+            title: _buildBiasProfileTitle()),
         body: Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
           Icon(Icons.auto_stories, size: 80, color: Colors.grey.shade300),
           const SizedBox(height: 20),
@@ -123,7 +115,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
               icon: const Icon(Icons.refresh),
               onPressed: _loadProfile,
               tooltip: 'Refresh'),
-          _settingsButton(),
         ],
       ),
       body: RefreshIndicator(
@@ -206,7 +197,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
           Container(width: 1, height: 32, color: Colors.white.withAlpha(25)),
           _buildHeaderStat('${p.readingTimeTotalMinutes}m', 'Read Time'),
           Container(width: 1, height: 32, color: Colors.white.withAlpha(25)),
-          _buildHeaderStat(p.mostReadSource.isNotEmpty ? p.mostReadSource.split(' ').first : '—', 'Top Source'),
+          _buildHeaderStat(
+            p.avgCredibility != null
+                ? '${p.avgCredibility!.round()}%'
+                : '—',
+            'Avg Credibility',
+          ),
         ]),
       ]),
     );

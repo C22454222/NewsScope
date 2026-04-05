@@ -3,12 +3,48 @@ NewsScope Users API Router.
 Flake8: 0 errors/warnings.
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Header
+from typing import Optional
+
+from firebase_admin import auth
 
 from app.db.supabase import supabase
 from app.schemas import UserCreate
 
 router = APIRouter()
+
+
+# ── Auth dependency (local copy to avoid circular import with main.py) ───────
+
+def _get_current_user(
+    authorization: Optional[str] = Header(None),
+) -> str:
+    """
+    Validate the Firebase ID token and return the authenticated UID.
+
+    This is a local copy of the get_current_user dependency defined in
+    main.py. Duplicating it here avoids a circular import (main imports
+    this router, so this router cannot import main). The implementation
+    is intentionally identical.
+    """
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    token = authorization.replace("Bearer ", "")
+    try:
+        decoded_token = auth.verify_id_token(token)
+        return decoded_token["uid"]
+    except auth.InvalidIdTokenError:
+        raise HTTPException(
+            status_code=401, detail="Invalid authentication token"
+        )
+    except auth.ExpiredIdTokenError:
+        raise HTTPException(
+            status_code=401, detail="Authentication token expired"
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=401, detail=f"Authentication failed: {exc}"
+        )
 
 
 @router.post("")
@@ -85,6 +121,34 @@ def get_user(uid: str) -> dict:
     if not response.data:
         raise HTTPException(status_code=404, detail="User not found")
     return response.data[0]
+
+
+@router.delete("/{uid}/history")
+def clear_user_history(
+    uid: str,
+    current_user: str = Depends(_get_current_user),
+) -> dict:
+    """
+    Delete all reading_history rows for a user without deleting
+    the user account itself.
+
+    Called from the Flutter settings screen when the user taps
+    "Clear Reading History". Resets the bias profile back to an
+    empty state while preserving the account, preferences,
+    notification subscription, and Firebase auth record.
+
+    The current user is validated against the uid path parameter —
+    users can only clear their own history, never someone else's.
+    Returns 200 even if no rows found (idempotent).
+    """
+    if current_user != uid:
+        raise HTTPException(
+            status_code=403,
+            detail="Cannot clear history for another user",
+        )
+
+    supabase.table("reading_history").delete().eq("user_id", uid).execute()
+    return {"cleared": uid}
 
 
 @router.delete("/{uid}")

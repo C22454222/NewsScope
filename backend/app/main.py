@@ -1,7 +1,7 @@
 """
 NewsScope FastAPI application entry points.
 
-SCHEDULING OVERVIEW (v7 — chain-first, memory-safe fact-check gating):
+SCHEDULING OVERVIEW (v8 — chain-first, FCM notifications, credibility snapshot):
 
   PIPELINE (chained, fires automatically each cycle):
     :00  Ingestion starts   (CronTrigger minute=0)
@@ -13,52 +13,38 @@ SCHEDULING OVERVIEW (v7 — chain-first, memory-safe fact-check gating):
          Completes in ~10-15 minutes (200 articles × 8 concurrent HF calls).
          LIME runs inside analysis for high-confidence articles (~20-30 min).
          ↓ on completion
+         FCM notification sent to `news_updates` topic if new articles
+         were inserted. Count measured from articles inserted during
+         the ingestion window (created_at within last 30 minutes).
+         ↓ on completion
          Pipeline done. Total wall time: ~25-40 minutes per hour.
 
   SAFETY NETS (cron — only fire if chained call failed/was skipped):
     :20  Analysis safety net  (CronTrigger minute=20)
-         Catches articles that slipped through if ingestion chained
-         analysis failed. analyze_unscored_articles() is idempotent —
-         only picks up articles with sentiment_score IS NULL, so it
-         never double-scores articles the chain already handled.
-
     :50  Fact-check           (CronTrigger minute=50)
-         Waits for _heavy_job_lock before running — prevents memory
-         overlap with LIME explanations which are CPU-heavy despite
-         fact-checking itself being I/O-bound. Moved from :45 to :50
-         to give LIME 50 minutes to complete on busy cycles.
-
     03:00 Archiving           (CronTrigger hour=3)
-          Once daily. Lightweight DB-only operation.
 
-WHY FACT-CHECK NOW USES THE LOCK:
-  v6 classified fact-checking as "pure I/O" and exempted it from the
-  heavy job lock. This was correct for the Google API calls themselves,
-  but when fact-checking runs concurrently with LIME (which makes ~50
-  HTTP calls per article inside the analysis pipeline), the combined
-  memory footprint of response buffers + Supabase row fetches exceeds
-  512MB on Render free tier, causing OOM kills. Gating fact-checking
-  behind the same lock ensures it only runs after analysis (including
-  LIME) has fully completed and freed its memory.
+CHANGES FROM v7:
 
-MEMORY MODEL (512MB Render free tier):
-  - Ingestion peak: 4 workers × ~15MB DOM = ~60MB per chunk of 5.
-    Total ingestion footprint: ~100MB above baseline.
-  - Analysis peak: 8 concurrent HF response buffers ≈ negligible.
-    LIME peak: 50 perturbation calls per article, sequential.
-    Real cost is the Supabase row fetch — capped to 48h × 200 rows.
-  - Fact-check: httpx async client, one open connection. Negligible.
-    But must NOT overlap with LIME — combined buffers exceed 512MB.
-  - Combined baseline (FastAPI + Supabase + APScheduler): ~80MB.
-  - Headroom on 512MB: ~280MB — sufficient for sequential pipeline.
-  - Analysis starts after ingestion RAM is freed (gc.collect() in
-    run_ingestion_cycle finalizer), so no memory overlap.
+1. FCM NOTIFICATIONS ON NEW ARTICLES
+   After the ingestion→analysis chain completes, _notify_new_articles()
+   queries articles inserted in the last 30 minutes and publishes a
+   single FCM topic message to `news_updates`. Any user who has
+   subscribed via the Flutter Settings toggle receives a push
+   notification with the count of new articles.
 
-KEEP-ALIVE:
-  - start_keep_alive() is guarded by a module-level _scheduler global —
-    calling it twice is a no-op, preventing duplicate scheduler threads.
-  - An immediate ping fires on startup via asyncio.to_thread so there
-    is no 10-minute gap between deploy and the first keep-alive ping.
+2. AVG CREDIBILITY IN BIAS PROFILE
+   /api/bias-profile now computes and returns avg_credibility, the
+   mean credibility_score across all articles the user has read.
+   Powers the Avg Credibility stat in the profile screen header card.
+   Null when no history exists.
+
+3. CREDIBILITY SNAPSHOT IN READING HISTORY
+   track_reading now copies credibility_score into the reading_history
+   snapshot alongside the other NLP scores. Requires the column to
+   exist in the reading_history table:
+     ALTER TABLE reading_history
+     ADD COLUMN credibility_score DOUBLE PRECISION;
 
 Flake8: 0 errors/warnings.
 """
@@ -69,7 +55,7 @@ import os
 import threading
 from collections import Counter
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import firebase_admin
@@ -77,7 +63,7 @@ from apscheduler.triggers.cron import CronTrigger
 from dateutil import parser as dtparser
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
-from firebase_admin import auth, credentials
+from firebase_admin import auth, credentials, messaging
 
 from app.core.scheduler import start_scheduler
 from app.db.supabase import supabase
@@ -101,19 +87,18 @@ _main_loop: Optional[asyncio.AbstractEventLoop] = None
 
 
 # ── Job guards ────────────────────────────────────────────────────────────────
-# _heavy_job_lock: atomic threading.Lock — prevents any two heavy jobs
-# (ingestion, analysis, fact-checking) from running simultaneously.
-# acquire(blocking=False) is the only safe pattern — boolean flags
-# had a check-then-act race between APScheduler thread pool workers.
 _ingestion_running = False
 _analysis_running = False
 _heavy_job_lock = threading.Lock()
 
 
 # Redeploy guard: skip startup ingestion if DB updated < 45 min ago.
-# Raised from 30 to 45 to give more breathing room after code pushes
-# where LIME explanations may still be running from the previous cycle.
 _REDEPLOY_GUARD_MINUTES = 45
+
+# FCM notification window: articles inserted within the last 30 minutes
+# are considered "new" for the purpose of the post-ingestion notification.
+# This covers the full ingestion+analysis+LIME chain duration.
+_NOTIFICATION_WINDOW_MINUTES = 30
 
 
 def init_firebase() -> None:
@@ -135,6 +120,88 @@ def init_firebase() -> None:
 init_firebase()
 
 
+# ── FCM notification helper ───────────────────────────────────────────────────
+
+
+def _count_recently_inserted_articles() -> int:
+    """
+    Count articles inserted in the last _NOTIFICATION_WINDOW_MINUTES.
+
+    Used to decide whether (and with what count) to fire an FCM
+    notification after the ingestion pipeline completes. Queries on
+    created_at rather than updated_at because updated_at gets bumped
+    by the analysis and fact-check passes, which would inflate the
+    count.
+    """
+    try:
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(minutes=_NOTIFICATION_WINDOW_MINUTES)
+        ).isoformat()
+        response = (
+            supabase.table("articles")
+            .select("id", count="exact")
+            .gte("created_at", cutoff)
+            .execute()
+        )
+        # Supabase returns the count on the response object when count="exact"
+        return response.count or 0
+    except Exception as exc:
+        print(f"Failed to count new articles: {exc}")
+        return 0
+
+
+def _notify_new_articles() -> None:
+    """
+    Send an FCM push notification to the `news_updates` topic if new
+    articles were inserted during this ingestion cycle.
+
+    Clients that have toggled "Breaking News Alerts" on in Settings
+    automatically subscribe to this topic (see SettingsScreen._setNotifications
+    in the Flutter app), so this single publish reaches every opted-in
+    user without per-user token management.
+
+    The notification uses the `news_updates` Android channel, which is
+    created at app startup by AppNotifications.init() in settings_screen.dart.
+    High priority so the notification shows as a heads-up on Samsung devices.
+
+    Idempotent and safe to call multiple times — if count is 0, no
+    notification is sent. Failures are logged but never raised, so a
+    notification error cannot break the ingestion pipeline.
+    """
+    count = _count_recently_inserted_articles()
+    if count <= 0:
+        print("FCM notification skipped — no new articles in the last cycle.")
+        return
+
+    body = (
+        f"{count} new article{'s' if count != 1 else ''} ready to read"
+    )
+
+    try:
+        message = messaging.Message(
+            notification=messaging.Notification(
+                title="NewsScope",
+                body=body,
+            ),
+            android=messaging.AndroidConfig(
+                priority="high",
+                notification=messaging.AndroidNotification(
+                    channel_id="news_updates",
+                    priority="high",
+                    default_sound=True,
+                ),
+            ),
+            topic="news_updates",
+        )
+        message_id = messaging.send(message)
+        print(
+            f"FCM notification sent to news_updates topic: {count} new "
+            f"article{'s' if count != 1 else ''} (message_id={message_id})"
+        )
+    except Exception as exc:
+        print(f"FCM publish failed: {exc}")
+
+
 # ── Sync bridges for APScheduler ─────────────────────────────────────────────
 
 
@@ -143,7 +210,6 @@ def _sync_ingestion() -> None:
     Sync bridge — runs _scheduled_ingestion on the main event loop.
     Fires at :00 via CronTrigger. After ingestion completes, analysis
     is chained immediately inside _scheduled_ingestion.
-    Lock is held for full ingestion + analysis + LIME duration.
     """
     if not _heavy_job_lock.acquire(blocking=False):
         print("Heavy job in progress — skipping scheduled ingestion.")
@@ -164,12 +230,7 @@ def _sync_ingestion() -> None:
 
 
 def _sync_analysis_safety_net() -> None:
-    """
-    Sync bridge — analysis safety net at :20.
-    Only does real work if chained analysis (inside _scheduled_ingestion)
-    failed or was skipped. analyze_unscored_articles() is idempotent —
-    it only picks up articles with sentiment_score IS NULL.
-    """
+    """Analysis safety net at :20 — only runs if chained call failed."""
     if not _heavy_job_lock.acquire(blocking=False):
         print("Heavy job in progress — skipping analysis safety net.")
         return
@@ -189,17 +250,7 @@ def _sync_analysis_safety_net() -> None:
 
 
 def _sync_factcheck() -> None:
-    """
-    Sync bridge — runs batch_factcheck_recent on the main event loop.
-    Fires at :50 via CronTrigger — after chained ingestion+analysis+LIME
-    (~25-40 min) and the :20 analysis safety net.
-
-    Now gated behind _heavy_job_lock to prevent memory overlap with
-    LIME explanations. LIME makes ~50 HTTP calls per article and holds
-    response buffers in memory; running fact-checking (100 articles ×
-    3 Google API calls each) concurrently pushes past 512MB on Render
-    free tier, causing OOM kills and health check timeouts.
-    """
+    """Fact-check at :50 — gated behind heavy_job_lock."""
     if not _heavy_job_lock.acquire(blocking=False):
         print("Heavy job in progress — skipping scheduled fact-check.")
         return
@@ -219,11 +270,7 @@ def _sync_factcheck() -> None:
 
 
 def _sync_archive() -> None:
-    """
-    Sync bridge — runs archive_old_articles on the main event loop.
-    No heavy job lock — archiving only reads/deletes old DB rows
-    and uploads JSON to Supabase Storage. Negligible memory footprint.
-    """
+    """Archiving bridge — no heavy_job_lock, negligible footprint."""
     if _main_loop is None or not _main_loop.is_running():
         print("Archive bridge: no running loop, skipping.")
         return
@@ -241,14 +288,12 @@ def _sync_archive() -> None:
 
 async def _scheduled_ingestion() -> None:
     """
-    Run ingestion, then immediately chain analysis on completion.
+    Run ingestion, then immediately chain analysis on completion,
+    then publish an FCM notification for any new articles.
 
-    This is the core of the pipeline — categorisation is inline during
-    scraping (infer_category called per article in _scrape_one), so by
-    the time ingestion finishes every article already has a category.
-    Analysis fires the instant ingestion returns, with no fixed delay.
-
-    The :20 cron safety net handles the case where this chain fails.
+    The notification fires only after analysis completes so the
+    articles reaching users' phones already have bias/sentiment/
+    credibility scores and can be opened directly.
     """
     global _ingestion_running
     if _ingestion_running:
@@ -265,10 +310,13 @@ async def _scheduled_ingestion() -> None:
     finally:
         _ingestion_running = False
 
-    # Chain: analysis fires immediately after ingestion, no sleep needed.
-    # gc.collect() already called at end of run_ingestion_cycle, so
-    # ingestion RAM is freed before analysis begins.
+    # Chain: analysis fires immediately after ingestion.
     await _guarded_analysis()
+
+    # Publish FCM notification for newly ingested articles. Runs off
+    # the event loop to avoid blocking any subsequent scheduled jobs.
+    # Failures are logged inside _notify_new_articles and never raised.
+    await asyncio.to_thread(_notify_new_articles)
 
 
 async def _guarded_analysis() -> None:
@@ -292,18 +340,10 @@ async def lifespan(app: FastAPI):
     FastAPI lifespan context manager.
 
     Scheduled job timing:
-      :00  ingestion → chains analysis+LIME immediately on completion
-      :20  analysis safety net — idempotent, only scores NULL articles
-      :50  fact-check — gated behind heavy_job_lock (moved from :45)
-      03:00 archiving — once daily, lightweight
-
-    On startup: ingestion runs once immediately (with redeploy guard),
-    then analysis chains off it. Subsequent runs follow the cron schedule.
-
-    Keep-alive:
-      start_keep_alive() is guarded — safe to call multiple times.
-      An immediate ping fires instantly on startup so there is no
-      10-minute cold gap between deploy and the first scheduled ping.
+      :00  ingestion → analysis+LIME → FCM notification
+      :20  analysis safety net — idempotent
+      :50  fact-check — gated behind heavy_job_lock
+      03:00 archiving — once daily
     """
     global _main_loop
 
@@ -314,7 +354,6 @@ async def lifespan(app: FastAPI):
 
     start_scheduler()
 
-    # Ingestion at top of every hour — chains analysis on completion.
     scheduler.add_job(
         _sync_ingestion,
         trigger=CronTrigger(minute=0),
@@ -324,7 +363,6 @@ async def lifespan(app: FastAPI):
         replace_existing=True,
     )
 
-    # Analysis safety net at :20 — only does work if chain failed.
     scheduler.add_job(
         _sync_analysis_safety_net,
         trigger=CronTrigger(minute=20),
@@ -334,9 +372,6 @@ async def lifespan(app: FastAPI):
         replace_existing=True,
     )
 
-    # Fact-check at :50 — gated behind heavy_job_lock to prevent
-    # memory overlap with LIME. Moved from :45 to give analysis
-    # 50 minutes to complete including LIME on busy cycles.
     scheduler.add_job(
         _sync_factcheck,
         trigger=CronTrigger(minute=50),
@@ -346,7 +381,6 @@ async def lifespan(app: FastAPI):
         replace_existing=True,
     )
 
-    # Archiving: 3am daily — lightweight, once per day is sufficient.
     scheduler.add_job(
         _sync_archive,
         trigger=CronTrigger(hour=3, minute=0),
@@ -362,7 +396,6 @@ async def lifespan(app: FastAPI):
     if env == "production":
         start_keep_alive()
         print("Keep-alive enabled (pings every 10 minutes)")
-        # Fire an immediate ping so there is no 10-minute gap on cold deploy.
         asyncio.create_task(asyncio.to_thread(keep_alive))
     else:
         print("Keep-alive disabled in development")
@@ -414,11 +447,7 @@ def _ingestion_ran_recently() -> bool:
 
 async def _run_startup_sequence() -> None:
     """
-    Startup sequence: ingest → chain analysis immediately → done.
-
-    If redeploy guard fires (ingestion ran < 45 min ago), skip ingestion
-    and run analysis only — articles are already in DB, just need scoring.
-    Subsequent runs follow the hourly cron schedule.
+    Startup sequence: ingest → chain analysis immediately → notify → done.
     """
     if _ingestion_ran_recently():
         print(
@@ -442,7 +471,7 @@ async def _run_startup_sequence() -> None:
 
     try:
         await _scheduled_ingestion()
-        print("Startup pipeline complete (ingestion + analysis).")
+        print("Startup pipeline complete (ingestion + analysis + notify).")
     except Exception as exc:
         print(f"Startup pipeline failed: {exc}")
     finally:
@@ -450,11 +479,6 @@ async def _run_startup_sequence() -> None:
 
 
 # ── App ───────────────────────────────────────────────────────────────────────
-# IMPORTANT: app must be defined BEFORE any @app decorators below.
-# Defining it after caused a NameError crash on Render redeploy because
-# Python executes module top-to-bottom — decorators referencing `app`
-# before it is assigned raise NameError and crash the worker process,
-# which manifests as the TCP connection reset seen in Render health checks.
 
 app = FastAPI(title="NewsScope API", version="1.0.0", lifespan=lifespan)
 
@@ -544,6 +568,17 @@ async def debug_archive(background_tasks: BackgroundTasks):
     return {"status": "archiving triggered in background"}
 
 
+@app.post("/debug/notify")
+async def debug_notify():
+    """
+    Fire an FCM test notification immediately. Useful for verifying
+    the `news_updates` topic publishing works end-to-end without
+    waiting for the next ingestion cycle.
+    """
+    await asyncio.to_thread(_notify_new_articles)
+    return {"status": "notification attempted"}
+
+
 # ── User API ──────────────────────────────────────────────────────────────────
 
 
@@ -555,15 +590,20 @@ async def track_reading(
     """
     Track article reading time and snapshot scores for bias profile.
 
-    Scores are copied from the article row at read time so they remain
-    stable after archiving. Uses INSERT (not upsert) because the
-    reading_history table has no unique constraint on (user_id, article_id)
-    — multiple reads of the same article are valid and expected.
+    Scores (bias, sentiment, source, general_bias, credibility) are
+    copied from the article row at read time so they remain stable
+    after archiving. Uses INSERT (not upsert) because the
+    reading_history table has no unique constraint on
+    (user_id, article_id) — multiple reads of the same article are
+    valid and expected.
     """
     try:
         article_data = (
             supabase.table("articles")
-            .select("bias_score, sentiment_score, source, general_bias")
+            .select(
+                "bias_score, sentiment_score, source, general_bias, "
+                "credibility_score"
+            )
             .eq("id", data.article_id)
             .limit(1)
             .execute()
@@ -575,16 +615,13 @@ async def track_reading(
             "user_id": user_id,
             "article_id": data.article_id,
             "time_spent_seconds": data.time_spent_seconds,
-            # datetime.now(timezone.utc) replaces deprecated datetime.utcnow()
             "opened_at": datetime.now(timezone.utc).isoformat(),
             "bias_score": scores.get("bias_score"),
             "sentiment_score": scores.get("sentiment_score"),
             "source": scores.get("source"),
             "general_bias": scores.get("general_bias"),
+            "credibility_score": scores.get("credibility_score"),
         }
-        # Plain insert — no upsert. The schema has no unique constraint on
-        # (user_id, article_id), so upsert on_conflict="user_id,article_id"
-        # was silently failing with a Supabase 409 / constraint error.
         response = supabase.table("reading_history").insert(payload).execute()
         print(
             f"Reading tracked: {data.article_id} "
@@ -601,13 +638,18 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
     """
     Calculate user's bias profile from reading history snapshot columns.
     Reads directly from reading_history — stable after article archiving.
+
+    avg_credibility is computed as a simple arithmetic mean of the
+    credibility_score column across all history rows where it is
+    non-null. Null when no rows have a credibility score yet (old
+    rows from before the column was added, for example).
     """
     try:
         response = (
             supabase.table("reading_history")
             .select(
                 "time_spent_seconds, bias_score, sentiment_score, "
-                "source, general_bias"
+                "source, general_bias, credibility_score"
             )
             .eq("user_id", user_id)
             .execute()
@@ -629,6 +671,7 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
                 neutral_count=0,
                 negative_count=0,
                 source_breakdown={},
+                avg_credibility=None,
             )
 
         total_time = sum(h["time_spent_seconds"] for h in history)
@@ -693,6 +736,19 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
             ),
         }
 
+        # Average credibility — simple mean across history rows that
+        # have a non-null credibility_score. Old rows from before the
+        # column was added will have null and are skipped.
+        cred_values = [
+            h["credibility_score"]
+            for h in history
+            if h.get("credibility_score") is not None
+        ]
+        avg_credibility = (
+            round(sum(cred_values) / len(cred_values), 1)
+            if cred_values else None
+        )
+
         return BiasProfile(
             avg_bias=round(weighted_bias, 3),
             avg_sentiment=round(weighted_sentiment, 3),
@@ -707,6 +763,7 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
             neutral_count=neu,
             negative_count=neg,
             source_breakdown=source_breakdown,
+            avg_credibility=avg_credibility,
         )
     except Exception as exc:
         print(f"Error fetching bias profile: {exc}")
@@ -720,8 +777,6 @@ async def compare_articles(request: ComparisonRequest):
 
     Category filtering uses CATEGORY_GROUP_MAP — same as GET /articles —
     so ?category=sport returns articles tagged sport, football, rugby etc.
-    Previously this endpoint filtered on category directly (exact match),
-    which caused mismatches with the granular sub-categories stored in DB.
     """
     try:
         query = (
@@ -738,8 +793,6 @@ async def compare_articles(request: ComparisonRequest):
             )
 
         if request.category:
-            # Resolve sub-categories via CATEGORY_GROUP_MAP so that
-            # compare works identically to the home feed filter.
             related = [
                 k for k, v in CATEGORY_GROUP_MAP.items()
                 if v == request.category

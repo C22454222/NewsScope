@@ -222,7 +222,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(24, 8, 24, 32),
+            padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
             child: Form(
               key: _formKey,
               child: Column(
@@ -231,31 +231,31 @@ class _SignUpScreenState extends State<SignUpScreen> {
                   // ── Header banner ──────────────────────────────────────
                   Container(
                     width: double.infinity,
-                    padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
+                    padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
                     decoration: BoxDecoration(
                       color: const Color(0xFF0D1B3E),
-                      borderRadius: BorderRadius.circular(16),
+                      borderRadius: BorderRadius.circular(14),
                       boxShadow: [
                         BoxShadow(
                           color: Colors.black.withAlpha(50),
-                          blurRadius: 12,
-                          offset: const Offset(0, 4),
+                          blurRadius: 10,
+                          offset: const Offset(0, 3),
                         ),
                       ],
                     ),
                     child: Row(
                       children: [
                         Container(
-                          width: 52,
-                          height: 52,
+                          width: 44,
+                          height: 44,
                           decoration: BoxDecoration(
                             color: Colors.white.withAlpha(18),
-                            borderRadius: BorderRadius.circular(14),
+                            borderRadius: BorderRadius.circular(12),
                             border: Border.all(color: Colors.white.withAlpha(50)),
                           ),
-                          child: const Icon(Icons.newspaper, size: 28, color: Colors.white),
+                          child: const Icon(Icons.newspaper, size: 24, color: Colors.white),
                         ),
-                        const SizedBox(width: 16),
+                        const SizedBox(width: 14),
                         Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -263,18 +263,18 @@ class _SignUpScreenState extends State<SignUpScreen> {
                               const Text(
                                 'Join NewsScope',
                                 style: TextStyle(
-                                  fontSize: 20,
+                                  fontSize: 17,
                                   fontWeight: FontWeight.bold,
                                   color: Colors.white,
                                 ),
                               ),
-                              const SizedBox(height: 4),
+                              const SizedBox(height: 3),
                               Text(
-                                'Track media bias and analyse news across the political spectrum.',
+                                'Track media bias across the political spectrum.',
                                 style: TextStyle(
                                   color: Colors.white.withAlpha(180),
-                                  fontSize: 12,
-                                  height: 1.4,
+                                  fontSize: 11,
+                                  height: 1.3,
                                 ),
                               ),
                             ],
@@ -283,11 +283,11 @@ class _SignUpScreenState extends State<SignUpScreen> {
                       ],
                     ),
                   ),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 16),
 
                   // ── Display name ───────────────────────────────────────
                   _buildLabel('Display Name'),
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 5),
                   TextFormField(
                     controller: _usernameController,
                     validator: _validateUsername,
@@ -301,11 +301,11 @@ class _SignUpScreenState extends State<SignUpScreen> {
                       icon: Icons.person_outline,
                     ),
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 12),
 
                   // ── Email ──────────────────────────────────────────────
                   _buildLabel('Email Address'),
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 5),
                   TextFormField(
                     controller: _emailController,
                     validator: _validateEmail,
@@ -320,11 +320,11 @@ class _SignUpScreenState extends State<SignUpScreen> {
                       icon: Icons.email_outlined,
                     ),
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 12),
 
                   // ── Password ───────────────────────────────────────────
                   _buildLabel('Password'),
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 5),
                   TextFormField(
                     controller: _passwordController,
                     validator: _validatePassword,
@@ -356,11 +356,11 @@ class _SignUpScreenState extends State<SignUpScreen> {
                   ),
                   // Password rules checklist (only visible after typing)
                   _buildPasswordRules(),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 12),
 
                   // ── Confirm password ───────────────────────────────────
                   _buildLabel('Confirm Password'),
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 5),
                   TextFormField(
                     controller: _confirmPasswordController,
                     validator: _validateConfirmPassword,
@@ -392,7 +392,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
                     },
                     onFieldSubmitted: (_) => _signUp(),
                   ),
-                  const SizedBox(height: 28),
+                  const SizedBox(height: 20),
 
                   // ── Create account button ──────────────────────────────
                   _isLoading
@@ -402,29 +402,30 @@ class _SignUpScreenState extends State<SignUpScreen> {
                           style: ElevatedButton.styleFrom(
                             backgroundColor: Colors.blue[700],
                             foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 15),
+                            padding: const EdgeInsets.symmetric(vertical: 13),
                             shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(10)),
                             elevation: 2,
                             textStyle: const TextStyle(
-                                fontSize: 16, fontWeight: FontWeight.w600),
+                                fontSize: 15, fontWeight: FontWeight.w600),
                           ),
                           child: const Text('Create Account'),
                         ),
-                  const SizedBox(height: 20),
+                  const SizedBox(height: 12),
 
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       Text(
                         'Already have an account?',
-                        style: TextStyle(color: Colors.grey[600], fontSize: 14),
+                        style: TextStyle(color: Colors.grey[600], fontSize: 13),
                       ),
                       TextButton(
                         onPressed: () => Navigator.pop(context),
                         style: TextButton.styleFrom(
                           foregroundColor: Colors.blue[700],
                           padding: const EdgeInsets.symmetric(horizontal: 6),
+                          minimumSize: const Size(0, 32),
                         ),
                         child: const Text('Sign In',
                             style: TextStyle(fontWeight: FontWeight.w600)),
