@@ -43,7 +43,7 @@ Please include:
 I will acknowledge receipt within 72 hours and aim to provide an initial
 assessment within one week. Because this is a single-developer academic
 project, response times outside of those windows depend on coursework and
-exam schedules.
+exam schedules. Thank you for understanding.
 
 ---
 
