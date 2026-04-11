@@ -1,3 +1,5 @@
 [flake8]
 max-line-length = 120
 ignore = E501,E271
+exclude = .venv,__pycache__,build,dist
+per-file-ignores = tests/*:E501

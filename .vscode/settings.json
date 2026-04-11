@@ -1,10 +1,10 @@
 {
-    "git.ignoreLimitWarning": true,
-    "cmake.ignoreCMakeListsMissing": true,
+    "git.ignoreLimitWarning": true,                              // suppress large repo size warnings
+    "cmake.ignoreCMakeListsMissing": true,                       // not a CMake project
     "java.configuration.updateBuildConfiguration": "interactive",
     "python-envs.defaultEnvManager": "ms-python.python:system",
     "files.associations": {
-        "*.lock": "pip-requirements"
+        "*.lock": "pip-requirements"                             // syntax highlight lock files as pip deps
     },
     "github-actions.workflows.pinned.refresh.enabled": false
 }

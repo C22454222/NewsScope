@@ -11,12 +11,12 @@ requests>=2.32.4
 # Environment
 python-dotenv==1.0.1
 
-# Databases
+# Database
 SQLAlchemy==2.0.43
 psycopg2-binary==2.9.10
 supabase==2.23.2
 
-# Scheduling + feeds
+# Scheduling and feed parsing
 apscheduler==3.10.4
 feedparser==6.0.11
 python-dateutil==2.9.0.post0
@@ -33,10 +33,10 @@ pytest
 # Authentication
 firebase-admin==6.5.0
 
-# Evaluation (local only — not used on Render)
+# Evaluation is local only, excluded from Render
 datasets==3.2.0
 scikit-learn==1.6.1
 pandas
 
-# Explaining Bias
+# Bias explanation
 lime==0.2.0.1

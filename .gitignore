@@ -24,7 +24,7 @@ Thumbs.db
 *.tmp
 *.lnk
 *.ini
-~$*
+~$*                          # Office temp files
 
 # OneDrive / Google Drive sync artifacts
 *.gdoc
@@ -35,6 +35,8 @@ Thumbs.db
 venv/
 backend/venv/
 
-# Firebase config
+# Firebase — never commit, contains API keys and project credentials
 google-services.json
+
+# Created by the venv existence check script, not needed in version control
 .venv-check/

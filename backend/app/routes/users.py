@@ -164,3 +164,32 @@ def delete_user(uid: str) -> dict:
     supabase.table("reading_history").delete().eq("user_id", uid).execute()
     supabase.table("users").delete().eq("id", uid).execute()
     return {"deleted": uid}
+
+# Test helpers (used by tests/unit/test_bias_profile.py)
+
+
+def compute_weighted_average(items):
+    """Compute time-weighted average of a list of {score, weight} dicts."""
+    if not items:
+        return 0.0
+    total_weight = sum(item.get("weight", 0) for item in items)
+    if total_weight == 0:
+        return 0.0
+    weighted_sum = sum(item.get("score", 0) * item.get("weight", 0) for item in items)
+    return weighted_sum / total_weight
+
+
+def largest_remainder_round(fractions):
+    """Round a list of fractions to integer percentages summing to exactly 100."""
+    if not fractions:
+        return []
+    scaled = [f * 100 for f in fractions]
+    floored = [int(s) for s in scaled]
+    remainder = 100 - sum(floored)
+    remainders = sorted(
+        [(scaled[i] - floored[i], i) for i in range(len(scaled))],
+        reverse=True,
+    )
+    for _, i in remainders[:remainder]:
+        floored[i] += 1
+    return floored

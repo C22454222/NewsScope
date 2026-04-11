@@ -537,3 +537,46 @@ async def retroactive_factcheck_all(
         f"Retroactive complete. {len(results)}/{len(articles)} scored."
     )
     return results
+
+# Test helpers (used by tests/unit/test_keywords.py)
+
+
+def extract_keywords(text, max_keywords=10):
+    """Filter stopwords, prioritise capitalised tokens, return top keywords."""
+    if not text:
+        return []
+    words = text.split()
+    filtered = [w.strip(".,;:!?\"'()[]{}") for w in words if w.strip()]
+    filtered = [w for w in filtered if w and w.lower() not in _STOPWORDS]
+    proper = [w for w in filtered if w and w[0].isupper()]
+    rest = [w for w in filtered if w not in proper]
+    seen = set()
+    result = []
+    for w in proper + rest:
+        if w.lower() not in seen:
+            seen.add(w.lower())
+            result.append(w)
+        if len(result) >= max_keywords:
+            break
+    return result
+
+
+# Test helper (sync wrapper used by tests/unit/test_credibility.py)
+def compute_credibility_score_sync(source_name, rulings):
+    """Sync wrapper of the credibility formula for unit testing.
+
+    The production compute_credibility_score is async and takes an
+    ArticleResponse. This wrapper exposes the underlying scoring logic
+    in a testable form.
+    """
+    base = _SOURCE_REPUTATION.get(source_name, 70.0)
+    valid = [
+        s for s in (ruling_to_score(r) for r in rulings)
+        if s is not None
+    ]
+    if not valid:
+        return int(round(base))
+    mean_ruling = sum(valid) / len(valid)
+    adjustment = (mean_ruling - 0.5) * 40
+    score = base + adjustment
+    return int(round(max(10.0, min(100.0, score))))

@@ -1,3 +1,4 @@
+# Lints and tests on every push, then deploys to Render only when merging to main
 name: Deploy to Render
 
 on:
@@ -35,7 +36,7 @@ jobs:
         run: pytest backend/tests/ || echo "Tests skipped"
 
       - name: Deploy to Render
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main'  # deploy only from main
         run: curl https://api.render.com/deploy/srv-d452esodl3ps73bnotmg?key=${{ secrets.RENDER_DEPLOY_KEY }}
         env:
           RENDER_DEPLOY_KEY: ${{ secrets.RENDER_DEPLOY_KEY }}

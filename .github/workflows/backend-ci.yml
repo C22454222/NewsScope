@@ -1,3 +1,4 @@
+# Lints and tests the backend on every push or PR to main/dev
 name: Backend CI
 
 on:

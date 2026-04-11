@@ -1,3 +1,4 @@
+# Analyzes and tests the Flutter frontend on every push or PR to main/dev
 name: Frontend CI
 
 on:
@@ -21,7 +22,7 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.35.7'   # pin to your local version with Dart 3.9.2
+          flutter-version: '3.35.7'   # pinned to match local Dart 3.9.2
           channel: 'stable'
 
       - name: Install dependencies

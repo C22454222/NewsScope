@@ -614,3 +614,16 @@ def infer_category(
             return category
 
     return _classify_with_api(title or "", content)
+
+# Test helpers (used by tests/unit/test_categorisation.py)
+
+
+CATEGORY_GROUP_MAP = {
+    "football": "sport",
+    "rugby": "sport",
+    "tennis": "sport",
+    "climate": "science",
+    "environment": "science",
+    "election": "politics",
+    "policy": "politics",
+}

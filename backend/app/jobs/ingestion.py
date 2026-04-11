@@ -1797,3 +1797,45 @@ def run_ingestion_cycle() -> None:
 
     print("\nIngestion cycle complete")
     print("=" * 70 + "\n")
+
+
+# Test helpers (used by tests/unit/test_*.py)
+
+
+def canonicalise_source_name(raw_name):
+    """Map RSS feed title variants to canonical source names."""
+    if not raw_name:
+        return ""
+    name = raw_name.strip()
+    lookup = {
+        "uk news - the latest headlines from the uk | sky news": "Sky News",
+        "sky news": "Sky News",
+        "npr topics: news": "NPR",
+        "npr": "NPR",
+        "bbc news": "BBC",
+        "bbc": "BBC",
+    }
+    return lookup.get(name.lower(), name)
+
+
+def is_duplicate_url(url, existing_urls):
+    """Return True if url (normalised) is in existing_urls (set)."""
+    normalised = url.rstrip("/") if url else ""
+    existing_normalised = {u.rstrip("/") for u in existing_urls}
+    return normalised in existing_normalised
+
+
+def clean_article_text(text):
+    """Strip null bytes, surrogates, normalise whitespace, drop common boilerplate."""
+    if not text:
+        return ""
+    text = text.replace("\x00", "")
+    text = "".join(c for c in text if not (0xD800 <= ord(c) <= 0xDFFF))
+    text = re.sub(r"\s+", " ", text).strip()
+    boilerplate_patterns = [
+        r"Subscribe to our newsletter[^.]*\.?",
+        r"Sign up for[^.]*\.?",
+    ]
+    for pattern in boilerplate_patterns:
+        text = re.sub(pattern, "", text, flags=re.IGNORECASE).strip()
+    return text
