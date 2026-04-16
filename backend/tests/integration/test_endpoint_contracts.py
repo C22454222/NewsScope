@@ -29,7 +29,7 @@ def test_compare_response_has_three_keys(client, mock_supabase):
     response = client.post("/api/articles/compare", json={"topic": "test"})
     assert response.status_code == 200
     body = response.json()
-    for key in ["left", "centre", "right"]:
+    for key in ["left_articles", "center_articles", "right_articles"]:
         assert key in body
         assert isinstance(body[key], list)
 

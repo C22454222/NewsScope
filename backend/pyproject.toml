@@ -1,0 +1,25 @@
+[tool.pytest.ini_options]
+addopts = "--cov=app --cov-report=term-missing"
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]
+
+[tool.coverage.run]
+omit = [
+    "app/jobs/ingestion.py",
+    "app/jobs/analysis.py",
+    "app/jobs/archiving.py",
+    "app/jobs/keep_alive.py",
+    "app/jobs/fact_checking.py",
+    "app/evaluation/*",
+    "app/services/explainability.py",
+    "app/core/categorisation.py",
+    "app/core/scheduler.py",
+    "app/main.py",
+    "tests/*",
+]
+
+[tool.coverage.report]
+show_missing = true
