@@ -1,0 +1,8 @@
+Method,Name,Error,Occurrences
+GET,GET /articles,CatchResponseError('Status 0'),3
+GET,GET /articles?category=...,CatchResponseError('Status 502'),4
+POST,POST /api/articles/compare,CatchResponseError('Status 503'),13
+GET,GET /articles,CatchResponseError('Status 502'),6
+GET,GET /sources,CatchResponseError('Status 503'),8
+GET,GET /articles,CatchResponseError('Status 503'),32
+GET,GET /articles?category=...,CatchResponseError('Status 503'),15

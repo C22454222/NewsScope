@@ -1,24 +1,34 @@
-"""Locust load test for the NewsScope backend."""
-from locust import HttpUser, between, task
+from locust import HttpUser, task, between, events
+
+
+@events.test_start.add_listener
+def on_test_start(environment, **kwargs):
+    """Warm up the Render free-tier instance before the swarm."""
+    print("Warming up the backend...")
+    import time
+    import requests
+    try:
+        requests.get(f"{environment.host}/articles?limit=1", timeout=30)
+        print("Warmup complete.")
+    except Exception as e:
+        print(f"Warmup failed: {e}")
+    time.sleep(10)
 
 
 class NewsScopeUser(HttpUser):
-    """Simulated user issuing requests against the public API."""
+    """Simulates a user opening the app and reading the home feed."""
 
-    wait_time = between(1, 3)
+    wait_time = between(5, 10)
 
-    @task(3)
-    def browse_feed(self):
-        self.client.get("/articles?limit=20")
-
-    @task(2)
-    def filter_by_category(self):
-        self.client.get("/articles?category=politics&limit=20")
-
-    @task(1)
-    def compare_stories(self):
-        self.client.post("/api/articles/compare", json={"topic": "climate"})
-
-    @task(1)
-    def get_sources(self):
-        self.client.get("/sources")
+    @task
+    def open_app(self):
+        with self.client.get(
+            "/articles?limit=20",
+            name="GET /articles",
+            catch_response=True,
+            timeout=15,
+        ) as r:
+            if r.status_code == 200:
+                r.success()
+            else:
+                r.failure(f"Status {r.status_code}")

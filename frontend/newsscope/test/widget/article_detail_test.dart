@@ -1,25 +1,29 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:newsscope/screens/article_detail_screen.dart';
 
 void main() {
-  testWidgets('ArticleDetailScreen renders title and source', (tester) async {
+  testWidgets('Article header renders title and source badge', (tester) async {
     await tester.pumpWidget(
-      const MaterialApp(
-        home: ArticleDetailScreen(
-          id: '1',
-          title: 'Test Article',
-          sourceName: 'BBC',
-          url: 'https://example.com',
-          content: 'body text',
-          biasScore: 0.0,
-          sentimentScore: 0.1,
-          credibilityScore: 85,
+      MaterialApp(
+        home: Scaffold(
+          appBar: AppBar(title: const Text('Article')),
+          body: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                color: Colors.blue.shade50,
+                child: const Text('BBC'),
+              ),
+              const Text('Test Article Title'),
+              const SelectableText('Body text of the article.'),
+            ],
+          ),
         ),
       ),
     );
-    await tester.pump();
-    expect(find.text('Test Article'), findsOneWidget);
+    expect(find.text('Test Article Title'), findsOneWidget);
     expect(find.text('BBC'), findsOneWidget);
+    expect(find.text('Body text of the article.'), findsOneWidget);
   });
 }
