@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../models/article.dart';
 import '../utils/score_helpers.dart';
-import '../core/app_prefs.dart'; // <-- new import
+import '../core/app_prefs.dart';
 
 class ArticleCard extends StatelessWidget {
   final Article article;
@@ -41,9 +41,17 @@ class ArticleCard extends StatelessWidget {
     final compact = AppPrefs.compactCards;
 
     final displayTitle = _sanitiseTitle(article.title, article.url);
-    final biasColor = getBiasColor(article.biasScore);
+    final sourceBiasColor = getBiasColor(article.biasScore);
+    final articleBiasColor = getPoliticalBiasColor(article.politicalBias);
     final sentimentColor = getSentimentColor(article.sentimentScore);
     final credibilityColor = getCredibilityColor(article.credibilityScore);
+
+    // Left border colour prefers article-level when available, falls back to
+    // source-level. This keeps the visual identity tied to the specific
+    // article's classification where the model has produced one.
+    final leftBorderColor = article.politicalBias != null
+        ? articleBiasColor
+        : sourceBiasColor;
 
     // Compact mode: tighter padding, single-line title, no description pills
     final padding = compact ? 10.0 : 16.0;
@@ -55,7 +63,7 @@ class ArticleCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: Theme.of(context).cardColor,
         borderRadius: BorderRadius.circular(12),
-        border: Border(left: BorderSide(color: biasColor, width: 4)),
+        border: Border(left: BorderSide(color: leftBorderColor, width: 4)),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.07),
@@ -132,12 +140,23 @@ class ArticleCard extends StatelessWidget {
                     spacing: 6,
                     runSpacing: 6,
                     children: [
+                      // Source-level bias: always shown if available.
                       if (article.biasScore != null)
                         _ScorePill(
                           label:
-                              'Political Leaning: ${getBiasLabelShort(article.biasScore)}',
-                          color: biasColor,
-                          icon: Icons.balance,
+                              'Outlet: ${getBiasLabelShort(article.biasScore)}',
+                          color: sourceBiasColor,
+                          icon: Icons.source,
+                        ),
+                      // Article-level bias (RoBERTa): shown when available.
+                      // When the article-level label diverges from the outlet
+                      // baseline this chip is the primary signal for the user.
+                      if (article.politicalBias != null)
+                        _ScorePill(
+                          label:
+                              'Article: ${getPoliticalBiasLabel(article.politicalBias)}',
+                          color: articleBiasColor,
+                          icon: Icons.article_outlined,
                         ),
                       if (showSentiment && article.sentimentScore != null)
                         _ScorePill(

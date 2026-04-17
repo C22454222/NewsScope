@@ -5,6 +5,15 @@ import '../services/api_service.dart';
 import '../widgets/article_card.dart';
 import '../screens/article_detail_screen.dart';
 
+/// How the Left / Centre / Right tabs are populated.
+///
+/// - [source]  uses the outlet's `bias_score` (same as before — matches the
+///             backend's server-side grouping).
+/// - [article] uses the RoBERTa `political_bias` label produced on the
+///             article's own text. Bucketing happens client-side after the
+///             three response lists are merged.
+enum CompareGrouping { source, article }
+
 class CompareScreen extends StatefulWidget {
   final VoidCallback onArticleRead;
 
@@ -29,6 +38,10 @@ class _CompareScreenState extends State<CompareScreen>
 
   String? _selectedCategory;
   String? _selectedSource;
+
+  // Default grouping is the outlet's baseline rating — keeps the original
+  // feature working. Users can switch to article-level via the toggle.
+  CompareGrouping _grouping = CompareGrouping.source;
 
   static const List<Map<String, String>> _categories = [
     {'label': 'All', 'value': ''},
@@ -273,13 +286,166 @@ class _CompareScreenState extends State<CompareScreen>
     );
   }
 
-  List<Article> _toArticles(List<dynamic>? raw) {
-    if (raw == null) return [];
-    return raw.whereType<Map<String, dynamic>>().map(Article.fromJson).toList();
+  // ── Grouping toggle ────────────────────────────────────────────────────────
+  // Switches the Left / Centre / Right tab buckets between the outlet's
+  // baseline rating and the article-level RoBERTa classification.
+
+  Widget _buildGroupingToggle() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: isDark ? Colors.grey[850] : Colors.grey[100],
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+            color: isDark ? Colors.grey[700]! : Colors.grey[300]!),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: _buildGroupingButton(
+              label: 'By outlet',
+              icon: Icons.source,
+              isActive: _grouping == CompareGrouping.source,
+              onTap: () =>
+                  setState(() => _grouping = CompareGrouping.source),
+            ),
+          ),
+          const SizedBox(width: 4),
+          Expanded(
+            child: _buildGroupingButton(
+              label: 'By article',
+              icon: Icons.article_outlined,
+              isActive: _grouping == CompareGrouping.article,
+              onTap: () =>
+                  setState(() => _grouping = CompareGrouping.article),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
-  Widget _buildArticleList(List<dynamic>? raw) {
-    final articles = _toArticles(raw);
+  Widget _buildGroupingButton({
+    required String label,
+    required IconData icon,
+    required bool isActive,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(vertical: 7),
+        decoration: BoxDecoration(
+          color: isActive ? Colors.blue[700] : Colors.transparent,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon,
+                size: 13,
+                color: isActive ? Colors.white : Colors.grey[600]),
+            const SizedBox(width: 5),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: isActive ? Colors.white : Colors.grey[700],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── Bucketing ──────────────────────────────────────────────────────────────
+
+  List<Article> _toArticles(List<dynamic>? raw) {
+    if (raw == null) return [];
+    return raw
+        .whereType<Map<String, dynamic>>()
+        .map(Article.fromJson)
+        .toList();
+  }
+
+  /// Merge all three server buckets into a single article list. Used when
+  /// regrouping client-side by article-level RoBERTa label.
+  List<Article> _allArticlesFromResults(Map<String, dynamic>? results) {
+    if (results == null) return [];
+    final merged = <Article>[];
+    merged.addAll(_toArticles(results['left_articles'] as List<dynamic>?));
+    merged.addAll(_toArticles(results['center_articles'] as List<dynamic>?));
+    merged.addAll(_toArticles(results['right_articles'] as List<dynamic>?));
+
+    // Deduplicate by id — server buckets should already be disjoint but be
+    // defensive against future API changes.
+    final seen = <String>{};
+    return merged.where((a) => seen.add(a.id)).toList();
+  }
+
+  /// Bucket an article list into (left, centre, right) using the article's
+  /// `politicalBias` label. Articles without a RoBERTa label fall back to
+  /// their source-level `biasScore` so they still appear somewhere rather
+  /// than disappearing from the UI.
+  ({List<Article> left, List<Article> centre, List<Article> right})
+      _bucketByArticle(List<Article> articles) {
+    final left = <Article>[];
+    final centre = <Article>[];
+    final right = <Article>[];
+
+    for (final a in articles) {
+      final label = a.politicalBias?.toUpperCase();
+      if (label == 'LEFT') {
+        left.add(a);
+      } else if (label == 'RIGHT') {
+        right.add(a);
+      } else if (label == 'CENTER' || label == 'CENTRE') {
+        centre.add(a);
+      } else {
+        // Fallback to source-level score when no RoBERTa label available.
+        final score = a.biasScore;
+        if (score == null) {
+          centre.add(a);
+        } else if (score < -0.3) {
+          left.add(a);
+        } else if (score > 0.3) {
+          right.add(a);
+        } else {
+          centre.add(a);
+        }
+      }
+    }
+
+    return (left: left, centre: centre, right: right);
+  }
+
+  /// Return the three buckets according to the currently selected grouping.
+  ({List<Article> left, List<Article> centre, List<Article> right})
+      _currentBuckets() {
+    if (_rawResults == null) {
+      return (left: [], centre: [], right: []);
+    }
+
+    if (_grouping == CompareGrouping.source) {
+      return (
+        left: _toArticles(_rawResults!['left_articles'] as List<dynamic>?),
+        centre:
+            _toArticles(_rawResults!['center_articles'] as List<dynamic>?),
+        right:
+            _toArticles(_rawResults!['right_articles'] as List<dynamic>?),
+      );
+    }
+
+    // Article-level grouping: merge all server buckets and rebucket locally.
+    final merged = _allArticlesFromResults(_rawResults);
+    return _bucketByArticle(merged);
+  }
+
+  Widget _buildArticleList(List<Article> articles) {
     if (articles.isEmpty) {
       return Center(
         child: Padding(
@@ -320,11 +486,7 @@ class _CompareScreenState extends State<CompareScreen>
     );
   }
 
-  Widget _buildBiasTabBar(
-    List<dynamic>? l,
-    List<dynamic>? c,
-    List<dynamic>? r,
-  ) {
+  Widget _buildBiasTabBar(int leftCount, int centreCount, int rightCount) {
     final activeColor = _tabColors[_activeTab];
     final isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
@@ -345,19 +507,19 @@ class _CompareScreenState extends State<CompareScreen>
           _buildTab(
             icon: Icons.arrow_back,
             iconColor: const Color(0xFF1565C0),
-            label: 'Left (${l?.length ?? 0})',
+            label: 'Left ($leftCount)',
             isSelected: _activeTab == 0,
           ),
           _buildTab(
             icon: Icons.horizontal_rule,
             iconColor: const Color(0xFF00796B),
-            label: 'Centre (${c?.length ?? 0})',
+            label: 'Centre ($centreCount)',
             isSelected: _activeTab == 1,
           ),
           _buildTab(
             icon: Icons.arrow_forward,
             iconColor: const Color(0xFFC62828),
-            label: 'Right (${r?.length ?? 0})',
+            label: 'Right ($rightCount)',
             isSelected: _activeTab == 2,
           ),
         ],
@@ -407,10 +569,8 @@ class _CompareScreenState extends State<CompareScreen>
       );
     }
 
-    final leftArticles = _rawResults!['left_articles'] as List<dynamic>?;
-    final centreArticles = _rawResults!['center_articles'] as List<dynamic>?;
-    final rightArticles = _rawResults!['right_articles'] as List<dynamic>?;
-    final total = _rawResults!['total_found'] ?? 0;
+    final buckets = _currentBuckets();
+    final total = buckets.left.length + buckets.centre.length + buckets.right.length;
 
     final topic = _searchController.text.trim();
     final headerParts = <String>[];
@@ -431,6 +591,11 @@ class _CompareScreenState extends State<CompareScreen>
     }
     final headerText =
         headerParts.isEmpty ? 'All articles' : headerParts.join(' · ');
+
+    final groupingCaption = _grouping == CompareGrouping.source
+        ? 'Grouped by outlet rating · tap "By article" for RoBERTa classification'
+        : 'Grouped by article-level RoBERTa classification · '
+            'reflects each article\'s own text';
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -465,16 +630,28 @@ class _CompareScreenState extends State<CompareScreen>
             ),
           ],
         ),
-        const SizedBox(height: 12),
-        _buildBiasTabBar(leftArticles, centreArticles, rightArticles),
+        const SizedBox(height: 10),
+        _buildGroupingToggle(),
+        const SizedBox(height: 6),
+        Text(
+          groupingCaption,
+          style: TextStyle(
+            fontSize: 10,
+            color: Colors.grey[500],
+            height: 1.4,
+          ),
+        ),
+        const SizedBox(height: 10),
+        _buildBiasTabBar(
+            buckets.left.length, buckets.centre.length, buckets.right.length),
         const SizedBox(height: 8),
         Expanded(
           child: TabBarView(
             controller: _tabController,
             children: [
-              _buildArticleList(leftArticles),
-              _buildArticleList(centreArticles),
-              _buildArticleList(rightArticles),
+              _buildArticleList(buckets.left),
+              _buildArticleList(buckets.centre),
+              _buildArticleList(buckets.right),
             ],
           ),
         ),
@@ -497,9 +674,6 @@ class _CompareScreenState extends State<CompareScreen>
     return GestureDetector(
       onTap: () => FocusScope.of(context).unfocus(),
       child: Scaffold(
-        // Default resizeToAvoidBottomInset (true) lets Flutter handle the
-        // keyboard naturally — the body shrinks and the SingleChildScrollView
-        // inside absorbs the reduced height without overflow.
         appBar: AppBar(
           centerTitle: true,
           title: Text(
@@ -524,8 +698,6 @@ class _CompareScreenState extends State<CompareScreen>
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // Filter section — Flexible so it can shrink when keyboard opens.
-              // SingleChildScrollView inside absorbs any overflow naturally.
               Flexible(
                 flex: 0,
                 child: SingleChildScrollView(
@@ -624,8 +796,6 @@ class _CompareScreenState extends State<CompareScreen>
                   ),
                 ),
               ),
-
-              // Results area fills all remaining space.
               Expanded(
                 child: _isLoading
                     ? const Center(child: CircularProgressIndicator())

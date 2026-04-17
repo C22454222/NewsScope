@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-// ── Bias ──────────────────────────────────────────────────────────────────────
+// ── Bias (source-level, numeric score from sources table) ────────────────────
 // Stronger blue for left, teal for centre (fully distinct from both sides),
 // stronger red for right.
 
@@ -25,6 +25,40 @@ String getBiasLabel(double? score) {
   if (score >= -0.1) return 'Centre';
   if (score >= -0.3) return 'Centre Left';
   return 'Left Wing';
+}
+
+// ── Political bias (article-level, RoBERTa string label) ─────────────────────
+// Backend returns 'LEFT', 'CENTER', 'RIGHT' from the fine-tuned RoBERTa
+// classifier operating on the article's own text. Colour palette deliberately
+// matches the source-level bias palette so users can compare them visually.
+
+Color getPoliticalBiasColor(String? label) {
+  if (label == null || label.isEmpty) return Colors.grey.shade500;
+  final upper = label.toUpperCase();
+  if (upper == 'LEFT') return Colors.blue[800]!;
+  if (upper == 'RIGHT') return Colors.red[800]!;
+  if (upper == 'CENTER' || upper == 'CENTRE') return Colors.teal[600]!;
+  return Colors.grey.shade500;
+}
+
+String getPoliticalBiasLabel(String? label) {
+  if (label == null || label.isEmpty) return 'Unknown';
+  final upper = label.toUpperCase();
+  if (upper == 'LEFT') return 'Left Wing';
+  if (upper == 'RIGHT') return 'Right Wing';
+  if (upper == 'CENTER' || upper == 'CENTRE') return 'Centre';
+  return 'Unknown';
+}
+
+// Map a RoBERTa label to a numeric score so it can feed components that
+// expect a [-1, +1] value (e.g. weighted averages on the bias profile).
+double? politicalBiasToScore(String? label) {
+  if (label == null || label.isEmpty) return null;
+  final upper = label.toUpperCase();
+  if (upper == 'LEFT') return -1.0;
+  if (upper == 'RIGHT') return 1.0;
+  if (upper == 'CENTER' || upper == 'CENTRE') return 0.0;
+  return null;
 }
 
 // ── Sentiment ─────────────────────────────────────────────────────────────────

@@ -23,6 +23,8 @@ class ArticleDetailScreen extends StatefulWidget {
   final String? generalBias;
   final List<Map<String, dynamic>>? biasExplanation;
   final String? category;
+  final String? politicalBias;
+  final double? politicalBiasScore;
 
   const ArticleDetailScreen({
     super.key,
@@ -41,6 +43,8 @@ class ArticleDetailScreen extends StatefulWidget {
     this.generalBias,
     this.biasExplanation,
     this.category,
+    this.politicalBias,
+    this.politicalBiasScore,
   });
 
   factory ArticleDetailScreen.fromArticle(Article article) {
@@ -60,6 +64,8 @@ class ArticleDetailScreen extends StatefulWidget {
       generalBias: article.generalBias,
       biasExplanation: article.biasExplanation,
       category: article.category,
+      politicalBias: article.politicalBias,
+      politicalBiasScore: article.politicalBiasScore,
     );
   }
 
@@ -68,8 +74,6 @@ class ArticleDetailScreen extends StatefulWidget {
 }
 
 class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
-  
-
   final ApiService _api = ApiService();
   Timer? _trackingTimer;
   int _secondsSpent = 0;
@@ -155,12 +159,173 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
     return Colors.teal[600]!;
   }
 
-  // ── FIX: Convert generalBias to title-case for display ────────────────────
+  // Convert generalBias to title-case for display.
   // Backend sends 'BIASED' / 'UNBIASED' — we show 'Biased' / 'Unbiased'.
   String _formatGeneralBias(String? raw) {
     if (raw == null || raw.isEmpty) return 'Unbiased';
     final lower = raw.toLowerCase();
     return lower[0].toUpperCase() + lower.substring(1);
+  }
+
+  // ── Source vs article breakdown card ──────────────────────────────────────
+  // Shows both the outlet's baseline rating (from the sources table) and the
+  // article-level RoBERTa classification side by side, with a short caption
+  // explaining the difference. When the two disagree we flag it so users can
+  // see that the specific article diverges from its outlet's typical leaning.
+
+  Widget _buildBiasBreakdownCard() {
+    final sourceLabel = getBiasLabelShort(widget.biasScore);
+    final sourceColor = getBiasColor(widget.biasScore);
+
+    final articleLabel = getPoliticalBiasLabel(widget.politicalBias);
+    final articleColor = getPoliticalBiasColor(widget.politicalBias);
+
+    // Detect divergence — only when both values are present.
+    bool diverges = false;
+    if (widget.politicalBias != null && widget.biasScore != null) {
+      diverges = sourceLabel.toLowerCase() != articleLabel.toLowerCase();
+    }
+
+    final confidenceText = widget.politicalBiasScore != null
+        ? '${(widget.politicalBiasScore! * 100).round()}% confidence'
+        : '';
+
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.compare_arrows,
+                    size: 18, color: Colors.blue[700]),
+                const SizedBox(width: 8),
+                const Text(
+                  'Bias Breakdown',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                ),
+                const Spacer(),
+                if (diverges)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.withAlpha(35),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: Colors.orange[700]!),
+                    ),
+                    child: Text(
+                      'Diverges',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.orange[800],
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                Expanded(
+                  child: _buildBreakdownTile(
+                    title: 'Outlet',
+                    subtitle: widget.sourceName,
+                    label: sourceLabel,
+                    color: sourceColor,
+                    icon: Icons.source,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _buildBreakdownTile(
+                    title: 'This article',
+                    subtitle: confidenceText.isEmpty
+                        ? 'RoBERTa classifier'
+                        : confidenceText,
+                    label: articleLabel,
+                    color: articleColor,
+                    icon: Icons.article_outlined,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Text(
+              diverges
+                  ? 'The article\'s text was classified independently of its '
+                      'outlet — this piece reads differently to the outlet\'s '
+                      'usual leaning.'
+                  : 'The outlet rating reflects the publisher\'s typical '
+                      'leaning; the article-level label is produced by '
+                      'RoBERTa on this article\'s own text.',
+              style: TextStyle(
+                  color: Colors.grey[600], fontSize: 11, height: 1.4),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBreakdownTile({
+    required String title,
+    required String subtitle,
+    required String label,
+    required Color color,
+    required IconData icon,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 10),
+      decoration: BoxDecoration(
+        color: color.withAlpha(18),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withAlpha(50)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 13, color: color),
+              const SizedBox(width: 5),
+              Expanded(
+                child: Text(
+                  title.toUpperCase(),
+                  style: TextStyle(
+                    fontSize: 9,
+                    fontWeight: FontWeight.w700,
+                    color: color,
+                    letterSpacing: 0.8,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.bold,
+              color: color,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            subtitle,
+            style: TextStyle(fontSize: 10, color: Colors.grey[600]),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _buildBiasExplanationSection() {
@@ -267,7 +432,7 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
                 Icon(Icons.balance, size: 18, color: Colors.blue[700]),
                 const SizedBox(width: 8),
                 const Text(
-                  'Ideological Spectrum',
+                  'Outlet Spectrum',
                   style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
                 ),
                 const Spacer(),
@@ -608,9 +773,7 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
         if (didPop && !_hasTracked) await _trackReadingTime();
       },
       child: Scaffold(
-        
         appBar: AppBar(
-          
           title: const Text('Article'),
         ),
         body: SingleChildScrollView(
@@ -671,19 +834,34 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
               const SizedBox(height: 16),
 
               // ── Summary chips ──────────────────────────────────────────
+              // Chip set now surfaces both the source-level "Outlet" leaning
+              // and the article-level "Article" leaning so users see them at
+              // a glance before reading the full breakdown card below.
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
                 children: [
                   Chip(
-                    avatar: Icon(Icons.balance,
+                    avatar: Icon(Icons.source,
                         size: 16,
                         color: getBiasColor(widget.biasScore)),
                     label: Text(
-                        'Political Leaning: ${getBiasLabel(widget.biasScore)}'),
+                        'Outlet: ${getBiasLabel(widget.biasScore)}'),
                     backgroundColor: getBiasColor(widget.biasScore)
                         .withAlpha((255 * 0.2).round()),
                   ),
+                  if (widget.politicalBias != null)
+                    Chip(
+                      avatar: Icon(Icons.article_outlined,
+                          size: 16,
+                          color:
+                              getPoliticalBiasColor(widget.politicalBias)),
+                      label: Text(
+                          'Article: ${getPoliticalBiasLabel(widget.politicalBias)}'),
+                      backgroundColor:
+                          getPoliticalBiasColor(widget.politicalBias)
+                              .withAlpha((255 * 0.2).round()),
+                    ),
                   if (widget.sentimentScore != null)
                     Chip(
                       avatar: Icon(
@@ -701,7 +879,8 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
                           getSentimentColor(widget.sentimentScore)
                               .withAlpha((255 * 0.2).round()),
                     ),
-                  // FIX: Display title-case "Biased" / "Unbiased" not "BIASED"/"UNBIASED"
+                  // Display title-case "Biased" / "Unbiased" not the upper-case
+                  // database values.
                   if (widget.generalBias != null)
                     Chip(
                       avatar: Icon(
@@ -722,6 +901,8 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
               ),
               const SizedBox(height: 16),
 
+              _buildBiasBreakdownCard(),
+              const SizedBox(height: 12),
               _buildSpectrumBar(),
               const SizedBox(height: 12),
               _buildBiasExplanationSection(),
