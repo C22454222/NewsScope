@@ -1,8 +1,17 @@
 /// Typed model for the /api/bias-profile response.
 ///
-/// Mirrors the Pydantic BiasProfile schema exactly — every field
-/// returned by the backend is parsed and typed here.
+/// Mirrors the Pydantic BiasProfile schema exactly.
+///
+/// Outlet-level fields (leftCount, centerCount, rightCount,
+/// biasDistribution, avgBias) derive from reading_history.bias_score —
+/// the publisher baseline rating copied from sources at read time.
+///
+/// Article-level fields (articleLeftCount, articleCenterCount,
+/// articleRightCount, articleBiasDistribution, avgArticleBias) derive
+/// from articles.political_bias, the per-article RoBERTa label joined
+/// from the articles table by the backend at query time.
 class BiasProfile {
+  // ── Outlet-level bias ────────────────────────────────────────────────────
   final double avgBias;
   final double avgSentiment;
   final int totalArticlesRead;
@@ -16,15 +25,24 @@ class BiasProfile {
   final int neutralCount;
   final int negativeCount;
 
-  /// Top-12 sources by article count.
-  /// Powers the source breakdown bar chart on the profile screen.
-  /// Null when the user has read fewer than 1 article.
+  /// Top-12 sources by article count. Powers the source bar chart.
   final Map<String, int>? sourceBreakdown;
 
-  /// Average credibility score of all articles the user has read.
-  /// Null when the backend endpoint has not yet been updated to return it,
-  /// in which case the profile screen falls back to read time.
+  /// Mean credibility score across all articles the user has read.
   final double? avgCredibility;
+
+  // ── Article-level bias (RoBERTa per-article) ─────────────────────────────
+  final int articleLeftCount;
+  final int articleCenterCount;
+  final int articleRightCount;
+
+  /// Percentage distribution of article-level labels.
+  /// Keys: 'left', 'center', 'right'. Values: 0.0–100.0.
+  final Map<String, double> articleBiasDistribution;
+
+  /// Time-weighted average article bias on the [-1, +1] scale.
+  /// LEFT = -1, CENTER = 0, RIGHT = +1. 0.0 when no data.
+  final double avgArticleBias;
 
   const BiasProfile({
     required this.avgBias,
@@ -41,6 +59,11 @@ class BiasProfile {
     required this.negativeCount,
     this.sourceBreakdown,
     this.avgCredibility,
+    this.articleLeftCount = 0,
+    this.articleCenterCount = 0,
+    this.articleRightCount = 0,
+    this.articleBiasDistribution = const {},
+    this.avgArticleBias = 0.0,
   });
 
   factory BiasProfile.fromJson(Map<String, dynamic> json) {
@@ -48,6 +71,9 @@ class BiasProfile {
         (json['bias_distribution'] as Map<String, dynamic>?) ?? {};
     final rawSources =
         (json['source_breakdown'] as Map<String, dynamic>?);
+    final rawArticleDist =
+        (json['article_bias_distribution'] as Map<String, dynamic>?) ??
+            {};
 
     return BiasProfile(
       avgBias: (json['avg_bias'] as num?)?.toDouble() ?? 0.0,
@@ -57,8 +83,7 @@ class BiasProfile {
       leftCount: (json['left_count'] as num?)?.toInt() ?? 0,
       centerCount: (json['center_count'] as num?)?.toInt() ?? 0,
       rightCount: (json['right_count'] as num?)?.toInt() ?? 0,
-      mostReadSource:
-          json['most_read_source']?.toString() ?? 'N/A',
+      mostReadSource: json['most_read_source']?.toString() ?? 'N/A',
       biasDistribution: rawDist.map(
         (k, v) => MapEntry(k, (v as num).toDouble()),
       ),
@@ -70,7 +95,19 @@ class BiasProfile {
       sourceBreakdown: rawSources?.map(
         (k, v) => MapEntry(k, (v as num).toInt()),
       ),
-      avgCredibility: (json['avg_credibility'] as num?)?.toDouble(),
+      avgCredibility:
+          (json['avg_credibility'] as num?)?.toDouble(),
+      articleLeftCount:
+          (json['article_left_count'] as num?)?.toInt() ?? 0,
+      articleCenterCount:
+          (json['article_center_count'] as num?)?.toInt() ?? 0,
+      articleRightCount:
+          (json['article_right_count'] as num?)?.toInt() ?? 0,
+      articleBiasDistribution: rawArticleDist.map(
+        (k, v) => MapEntry(k, (v as num).toDouble()),
+      ),
+      avgArticleBias:
+          (json['avg_article_bias'] as num?)?.toDouble() ?? 0.0,
     );
   }
 

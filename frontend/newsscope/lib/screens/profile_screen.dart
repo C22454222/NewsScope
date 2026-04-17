@@ -75,8 +75,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return Scaffold(
-          body: const Center(child: CircularProgressIndicator()));
+      return const Scaffold(
+          body: Center(child: CircularProgressIndicator()));
     }
 
     if (_errorMessage != null) {
@@ -93,7 +93,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
               Text(_errorMessage!),
               const SizedBox(height: 16),
               ElevatedButton(
-                  onPressed: _loadProfile, child: const Text('Retry')),
+                  onPressed: _loadProfile,
+                  child: const Text('Retry')),
             ])),
       );
     }
@@ -116,7 +117,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       color: Colors.grey.shade700)),
               const SizedBox(height: 8),
               Text(
-                  'Start reading articles to build\nyour personal bias breakdown.',
+                  'Start reading articles to build\n'
+                  'your personal bias breakdown.',
                   style: TextStyle(
                       fontSize: 14,
                       color: Colors.grey.shade500,
@@ -147,12 +149,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
             children: [
               _buildUserHeader(),
               const SizedBox(height: 20),
-              _buildThreeStatCards(),
+              _buildStatCards(),
               const SizedBox(height: 20),
               _buildSectionTitle(
-                  'Reading Distribution (by outlet)', Icons.pie_chart),
+                  'Reading Distribution by Outlet Political Bias',
+                  Icons.pie_chart),
               const SizedBox(height: 12),
-              _buildPieChart(),
+              _buildOutletPieChart(),
+              const SizedBox(height: 20),
+              _buildSectionTitle(
+                  'Reading Distribution by Article Political Bias',
+                  Icons.pie_chart_outline),
+              const SizedBox(height: 12),
+              _buildArticlePieChart(),
               const SizedBox(height: 20),
               _buildSectionTitle('Most Read Sources', Icons.bar_chart),
               const SizedBox(height: 12),
@@ -265,30 +274,42 @@ class _ProfileScreenState extends State<ProfileScreen> {
               color: Colors.white)),
       const SizedBox(height: 3),
       Text(label,
-          style:
-              TextStyle(fontSize: 11, color: Colors.white.withAlpha(150))),
+          style: TextStyle(
+              fontSize: 11, color: Colors.white.withAlpha(150))),
     ]);
   }
 
-  // ── Three stat cards ───────────────────────────────────────────────────────
+  // ── Four stat cards (2 × 2) ────────────────────────────────────────────────
 
-  Widget _buildThreeStatCards() {
+  Widget _buildStatCards() {
     final p = _profile!;
 
-    final biasColor = getBiasColor(p.avgBias);
-    final biasLabel = getBiasLabel(p.avgBias);
+    // Outlet Political Bias
+    final outletBiasColor = getBiasColor(p.avgBias);
+    final outletBiasLabel = getBiasLabel(p.avgBias);
 
+    // Article Political Bias
+    final articleBiasColor = getBiasColor(p.avgArticleBias);
+    final articleBiasLabel = getBiasLabel(p.avgArticleBias);
+    final hasArticleBias =
+        p.articleLeftCount + p.articleCenterCount + p.articleRightCount >
+            0;
+
+    // General Bias
     final totalLeaning = p.leftCount + p.centerCount + p.rightCount;
     final extremeRatio = totalLeaning > 0
         ? (p.leftCount + p.rightCount) / totalLeaning
         : 0.0;
-    final generalBiasLabel = extremeRatio > 0.6 ? 'Biased' : 'Unbiased';
-    final generalBiasColor =
-        extremeRatio > 0.6 ? Colors.orange[700]! : Colors.green[700]!;
+    final generalBiasLabel =
+        extremeRatio > 0.6 ? 'Biased' : 'Unbiased';
+    final generalBiasColor = extremeRatio > 0.6
+        ? Colors.orange[700]!
+        : Colors.green[700]!;
     final generalBiasIcon = extremeRatio > 0.6
         ? Icons.warning_amber
         : Icons.check_circle_outline;
 
+    // Sentiment
     final sentimentColor = p.sentimentLabel == 'Positive'
         ? Colors.green[700]!
         : p.sentimentLabel == 'Negative'
@@ -300,18 +321,32 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ? Icons.sentiment_dissatisfied
             : Icons.sentiment_neutral;
 
-    return Row(children: [
-      Expanded(
-          child: _buildStatCard(
-              'Outlet Leaning', biasLabel, biasColor, Icons.source)),
-      const SizedBox(width: 8),
-      Expanded(
-          child: _buildStatCard('General Bias', generalBiasLabel,
-              generalBiasColor, generalBiasIcon)),
-      const SizedBox(width: 8),
-      Expanded(
-          child: _buildStatCard('Sentiment', p.sentimentLabel,
-              sentimentColor, sentimentIcon)),
+    return Column(children: [
+      Row(children: [
+        Expanded(
+            child: _buildStatCard(
+                'Outlet Political Bias',
+                outletBiasLabel,
+                outletBiasColor,
+                Icons.source)),
+        const SizedBox(width: 8),
+        Expanded(
+            child: _buildStatCard(
+                'Article Political Bias',
+                hasArticleBias ? articleBiasLabel : '—',
+                hasArticleBias ? articleBiasColor : Colors.grey,
+                Icons.article_outlined)),
+      ]),
+      const SizedBox(height: 8),
+      Row(children: [
+        Expanded(
+            child: _buildStatCard('General Bias', generalBiasLabel,
+                generalBiasColor, generalBiasIcon)),
+        const SizedBox(width: 8),
+        Expanded(
+            child: _buildStatCard('Sentiment', p.sentimentLabel,
+                sentimentColor, sentimentIcon)),
+      ]),
     ]);
   }
 
@@ -349,11 +384,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  // ── Pie chart ──────────────────────────────────────────────────────────────
+  // ── Pie charts ─────────────────────────────────────────────────────────────
 
   List<int> _roundToHundred(double a, double b, double c) {
     final floors = [a.floor(), b.floor(), c.floor()];
-    final remainders = [a - floors[0], b - floors[1], c - floors[2]];
+    final remainders = [
+      a - floors[0],
+      b - floors[1],
+      c - floors[2]
+    ];
     int remainder = 100 - floors.reduce((x, y) => x + y);
     final indices = [0, 1, 2]
       ..sort((i, j) => remainders[j].compareTo(remainders[i]));
@@ -363,13 +402,26 @@ class _ProfileScreenState extends State<ProfileScreen> {
     return floors;
   }
 
-  Widget _buildPieChart() {
-    final dist = _profile!.biasDistribution;
+  Widget _buildPieChartFromDist(Map<String, double> dist) {
     final leftRaw = (dist['left'] ?? 0.0).toDouble();
     final centerRaw = (dist['center'] ?? 0.0).toDouble();
     final rightRaw = (dist['right'] ?? 0.0).toDouble();
     final total = leftRaw + centerRaw + rightRaw;
-    if (total == 0) return const SizedBox.shrink();
+
+    if (total == 0) {
+      return Card(
+        elevation: 2,
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12)),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 32),
+          child: Center(
+              child: Text('No data yet',
+                  style: TextStyle(
+                      color: Colors.grey.shade400, fontSize: 13))),
+        ),
+      );
+    }
 
     final rounded = _roundToHundred(leftRaw, centerRaw, rightRaw);
     final left = rounded[0];
@@ -436,6 +488,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
+  Widget _buildOutletPieChart() =>
+      _buildPieChartFromDist(_profile!.biasDistribution);
+
+  Widget _buildArticlePieChart() =>
+      _buildPieChartFromDist(_profile!.articleBiasDistribution);
+
   Widget _buildLegendItem(String label, Color color) {
     return Row(children: [
       Container(
@@ -454,7 +512,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   // ── Source bar chart ───────────────────────────────────────────────────────
 
-  Color _sourceBarColor(int index, int total) {
+  Color _sourceBarColor(int index) {
     final palette = [
       Colors.blue[800]!,
       Colors.blue[600]!,
@@ -483,8 +541,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Widget _buildSourceBarChart() {
     final raw = _profile!.sourceBreakdown;
     if (raw == null || raw.isEmpty) {
-      return _buildDetailCard('Most read source', _profile!.mostReadSource,
-          Colors.indigo[600]!, Icons.bookmark);
+      return _buildDetailCard(
+          'Most read source',
+          _profile!.mostReadSource,
+          Colors.indigo[600]!,
+          Icons.bookmark);
     }
 
     final sorted = raw.entries.toList()
@@ -529,11 +590,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           },
                         )),
                         bottomTitles: const AxisTitles(
-                            sideTitles: SideTitles(showTitles: false)),
+                            sideTitles:
+                                SideTitles(showTitles: false)),
                         topTitles: const AxisTitles(
-                            sideTitles: SideTitles(showTitles: false)),
+                            sideTitles:
+                                SideTitles(showTitles: false)),
                         rightTitles: const AxisTitles(
-                            sideTitles: SideTitles(showTitles: false)),
+                            sideTitles:
+                                SideTitles(showTitles: false)),
                       ),
                       borderData: FlBorderData(show: false),
                       gridData: const FlGridData(show: false),
@@ -558,8 +622,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                   _touchedBarIndex = -1;
                                   return;
                                 }
-                                _touchedBarIndex =
-                                    response.spot!.touchedBarGroupIndex;
+                                _touchedBarIndex = response
+                                    .spot!.touchedBarGroupIndex;
                               });
                             },
                             touchTooltipData: BarTouchTooltipData(
@@ -567,8 +631,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                   Colors.blueGrey.shade800,
                               fitInsideHorizontally: true,
                               fitInsideVertically: true,
-                              getTooltipItem:
-                                  (group, groupIndex, rod, rodIndex) {
+                              getTooltipItem: (group, groupIndex,
+                                  rod, rodIndex) {
                                 final s = sources[groupIndex];
                                 return BarTooltipItem(
                                   '${s.key}\n',
@@ -579,11 +643,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                   children: [
                                     TextSpan(
                                       text:
-                                          '${s.value} article${s.value == 1 ? '' : 's'}',
+                                          '${s.value} article'
+                                          '${s.value == 1 ? '' : 's'}',
                                       style: const TextStyle(
                                           color: Colors.white70,
                                           fontSize: 11,
-                                          fontWeight: FontWeight.normal),
+                                          fontWeight:
+                                              FontWeight.normal),
                                     )
                                   ],
                                 );
@@ -600,9 +666,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                 if (i < 0 || i >= sources.length) {
                                   return const SizedBox.shrink();
                                 }
-                                final isSelected = i == _touchedBarIndex;
+                                final isSelected =
+                                    i == _touchedBarIndex;
                                 return Padding(
-                                  padding: const EdgeInsets.only(top: 6),
+                                  padding:
+                                      const EdgeInsets.only(top: 6),
                                   child: Column(
                                       mainAxisSize: MainAxisSize.min,
                                       children: [
@@ -620,15 +688,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                                   style: TextStyle(
                                                       fontSize: 9,
                                                       fontWeight:
-                                                          FontWeight.bold,
+                                                          FontWeight
+                                                              .bold,
                                                       color: isSelected
-                                                          ? Colors.white
+                                                          ? Colors
+                                                              .white
                                                           : Colors
                                                               .grey[700]))),
                                         ),
                                         const SizedBox(height: 3),
                                         Text(
-                                          _wrapSourceName(sources[i].key),
+                                          _wrapSourceName(
+                                              sources[i].key),
                                           textAlign: TextAlign.center,
                                           style: TextStyle(
                                             fontSize: 9,
@@ -646,19 +717,22 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               },
                             )),
                             leftTitles: const AxisTitles(
-                                sideTitles: SideTitles(showTitles: false)),
+                                sideTitles:
+                                    SideTitles(showTitles: false)),
                             topTitles: const AxisTitles(
-                                sideTitles: SideTitles(showTitles: false)),
+                                sideTitles:
+                                    SideTitles(showTitles: false)),
                             rightTitles: const AxisTitles(
-                                sideTitles: SideTitles(showTitles: false)),
+                                sideTitles:
+                                    SideTitles(showTitles: false)),
                           ),
                           gridData: FlGridData(
                             show: true,
                             drawVerticalLine: false,
                             horizontalInterval: interval,
                             getDrawingHorizontalLine: (_) => FlLine(
-                                color:
-                                    Colors.grey.withValues(alpha: 0.15),
+                                color: Colors.grey
+                                    .withValues(alpha: 0.15),
                                 strokeWidth: 1),
                           ),
                           borderData: FlBorderData(show: false),
@@ -670,13 +744,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               BarChartRodData(
                                 toY: entry.value.value.toDouble(),
                                 color: isTouched
-                                    ? _sourceBarColor(i, sources.length)
+                                    ? _sourceBarColor(i)
                                         .withValues(alpha: 1.0)
-                                    : _sourceBarColor(i, sources.length)
+                                    : _sourceBarColor(i)
                                         .withValues(alpha: 0.82),
                                 width: 22,
-                                borderRadius: const BorderRadius.vertical(
-                                    top: Radius.circular(6)),
+                                borderRadius:
+                                    const BorderRadius.vertical(
+                                        top: Radius.circular(6)),
                                 backDrawRodData:
                                     BackgroundBarChartRodData(
                                   show: true,
@@ -695,8 +770,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ),
               const SizedBox(height: 4),
               Text(
-                'Scroll to see all · tap a bar for details · top ${sources.length} sources',
-                style: TextStyle(fontSize: 10, color: Colors.grey[400]),
+                'Scroll to see all · tap a bar for details · '
+                'top ${sources.length} sources',
+                style:
+                    TextStyle(fontSize: 10, color: Colors.grey[400]),
               ),
             ]),
       ),
@@ -707,10 +784,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Widget _buildDetailedBreakdown() {
     final p = _profile!;
-    final total = p.leftCount + p.centerCount + p.rightCount;
+    final outletTotal = p.leftCount + p.centerCount + p.rightCount;
+    final articleTotal =
+        p.articleLeftCount + p.articleCenterCount + p.articleRightCount;
     final sentimentTotal = p.positiveCount + p.negativeCount;
 
     return Column(children: [
+      // ── Outlet Political Bias ──────────────────────────────────────
       Card(
         elevation: 2,
         shape: RoundedRectangleBorder(
@@ -723,7 +803,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 Row(children: [
                   Icon(Icons.source, size: 16, color: Colors.blue[700]),
                   const SizedBox(width: 8),
-                  Text('Outlet Leaning',
+                  Text('Outlet Political Bias',
                       style: TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.bold,
@@ -735,7 +815,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       child: _buildLeaningTile(
                           label: 'Left Wing',
                           count: p.leftCount,
-                          total: total,
+                          total: outletTotal,
                           color: Colors.blue[800]!,
                           icon: Icons.west)),
                   const SizedBox(width: 10),
@@ -743,7 +823,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       child: _buildLeaningTile(
                           label: 'Centre',
                           count: p.centerCount,
-                          total: total,
+                          total: outletTotal,
                           color: Colors.teal[600]!,
                           icon: Icons.remove)),
                   const SizedBox(width: 10),
@@ -751,11 +831,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       child: _buildLeaningTile(
                           label: 'Right Wing',
                           count: p.rightCount,
-                          total: total,
+                          total: outletTotal,
                           color: Colors.red[800]!,
                           icon: Icons.east)),
                 ]),
-                if (total > 0) ...[
+                if (outletTotal > 0) ...[
                   const SizedBox(height: 14),
                   ClipRRect(
                     borderRadius: BorderRadius.circular(6),
@@ -764,17 +844,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         Expanded(
                             flex: p.leftCount,
                             child: Container(
-                                height: 8, color: Colors.blue[800])),
+                                height: 8,
+                                color: Colors.blue[800])),
                       if (p.centerCount > 0)
                         Expanded(
                             flex: p.centerCount,
                             child: Container(
-                                height: 8, color: Colors.teal[600])),
+                                height: 8,
+                                color: Colors.teal[600])),
                       if (p.rightCount > 0)
                         Expanded(
                             flex: p.rightCount,
                             child: Container(
-                                height: 8, color: Colors.red[800])),
+                                height: 8,
+                                color: Colors.red[800])),
                     ]),
                   ),
                 ],
@@ -782,6 +865,96 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ),
       ),
       const SizedBox(height: 12),
+
+      // ── Article Political Bias ─────────────────────────────────────
+      Card(
+        elevation: 2,
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12)),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(children: [
+                  Icon(Icons.article_outlined,
+                      size: 16, color: Colors.indigo[600]),
+                  const SizedBox(width: 8),
+                  Text('Article Political Bias',
+                      style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.grey[800])),
+                ]),
+                const SizedBox(height: 14),
+                if (articleTotal == 0)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Text(
+                      'No per-article classifications yet.\n'
+                      'Article bias appears once the RoBERTa model '
+                      'scores new articles.',
+                      style: TextStyle(
+                          fontSize: 12, color: Colors.grey[500]),
+                    ),
+                  )
+                else ...[
+                  Row(children: [
+                    Expanded(
+                        child: _buildLeaningTile(
+                            label: 'Left Wing',
+                            count: p.articleLeftCount,
+                            total: articleTotal,
+                            color: Colors.blue[800]!,
+                            icon: Icons.west)),
+                    const SizedBox(width: 10),
+                    Expanded(
+                        child: _buildLeaningTile(
+                            label: 'Centre',
+                            count: p.articleCenterCount,
+                            total: articleTotal,
+                            color: Colors.teal[600]!,
+                            icon: Icons.remove)),
+                    const SizedBox(width: 10),
+                    Expanded(
+                        child: _buildLeaningTile(
+                            label: 'Right Wing',
+                            count: p.articleRightCount,
+                            total: articleTotal,
+                            color: Colors.red[800]!,
+                            icon: Icons.east)),
+                  ]),
+                  const SizedBox(height: 14),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(6),
+                    child: Row(children: [
+                      if (p.articleLeftCount > 0)
+                        Expanded(
+                            flex: p.articleLeftCount,
+                            child: Container(
+                                height: 8,
+                                color: Colors.blue[800])),
+                      if (p.articleCenterCount > 0)
+                        Expanded(
+                            flex: p.articleCenterCount,
+                            child: Container(
+                                height: 8,
+                                color: Colors.teal[600])),
+                      if (p.articleRightCount > 0)
+                        Expanded(
+                            flex: p.articleRightCount,
+                            child: Container(
+                                height: 8,
+                                color: Colors.red[800])),
+                    ]),
+                  ),
+                ],
+              ]),
+        ),
+      ),
+      const SizedBox(height: 12),
+
+      // ── Sentiment ──────────────────────────────────────────────────
       Card(
         elevation: 2,
         shape: RoundedRectangleBorder(
@@ -806,7 +979,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   Expanded(
                       child: _buildSentimentTile(
                           label: 'Positive',
-                          count: p.positiveCount,
+                          count: _profile!.positiveCount,
                           total: sentimentTotal,
                           color: Colors.green[700]!,
                           icon: Icons.sentiment_satisfied)),
@@ -814,7 +987,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   Expanded(
                       child: _buildSentimentTile(
                           label: 'Negative',
-                          count: p.negativeCount,
+                          count: _profile!.negativeCount,
                           total: sentimentTotal,
                           color: Colors.deepOrange[600]!,
                           icon: Icons.sentiment_dissatisfied)),
@@ -824,14 +997,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   ClipRRect(
                     borderRadius: BorderRadius.circular(6),
                     child: Row(children: [
-                      if (p.positiveCount > 0)
+                      if (_profile!.positiveCount > 0)
                         Expanded(
-                            flex: p.positiveCount,
+                            flex: _profile!.positiveCount,
                             child: Container(
-                                height: 8, color: Colors.green[700])),
-                      if (p.negativeCount > 0)
+                                height: 8,
+                                color: Colors.green[700])),
+                      if (_profile!.negativeCount > 0)
                         Expanded(
-                            flex: p.negativeCount,
+                            flex: _profile!.negativeCount,
                             child: Container(
                                 height: 8,
                                 color: Colors.deepOrange[600])),
@@ -842,6 +1016,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ),
       ),
       const SizedBox(height: 12),
+
+      // ── Summary row ────────────────────────────────────────────────
       Card(
         elevation: 2,
         shape: RoundedRectangleBorder(
@@ -866,19 +1042,21 @@ class _ProfileScreenState extends State<ProfileScreen> {
             _buildVerticalDivider(),
             Expanded(
                 child: _buildSummaryItem(
-                    label: 'Top\nSource',
-                    value: _profile!.mostReadSource.isNotEmpty
-                        ? _profile!.mostReadSource.split(' ').first
-                        : '—',
-                    color: Colors.teal[700]!,
-                    icon: Icons.bookmark_outline)),
+                    label: 'Avg Outlet\nBias',
+                    value: getBiasLabel(_profile!.avgBias),
+                    color: getBiasColor(_profile!.avgBias),
+                    icon: Icons.source)),
             _buildVerticalDivider(),
             Expanded(
                 child: _buildSummaryItem(
-                    label: 'Avg\nLeaning',
-                    value: getBiasLabel(_profile!.avgBias),
-                    color: getBiasColor(_profile!.avgBias),
-                    icon: Icons.analytics_outlined)),
+                    label: 'Avg Article\nBias',
+                    value: (articleTotal > 0)
+                        ? getBiasLabel(_profile!.avgArticleBias)
+                        : '—',
+                    color: (articleTotal > 0)
+                        ? getBiasColor(_profile!.avgArticleBias)
+                        : Colors.grey,
+                    icon: Icons.article_outlined)),
           ]),
         ),
       ),
@@ -931,7 +1109,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }) {
     final pct = total > 0 ? (count / total * 100).round() : 0;
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
+      padding:
+          const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
       decoration: BoxDecoration(
         color: color.withAlpha(18),
         borderRadius: BorderRadius.circular(10),
@@ -951,8 +1130,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       color: Colors.grey[700])),
               const SizedBox(height: 2),
               Text('$count articles',
-                  style:
-                      TextStyle(fontSize: 11, color: Colors.grey[500])),
+                  style: TextStyle(
+                      fontSize: 11, color: Colors.grey[500])),
             ])),
         Text('$pct%',
             style: TextStyle(
@@ -1026,7 +1205,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       Flexible(
         child: Text(title,
             style: TextStyle(
-                fontSize: 18,
+                fontSize: 16,
                 fontWeight: FontWeight.bold,
                 color: Colors.grey[800])),
       ),

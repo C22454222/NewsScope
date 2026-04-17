@@ -64,7 +64,7 @@ class Article(ArticleBase):
     id: UUID
     source_id: Optional[UUID] = None
     created_at: datetime
-    updated_at: Optional[datetime] = None          # DB: updated_at timestamptz
+    updated_at: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -92,7 +92,7 @@ class ArticleResponse(ArticleBase):
     id: Optional[str] = None
     source_id: Optional[str] = None
     created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None          # fixed: was Optional[str]
+    updated_at: Optional[datetime] = None
 
     # Credibility + fact-checking fields
     credibility_score: Optional[float] = None
@@ -119,19 +119,19 @@ class UserCreate(BaseModel):
     and is never sent by the client.
     """
 
-    id: str                                        # Firebase UID — plain string
+    id: str
     email: str
-    display_name: Optional[str] = None            # added: column exists in DB
+    display_name: Optional[str] = None
 
 
 class User(BaseModel):
     """Full user model as returned by the backend."""
 
-    id: str                                        # Firebase UID
+    id: str
     email: str
-    display_name: Optional[str] = None            # added: column exists in DB
+    display_name: Optional[str] = None
     created_at: datetime
-    updated_at: Optional[datetime] = None         # added: column exists in DB
+    updated_at: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -174,7 +174,7 @@ class ReadingHistory(BaseModel):
     """Full reading history record as stored in the database."""
 
     id: UUID
-    user_id: str                                   # Firebase UID — text in DB
+    user_id: str
     article_id: Optional[UUID] = None
     time_spent_seconds: int
     opened_at: datetime
@@ -183,7 +183,7 @@ class ReadingHistory(BaseModel):
     sentiment_score: Optional[float] = None
     source: Optional[str] = None
     general_bias: Optional[str] = None
-    credibility_score: Optional[float] = None     # added: snapshot column
+    credibility_score: Optional[float] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -196,15 +196,22 @@ class BiasProfile(BaseModel):
     Calculated bias profile returned by GET /api/bias-profile.
 
     Computed live from reading_history snapshot columns — never stored.
-    source_breakdown: top-12 sources by article count.
-    Powers the bar chart on the Flutter profile screen.
 
-    avg_credibility: mean credibility score of articles the user has
-    read (0-100 scale). Uses the snapshot column in reading_history so
-    it stays stable after articles are archived. None when the user has
-    no scored articles yet.
+    Outlet-level fields (left_count, center_count, right_count,
+    bias_distribution, avg_bias) derive from reading_history.bias_score,
+    the publisher baseline rating copied from sources.bias_score at
+    read time.
+
+    Article-level fields (article_left_count, article_center_count,
+    article_right_count, article_bias_distribution, avg_article_bias)
+    derive from articles.political_bias, the per-article RoBERTa label,
+    joined from the articles table at query time.
+
+    source_breakdown: top-12 sources by article count.
+    avg_credibility: mean credibility score across all read articles.
     """
 
+    # ── Outlet-level bias ─────────────────────────────────────────────
     avg_bias: float
     avg_sentiment: float
     total_articles_read: int
@@ -218,7 +225,16 @@ class BiasProfile(BaseModel):
     neutral_count: int = 0
     negative_count: int = 0
     source_breakdown: Optional[Dict[str, int]] = None
-    avg_credibility: Optional[float] = None       # added: powers profile header
+    avg_credibility: Optional[float] = None
+
+    # ── Article-level bias (RoBERTa per-article) ──────────────────────
+    article_left_count: int = 0
+    article_center_count: int = 0
+    article_right_count: int = 0
+    article_bias_distribution: Dict[str, float] = Field(
+        default_factory=dict
+    )
+    avg_article_bias: float = 0.0
 
 
 # ── Fact checks ───────────────────────────────────────────────────────────────

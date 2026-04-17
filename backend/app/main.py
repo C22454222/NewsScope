@@ -24,28 +24,6 @@ SCHEDULING OVERVIEW (v8 — chain-first, FCM notifications, credibility snapshot
     :50  Fact-check           (CronTrigger minute=50)
     03:00 Archiving           (CronTrigger hour=3)
 
-CHANGES FROM v7:
-
-1. FCM NOTIFICATIONS ON NEW ARTICLES
-   After the ingestion→analysis chain completes, _notify_new_articles()
-   queries articles inserted in the last 30 minutes and publishes a
-   single FCM topic message to `news_updates`. Any user who has
-   subscribed via the Flutter Settings toggle receives a push
-   notification with the count of new articles.
-
-2. AVG CREDIBILITY IN BIAS PROFILE
-   /api/bias-profile now computes and returns avg_credibility, the
-   mean credibility_score across all articles the user has read.
-   Powers the Avg Credibility stat in the profile screen header card.
-   Null when no history exists.
-
-3. CREDIBILITY SNAPSHOT IN READING HISTORY
-   track_reading now copies credibility_score into the reading_history
-   snapshot alongside the other NLP scores. Requires the column to
-   exist in the reading_history table:
-     ALTER TABLE reading_history
-     ADD COLUMN credibility_score DOUBLE PRECISION;
-
 Flake8: 0 errors/warnings.
 """
 
@@ -91,13 +69,7 @@ _ingestion_running = False
 _analysis_running = False
 _heavy_job_lock = threading.Lock()
 
-
-# Redeploy guard: skip startup ingestion if DB updated < 45 min ago.
 _REDEPLOY_GUARD_MINUTES = 45
-
-# FCM notification window: articles inserted within the last 30 minutes
-# are considered "new" for the purpose of the post-ingestion notification.
-# This covers the full ingestion+analysis+LIME chain duration.
 _NOTIFICATION_WINDOW_MINUTES = 30
 
 
@@ -120,18 +92,36 @@ def init_firebase() -> None:
 init_firebase()
 
 
+# ── Political bias label → numeric score ──────────────────────────────────────
+
+
+def _political_bias_score(label: Optional[str]) -> Optional[float]:
+    """
+    Map a RoBERTa political_bias label to a [-1, +1] numeric score.
+
+    LEFT  → -1.0
+    CENTER / CENTRE → 0.0
+    RIGHT →  +1.0
+    None / unknown → None (excluded from weighted average)
+    """
+    if not label:
+        return None
+    upper = label.upper()
+    if upper == "LEFT":
+        return -1.0
+    if upper == "RIGHT":
+        return 1.0
+    if upper in ("CENTER", "CENTRE"):
+        return 0.0
+    return None
+
+
 # ── FCM notification helper ───────────────────────────────────────────────────
 
 
 def _count_recently_inserted_articles() -> int:
     """
     Count articles inserted in the last _NOTIFICATION_WINDOW_MINUTES.
-
-    Used to decide whether (and with what count) to fire an FCM
-    notification after the ingestion pipeline completes. Queries on
-    created_at rather than updated_at because updated_at gets bumped
-    by the analysis and fact-check passes, which would inflate the
-    count.
     """
     try:
         cutoff = (
@@ -143,7 +133,6 @@ def _count_recently_inserted_articles() -> int:
             .gte("created_at", cutoff)
             .execute()
         )
-        # Supabase returns the count on the response object when count="exact"
         return response.count or 0
     except Exception as exc:
         print(f"Failed to count new articles: {exc}")
@@ -154,23 +143,10 @@ def _notify_new_articles() -> None:
     """
     Send an FCM push notification to the `news_updates` topic if new
     articles were inserted during this ingestion cycle.
-
-    Clients that have toggled "Breaking News Alerts" on in Settings
-    automatically subscribe to this topic (see SettingsScreen._setNotifications
-    in the Flutter app), so this single publish reaches every opted-in
-    user without per-user token management.
-
-    The notification uses the `news_updates` Android channel, which is
-    created at app startup by AppNotifications.init() in settings_screen.dart.
-    High priority so the notification shows as a heads-up on Samsung devices.
-
-    Idempotent and safe to call multiple times — if count is 0, no
-    notification is sent. Failures are logged but never raised, so a
-    notification error cannot break the ingestion pipeline.
     """
     count = _count_recently_inserted_articles()
     if count <= 0:
-        print("FCM notification skipped — no new articles in the last cycle.")
+        print("FCM notification skipped — no new articles in last cycle.")
         return
 
     body = (
@@ -196,7 +172,8 @@ def _notify_new_articles() -> None:
         message_id = messaging.send(message)
         print(
             f"FCM notification sent to news_updates topic: {count} new "
-            f"article{'s' if count != 1 else ''} (message_id={message_id})"
+            f"article{'s' if count != 1 else ''} "
+            f"(message_id={message_id})"
         )
     except Exception as exc:
         print(f"FCM publish failed: {exc}")
@@ -206,11 +183,6 @@ def _notify_new_articles() -> None:
 
 
 def _sync_ingestion() -> None:
-    """
-    Sync bridge — runs _scheduled_ingestion on the main event loop.
-    Fires at :00 via CronTrigger. After ingestion completes, analysis
-    is chained immediately inside _scheduled_ingestion.
-    """
     if not _heavy_job_lock.acquire(blocking=False):
         print("Heavy job in progress — skipping scheduled ingestion.")
         return
@@ -230,7 +202,6 @@ def _sync_ingestion() -> None:
 
 
 def _sync_analysis_safety_net() -> None:
-    """Analysis safety net at :20 — only runs if chained call failed."""
     if not _heavy_job_lock.acquire(blocking=False):
         print("Heavy job in progress — skipping analysis safety net.")
         return
@@ -250,7 +221,6 @@ def _sync_analysis_safety_net() -> None:
 
 
 def _sync_factcheck() -> None:
-    """Fact-check at :50 — gated behind heavy_job_lock."""
     if not _heavy_job_lock.acquire(blocking=False):
         print("Heavy job in progress — skipping scheduled fact-check.")
         return
@@ -270,7 +240,6 @@ def _sync_factcheck() -> None:
 
 
 def _sync_archive() -> None:
-    """Archiving bridge — no heavy_job_lock, negligible footprint."""
     if _main_loop is None or not _main_loop.is_running():
         print("Archive bridge: no running loop, skipping.")
         return
@@ -287,14 +256,6 @@ def _sync_archive() -> None:
 
 
 async def _scheduled_ingestion() -> None:
-    """
-    Run ingestion, then immediately chain analysis on completion,
-    then publish an FCM notification for any new articles.
-
-    The notification fires only after analysis completes so the
-    articles reaching users' phones already have bias/sentiment/
-    credibility scores and can be opened directly.
-    """
     global _ingestion_running
     if _ingestion_running:
         print("Ingestion already running — skipping duplicate trigger.")
@@ -303,19 +264,17 @@ async def _scheduled_ingestion() -> None:
     try:
         print("Pipeline: starting ingestion...")
         await asyncio.to_thread(run_ingestion_cycle)
-        print("Pipeline: ingestion complete — chaining analysis immediately.")
+        print(
+            "Pipeline: ingestion complete — "
+            "chaining analysis immediately."
+        )
     except Exception as exc:
         print(f"Pipeline: ingestion failed: {exc}")
         return
     finally:
         _ingestion_running = False
 
-    # Chain: analysis fires immediately after ingestion.
     await _guarded_analysis()
-
-    # Publish FCM notification for newly ingested articles. Runs off
-    # the event loop to avoid blocking any subsequent scheduled jobs.
-    # Failures are logged inside _notify_new_articles and never raised.
     await asyncio.to_thread(_notify_new_articles)
 
 
@@ -336,15 +295,6 @@ async def _guarded_analysis() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    FastAPI lifespan context manager.
-
-    Scheduled job timing:
-      :00  ingestion → analysis+LIME → FCM notification
-      :20  analysis safety net — idempotent
-      :50  fact-check — gated behind heavy_job_lock
-      03:00 archiving — once daily
-    """
     global _main_loop
 
     from app.core.scheduler import scheduler
@@ -432,23 +382,21 @@ def _ingestion_ran_recently() -> bool:
 
         if age_minutes < _REDEPLOY_GUARD_MINUTES:
             print(
-                f"Redeploy guard: last ingestion {age_minutes:.1f} min ago "
-                "— skipping startup ingestion to prevent double-OOM."
+                f"Redeploy guard: last ingestion {age_minutes:.1f} min "
+                "ago — skipping startup ingestion."
             )
             return True
 
     except Exception as exc:
         print(
-            f"Redeploy guard check failed: {exc} — proceeding with ingestion."
+            f"Redeploy guard check failed: {exc} "
+            "— proceeding with ingestion."
         )
 
     return False
 
 
 async def _run_startup_sequence() -> None:
-    """
-    Startup sequence: ingest → chain analysis immediately → notify → done.
-    """
     if _ingestion_ran_recently():
         print(
             "Startup ingestion skipped (redeploy guard). "
@@ -471,7 +419,10 @@ async def _run_startup_sequence() -> None:
 
     try:
         await _scheduled_ingestion()
-        print("Startup pipeline complete (ingestion + analysis + notify).")
+        print(
+            "Startup pipeline complete "
+            "(ingestion + analysis + notify)."
+        )
     except Exception as exc:
         print(f"Startup pipeline failed: {exc}")
     finally:
@@ -517,7 +468,9 @@ def get_current_user(
 @app.get("/")
 def root():
     return {
-        "message": "Welcome to NewsScope API. Try /health to check status.",
+        "message": (
+            "Welcome to NewsScope API. Try /health to check status."
+        ),
         "version": "1.0.0",
         "docs": "/docs",
     }
@@ -570,11 +523,6 @@ async def debug_archive(background_tasks: BackgroundTasks):
 
 @app.post("/debug/notify")
 async def debug_notify():
-    """
-    Fire an FCM test notification immediately. Useful for verifying
-    the `news_updates` topic publishing works end-to-end without
-    waiting for the next ingestion cycle.
-    """
     await asyncio.to_thread(_notify_new_articles)
     return {"status": "notification attempted"}
 
@@ -592,10 +540,7 @@ async def track_reading(
 
     Scores (bias, sentiment, source, general_bias, credibility) are
     copied from the article row at read time so they remain stable
-    after archiving. Uses INSERT (not upsert) because the
-    reading_history table has no unique constraint on
-    (user_id, article_id) — multiple reads of the same article are
-    valid and expected.
+    after archiving.
     """
     try:
         article_data = (
@@ -622,7 +567,9 @@ async def track_reading(
             "general_bias": scores.get("general_bias"),
             "credibility_score": scores.get("credibility_score"),
         }
-        response = supabase.table("reading_history").insert(payload).execute()
+        response = (
+            supabase.table("reading_history").insert(payload).execute()
+        )
         print(
             f"Reading tracked: {data.article_id} "
             f"({data.time_spent_seconds}s)"
@@ -636,20 +583,28 @@ async def track_reading(
 @app.get("/api/bias-profile", response_model=BiasProfile)
 async def get_bias_profile(user_id: str = Depends(get_current_user)):
     """
-    Calculate user's bias profile from reading history snapshot columns.
-    Reads directly from reading_history — stable after article archiving.
+    Calculate user's bias profile from reading history.
 
-    avg_credibility is computed as a simple arithmetic mean of the
-    credibility_score column across all history rows where it is
-    non-null. Null when no rows have a credibility score yet (old
-    rows from before the column was added, for example).
+    Outlet-level bias fields (left_count, center_count, right_count,
+    bias_distribution, avg_bias) use the bias_score snapshot column
+    already stored in reading_history — the publisher baseline rating.
+
+    Article-level bias fields (article_left_count, article_center_count,
+    article_right_count, article_bias_distribution, avg_article_bias)
+    are computed by joining reading_history with articles.political_bias
+    at query time, so no schema migration is required. Rows where the
+    joined article has been archived (political_bias is null) are
+    excluded from the article-level aggregation only.
+
+    avg_credibility is a simple mean of the credibility_score snapshot.
     """
     try:
         response = (
             supabase.table("reading_history")
             .select(
                 "time_spent_seconds, bias_score, sentiment_score, "
-                "source, general_bias, credibility_score"
+                "source, general_bias, credibility_score, "
+                "articles(political_bias)"
             )
             .eq("user_id", user_id)
             .execute()
@@ -665,17 +620,27 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
                 center_count=0,
                 right_count=0,
                 most_read_source="N/A",
-                bias_distribution={"left": 0.0, "center": 0.0, "right": 0.0},
+                bias_distribution={
+                    "left": 0.0, "center": 0.0, "right": 0.0
+                },
                 reading_time_total_minutes=0,
                 positive_count=0,
                 neutral_count=0,
                 negative_count=0,
                 source_breakdown={},
                 avg_credibility=None,
+                article_left_count=0,
+                article_center_count=0,
+                article_right_count=0,
+                article_bias_distribution={
+                    "left": 0.0, "center": 0.0, "right": 0.0
+                },
+                avg_article_bias=0.0,
             )
 
         total_time = sum(h["time_spent_seconds"] for h in history)
 
+        # ── Outlet-level bias (bias_score snapshot) ───────────────────
         bias_terms = [
             (h["time_spent_seconds"], h["bias_score"])
             for h in history
@@ -719,26 +684,27 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
         sources = [h["source"] for h in history if h.get("source")]
         source_counter = Counter(sources)
         most_read = (
-            source_counter.most_common(1)[0][0] if source_counter else "N/A"
+            source_counter.most_common(1)[0][0]
+            if source_counter else "N/A"
         )
         source_breakdown = dict(source_counter.most_common(12))
 
         total_reads = len(history)
         distribution = {
             "left": (
-                round(left / total_reads * 100, 1) if total_reads else 0.0
+                round(left / total_reads * 100, 1)
+                if total_reads else 0.0
             ),
             "center": (
-                round(center / total_reads * 100, 1) if total_reads else 0.0
+                round(center / total_reads * 100, 1)
+                if total_reads else 0.0
             ),
             "right": (
-                round(right / total_reads * 100, 1) if total_reads else 0.0
+                round(right / total_reads * 100, 1)
+                if total_reads else 0.0
             ),
         }
 
-        # Average credibility — simple mean across history rows that
-        # have a non-null credibility_score. Old rows from before the
-        # column was added will have null and are skipped.
         cred_values = [
             h["credibility_score"]
             for h in history
@@ -748,6 +714,52 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
             round(sum(cred_values) / len(cred_values), 1)
             if cred_values else None
         )
+
+        # ── Article-level bias (RoBERTa, joined from articles) ────────
+        art_left = 0
+        art_center = 0
+        art_right = 0
+        article_pb_terms = []
+
+        for h in history:
+            joined = h.get("articles") or {}
+            pb_label = joined.get("political_bias") if joined else None
+            pb_score = _political_bias_score(pb_label)
+
+            if pb_label:
+                upper = pb_label.upper()
+                if upper == "LEFT":
+                    art_left += 1
+                elif upper == "RIGHT":
+                    art_right += 1
+                elif upper in ("CENTER", "CENTRE"):
+                    art_center += 1
+
+            if pb_score is not None:
+                article_pb_terms.append(
+                    (h["time_spent_seconds"], pb_score)
+                )
+
+        avg_article_bias = (
+            sum(t * s for t, s in article_pb_terms) / sum(t for t, _ in article_pb_terms)
+            if article_pb_terms else 0.0
+        )
+
+        art_total = art_left + art_center + art_right
+        article_bias_distribution = {
+            "left": (
+                round(art_left / art_total * 100, 1)
+                if art_total else 0.0
+            ),
+            "center": (
+                round(art_center / art_total * 100, 1)
+                if art_total else 0.0
+            ),
+            "right": (
+                round(art_right / art_total * 100, 1)
+                if art_total else 0.0
+            ),
+        }
 
         return BiasProfile(
             avg_bias=round(weighted_bias, 3),
@@ -764,6 +776,11 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
             negative_count=neg,
             source_breakdown=source_breakdown,
             avg_credibility=avg_credibility,
+            article_left_count=art_left,
+            article_center_count=art_center,
+            article_right_count=art_right,
+            article_bias_distribution=article_bias_distribution,
+            avg_article_bias=round(avg_article_bias, 3),
         )
     except Exception as exc:
         print(f"Error fetching bias profile: {exc}")
@@ -774,9 +791,6 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
 async def compare_articles(request: ComparisonRequest):
     """
     Group articles by political leaning for the Compare screen.
-
-    Category filtering uses CATEGORY_GROUP_MAP — same as GET /articles —
-    so ?category=sport returns articles tagged sport, football, rugby etc.
     """
     try:
         query = (
@@ -804,12 +818,18 @@ async def compare_articles(request: ComparisonRequest):
 
         articles_data = query.limit(10000).execute().data
 
-        left = [a for a in articles_data if a.get("bias_score", 0) < -0.3]
+        left = [
+            a for a in articles_data
+            if a.get("bias_score", 0) < -0.3
+        ]
         center = [
             a for a in articles_data
             if -0.3 <= a.get("bias_score", 0) <= 0.3
         ]
-        right = [a for a in articles_data if a.get("bias_score", 0) > 0.3]
+        right = [
+            a for a in articles_data
+            if a.get("bias_score", 0) > 0.3
+        ]
 
         return ComparisonResponse(
             topic=request.topic or "",
@@ -824,7 +844,9 @@ async def compare_articles(request: ComparisonRequest):
 
 # ── Routers ───────────────────────────────────────────────────────────────────
 
-app.include_router(articles.router, prefix="/articles", tags=["articles"])
+app.include_router(
+    articles.router, prefix="/articles", tags=["articles"]
+)
 app.include_router(users.router, prefix="/users", tags=["users"])
 app.include_router(sources.router, prefix="/sources", tags=["sources"])
 
