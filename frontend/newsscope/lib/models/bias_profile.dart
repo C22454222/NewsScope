@@ -8,8 +8,12 @@
 ///
 /// Article-level fields (articleLeftCount, articleCenterCount,
 /// articleRightCount, articleBiasDistribution, avgArticleBias) derive
-/// from articles.political_bias, the per-article RoBERTa label joined
-/// from the articles table by the backend at query time.
+/// from reading_history.political_bias, the per-article RoBERTa label
+/// snapshotted at read time.
+///
+/// General bias fields (biasedCount, unbiasedCount) derive from
+/// reading_history.general_bias, the DistilRoBERTa BIASED/UNBIASED
+/// label snapshotted at read time.
 class BiasProfile {
   // ── Outlet-level bias ────────────────────────────────────────────────────
   final double avgBias;
@@ -37,12 +41,14 @@ class BiasProfile {
   final int articleRightCount;
 
   /// Percentage distribution of article-level labels.
-  /// Keys: 'left', 'center', 'right'. Values: 0.0–100.0.
   final Map<String, double> articleBiasDistribution;
 
   /// Time-weighted average article bias on the [-1, +1] scale.
-  /// LEFT = -1, CENTER = 0, RIGHT = +1. 0.0 when no data.
   final double avgArticleBias;
+
+  // ── General bias (DistilRoBERTa BIASED / UNBIASED) ───────────────────────
+  final int biasedCount;
+  final int unbiasedCount;
 
   const BiasProfile({
     required this.avgBias,
@@ -64,6 +70,8 @@ class BiasProfile {
     this.articleRightCount = 0,
     this.articleBiasDistribution = const {},
     this.avgArticleBias = 0.0,
+    this.biasedCount = 0,
+    this.unbiasedCount = 0,
   });
 
   factory BiasProfile.fromJson(Map<String, dynamic> json) {
@@ -95,8 +103,7 @@ class BiasProfile {
       sourceBreakdown: rawSources?.map(
         (k, v) => MapEntry(k, (v as num).toInt()),
       ),
-      avgCredibility:
-          (json['avg_credibility'] as num?)?.toDouble(),
+      avgCredibility: (json['avg_credibility'] as num?)?.toDouble(),
       articleLeftCount:
           (json['article_left_count'] as num?)?.toInt() ?? 0,
       articleCenterCount:
@@ -108,13 +115,13 @@ class BiasProfile {
       ),
       avgArticleBias:
           (json['avg_article_bias'] as num?)?.toDouble() ?? 0.0,
+      biasedCount: (json['biased_count'] as num?)?.toInt() ?? 0,
+      unbiasedCount: (json['unbiased_count'] as num?)?.toInt() ?? 0,
     );
   }
 
-  /// True when the user has not read any articles yet.
   bool get isEmpty => totalArticlesRead == 0;
 
-  /// Dominant sentiment derived from article counts.
   String get sentimentLabel {
     if (positiveCount == 0 && neutralCount == 0 && negativeCount == 0) {
       return 'Neutral';
@@ -126,5 +133,12 @@ class BiasProfile {
       return 'Negative';
     }
     return 'Neutral';
+  }
+
+  /// Dominant general bias label from snapshotted BIASED/UNBIASED counts.
+  /// Returns 'Unbiased' when no data yet.
+  String get generalBiasLabel {
+    if (biasedCount == 0 && unbiasedCount == 0) return 'Unbiased';
+    return biasedCount > unbiasedCount ? 'Biased' : 'Unbiased';
   }
 }

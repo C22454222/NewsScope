@@ -295,19 +295,23 @@ class _ProfileScreenState extends State<ProfileScreen> {
         p.articleLeftCount + p.articleCenterCount + p.articleRightCount >
             0;
 
-    // General Bias
-    final totalLeaning = p.leftCount + p.centerCount + p.rightCount;
-    final extremeRatio = totalLeaning > 0
-        ? (p.leftCount + p.rightCount) / totalLeaning
-        : 0.0;
+    // General Bias — uses snapshotted BIASED/UNBIASED counts from
+    // reading_history.general_bias. Majority wins; tie favours
+    // unbiased for the user-friendly default.
+    final hasGeneralBias = p.biasedCount + p.unbiasedCount > 0;
+    final isBiased = p.biasedCount > p.unbiasedCount;
     final generalBiasLabel =
-        extremeRatio > 0.6 ? 'Biased' : 'Unbiased';
-    final generalBiasColor = extremeRatio > 0.6
-        ? Colors.orange[700]!
-        : Colors.green[700]!;
-    final generalBiasIcon = extremeRatio > 0.6
-        ? Icons.warning_amber
-        : Icons.check_circle_outline;
+        hasGeneralBias ? (isBiased ? 'Biased' : 'Unbiased') : '—';
+    final generalBiasColor = !hasGeneralBias
+        ? Colors.grey
+        : isBiased
+            ? Colors.orange[700]!
+            : Colors.green[700]!;
+    final generalBiasIcon = !hasGeneralBias
+        ? Icons.help_outline
+        : isBiased
+            ? Icons.warning_amber
+            : Icons.check_circle_outline;
 
     // Sentiment
     final sentimentColor = p.sentimentLabel == 'Positive'
@@ -388,11 +392,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   List<int> _roundToHundred(double a, double b, double c) {
     final floors = [a.floor(), b.floor(), c.floor()];
-    final remainders = [
-      a - floors[0],
-      b - floors[1],
-      c - floors[2]
-    ];
+    final remainders = [a - floors[0], b - floors[1], c - floors[2]];
     int remainder = 100 - floors.reduce((x, y) => x + y);
     final indices = [0, 1, 2]
       ..sort((i, j) => remainders[j].compareTo(remainders[i]));
@@ -772,8 +772,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               Text(
                 'Scroll to see all · tap a bar for details · '
                 'top ${sources.length} sources',
-                style:
-                    TextStyle(fontSize: 10, color: Colors.grey[400]),
+                style: TextStyle(fontSize: 10, color: Colors.grey[400]),
               ),
             ]),
       ),
@@ -788,6 +787,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final articleTotal =
         p.articleLeftCount + p.articleCenterCount + p.articleRightCount;
     final sentimentTotal = p.positiveCount + p.negativeCount;
+    final generalTotal = p.biasedCount + p.unbiasedCount;
 
     return Column(children: [
       // ── Outlet Political Bias ──────────────────────────────────────
@@ -954,6 +954,69 @@ class _ProfileScreenState extends State<ProfileScreen> {
       ),
       const SizedBox(height: 12),
 
+      // ── General Bias (BIASED / UNBIASED) ───────────────────────────
+      Card(
+        elevation: 2,
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12)),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(children: [
+                  Icon(Icons.fact_check_outlined,
+                      size: 16, color: Colors.orange[700]),
+                  const SizedBox(width: 8),
+                  Text('General Bias',
+                      style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.grey[800])),
+                ]),
+                const SizedBox(height: 14),
+                Row(children: [
+                  Expanded(
+                      child: _buildSentimentTile(
+                          label: 'Biased',
+                          count: p.biasedCount,
+                          total: generalTotal,
+                          color: Colors.orange[700]!,
+                          icon: Icons.warning_amber)),
+                  const SizedBox(width: 10),
+                  Expanded(
+                      child: _buildSentimentTile(
+                          label: 'Unbiased',
+                          count: p.unbiasedCount,
+                          total: generalTotal,
+                          color: Colors.green[700]!,
+                          icon: Icons.check_circle_outline)),
+                ]),
+                if (generalTotal > 0) ...[
+                  const SizedBox(height: 14),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(6),
+                    child: Row(children: [
+                      if (p.biasedCount > 0)
+                        Expanded(
+                            flex: p.biasedCount,
+                            child: Container(
+                                height: 8,
+                                color: Colors.orange[700])),
+                      if (p.unbiasedCount > 0)
+                        Expanded(
+                            flex: p.unbiasedCount,
+                            child: Container(
+                                height: 8,
+                                color: Colors.green[700])),
+                    ]),
+                  ),
+                ],
+              ]),
+        ),
+      ),
+      const SizedBox(height: 12),
+
       // ── Sentiment ──────────────────────────────────────────────────
       Card(
         elevation: 2,
@@ -979,7 +1042,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   Expanded(
                       child: _buildSentimentTile(
                           label: 'Positive',
-                          count: _profile!.positiveCount,
+                          count: p.positiveCount,
                           total: sentimentTotal,
                           color: Colors.green[700]!,
                           icon: Icons.sentiment_satisfied)),
@@ -987,7 +1050,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   Expanded(
                       child: _buildSentimentTile(
                           label: 'Negative',
-                          count: _profile!.negativeCount,
+                          count: p.negativeCount,
                           total: sentimentTotal,
                           color: Colors.deepOrange[600]!,
                           icon: Icons.sentiment_dissatisfied)),
@@ -997,15 +1060,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   ClipRRect(
                     borderRadius: BorderRadius.circular(6),
                     child: Row(children: [
-                      if (_profile!.positiveCount > 0)
+                      if (p.positiveCount > 0)
                         Expanded(
-                            flex: _profile!.positiveCount,
+                            flex: p.positiveCount,
                             child: Container(
                                 height: 8,
                                 color: Colors.green[700])),
-                      if (_profile!.negativeCount > 0)
+                      if (p.negativeCount > 0)
                         Expanded(
-                            flex: _profile!.negativeCount,
+                            flex: p.negativeCount,
                             child: Container(
                                 height: 8,
                                 color: Colors.deepOrange[600])),
@@ -1109,8 +1172,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }) {
     final pct = total > 0 ? (count / total * 100).round() : 0;
     return Container(
-      padding:
-          const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
+      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
       decoration: BoxDecoration(
         color: color.withAlpha(18),
         borderRadius: BorderRadius.circular(10),

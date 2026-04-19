@@ -5,9 +5,11 @@ Matches the Supabase PostgreSQL schema exactly:
   - articles: all NLP output columns including bias_explanation JSONB
   - fact_checks: relational table with article_id FK
   - reading_history: snapshot columns for bias profile calculation
-    (bias_score, sentiment_score, source, general_bias, credibility_score)
+    (bias_score, sentiment_score, source, general_bias,
+    credibility_score, political_bias)
   - sources: outlet metadata with bias_rating check constraint
-  - users: id (Firebase UID), email, created_at, updated_at, display_name
+  - users: id (Firebase UID), email, created_at, updated_at,
+    display_name
 
 No description column — not in the database.
 No preferences/bias_profile on users — profile is calculated live
@@ -171,7 +173,13 @@ class ReadingHistoryCreate(BaseModel):
 
 
 class ReadingHistory(BaseModel):
-    """Full reading history record as stored in the database."""
+    """
+    Full reading history record as stored in the database.
+
+    Includes the political_bias snapshot column, populated at read
+    time from articles.political_bias so article-level bias data
+    survives article archiving.
+    """
 
     id: UUID
     user_id: str
@@ -184,6 +192,7 @@ class ReadingHistory(BaseModel):
     source: Optional[str] = None
     general_bias: Optional[str] = None
     credibility_score: Optional[float] = None
+    political_bias: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -204,8 +213,13 @@ class BiasProfile(BaseModel):
 
     Article-level fields (article_left_count, article_center_count,
     article_right_count, article_bias_distribution, avg_article_bias)
-    derive from articles.political_bias, the per-article RoBERTa label,
-    joined from the articles table at query time.
+    derive from reading_history.political_bias, the per-article RoBERTa
+    label snapshotted at read time so the data survives article
+    archiving.
+
+    General bias fields (biased_count, unbiased_count) derive from
+    reading_history.general_bias, the DistilRoBERTa BIASED/UNBIASED
+    label snapshotted at read time.
 
     source_breakdown: top-12 sources by article count.
     avg_credibility: mean credibility score across all read articles.
@@ -235,6 +249,10 @@ class BiasProfile(BaseModel):
         default_factory=dict
     )
     avg_article_bias: float = 0.0
+
+    # ── General bias (DistilRoBERTa BIASED / UNBIASED) ────────────────
+    biased_count: int = 0
+    unbiased_count: int = 0
 
 
 # ── Fact checks ───────────────────────────────────────────────────────────────

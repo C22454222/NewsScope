@@ -96,14 +96,7 @@ init_firebase()
 
 
 def _political_bias_score(label: Optional[str]) -> Optional[float]:
-    """
-    Map a RoBERTa political_bias label to a [-1, +1] numeric score.
-
-    LEFT  -> -1.0
-    CENTER / CENTRE -> 0.0
-    RIGHT ->  +1.0
-    None / unknown -> None (excluded from weighted average)
-    """
+    """Map a RoBERTa political_bias label to a [-1, +1] numeric score."""
     if not label:
         return None
     upper = label.upper()
@@ -536,12 +529,10 @@ async def track_reading(
     """
     Track article reading time and snapshot scores for bias profile.
 
-    Scores (bias, sentiment, source, general_bias, credibility,
-    political_bias) are copied from the article row at read time so
-    they remain stable after the article is archived. political_bias
-    is the per-article RoBERTa label; without snapshotting it here,
-    profile aggregation would lose article-level bias data the moment
-    archiving runs.
+    Upsert on (user_id, article_id) so repeated reads of the same
+    article update the existing row rather than creating duplicates.
+    The Flutter client may call this multiple times for one read
+    (once at 5s auto-track, once on exit, once on app backgrounding).
     """
     try:
         article_data = (
@@ -569,6 +560,37 @@ async def track_reading(
             "credibility_score": scores.get("credibility_score"),
             "political_bias": scores.get("political_bias"),
         }
+
+        # Check for existing row; if present, update; else insert.
+        existing = (
+            supabase.table("reading_history")
+            .select("id, time_spent_seconds")
+            .eq("user_id", user_id)
+            .eq("article_id", data.article_id)
+            .limit(1)
+            .execute()
+            .data
+        )
+
+        if existing:
+            # Only update if the new time is greater than stored time,
+            # so multiple pings from one session always converge to
+            # the longest duration observed.
+            stored_time = existing[0].get("time_spent_seconds", 0) or 0
+            if data.time_spent_seconds > stored_time:
+                response = (
+                    supabase.table("reading_history")
+                    .update(payload)
+                    .eq("id", existing[0]["id"])
+                    .execute()
+                )
+                print(
+                    f"Reading updated: {data.article_id} "
+                    f"({data.time_spent_seconds}s, was {stored_time}s)"
+                )
+                return {"success": True, "data": response.data}
+            return {"success": True, "data": existing}
+
         response = (
             supabase.table("reading_history").insert(payload).execute()
         )
@@ -589,23 +611,14 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
 
     All scores read from snapshot columns on reading_history so profile
     data stays intact after articles are archived and purged.
-
-    Outlet-level bias fields (left_count, center_count, right_count,
-    bias_distribution, avg_bias) use bias_score, the publisher
-    baseline rating snapshot.
-
-    Article-level bias fields (article_left_count, article_center_count,
-    article_right_count, article_bias_distribution, avg_article_bias)
-    use political_bias, the per-article RoBERTa label snapshot.
-
-    avg_credibility is a simple mean of the credibility_score snapshot.
     """
     try:
         response = (
             supabase.table("reading_history")
             .select(
                 "time_spent_seconds, bias_score, sentiment_score, "
-                "source, general_bias, credibility_score, political_bias"
+                "source, general_bias, credibility_score, "
+                "political_bias"
             )
             .eq("user_id", user_id)
             .execute()
@@ -637,6 +650,8 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
                     "left": 0.0, "center": 0.0, "right": 0.0
                 },
                 avg_article_bias=0.0,
+                biased_count=0,
+                unbiased_count=0,
             )
 
         total_time = sum(h["time_spent_seconds"] for h in history)
@@ -761,6 +776,19 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
             ),
         }
 
+        # ── General bias (general_bias snapshot: BIASED / UNBIASED) ───
+        biased_count = 0
+        unbiased_count = 0
+        for h in history:
+            gb = h.get("general_bias")
+            if not gb:
+                continue
+            upper = gb.upper()
+            if upper == "BIASED":
+                biased_count += 1
+            elif upper == "UNBIASED":
+                unbiased_count += 1
+
         return BiasProfile(
             avg_bias=round(weighted_bias, 3),
             avg_sentiment=round(weighted_sentiment, 3),
@@ -781,6 +809,8 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
             article_right_count=art_right,
             article_bias_distribution=article_bias_distribution,
             avg_article_bias=round(avg_article_bias, 3),
+            biased_count=biased_count,
+            unbiased_count=unbiased_count,
         )
     except Exception as exc:
         print(f"Error fetching bias profile: {exc}")

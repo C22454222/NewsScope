@@ -73,36 +73,66 @@ class ArticleDetailScreen extends StatefulWidget {
   State<ArticleDetailScreen> createState() => _ArticleDetailScreenState();
 }
 
-class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
+class _ArticleDetailScreenState extends State<ArticleDetailScreen>
+    with WidgetsBindingObserver {
   final ApiService _api = ApiService();
   Timer? _trackingTimer;
   int _secondsSpent = 0;
-  bool _hasTracked = false;
+  bool _hasAutoTracked = false;
 
   bool _factCheckExpanded = false;
   bool _factCheckLoading = false;
   Map<String, dynamic>? _loadedFactChecks;
 
+  // Minimum seconds spent before we send a tracking ping.
+  // Backend upserts on (user_id, article_id) so repeated pings update
+  // rather than duplicate.
+  static const int _minTrackSeconds = 5;
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadedFactChecks = widget.factChecks;
+
+    // Tick once a second so the 5s auto-track fires precisely at 5s
+    // rather than waiting for the next 5s boundary.
     _trackingTimer = Timer.periodic(
-      const Duration(seconds: 5),
-      (_) => _secondsSpent += 5,
+      const Duration(seconds: 1),
+      (_) {
+        _secondsSpent += 1;
+        if (!_hasAutoTracked && _secondsSpent >= _minTrackSeconds) {
+          _hasAutoTracked = true;
+          _sendTrackingPing();
+        }
+      },
     );
   }
 
   @override
   void dispose() {
     _trackingTimer?.cancel();
-    _trackReadingTime();
+    WidgetsBinding.instance.removeObserver(this);
+    // Always send final ping on screen exit — upsert means this
+    // overwrites earlier pings with the true total time.
+    _sendTrackingPing();
     super.dispose();
   }
 
-  Future<void> _trackReadingTime() async {
-    if (_secondsSpent < 3 || _hasTracked) return;
-    _hasTracked = true;
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    // User backgrounded or paused the app without leaving the article.
+    // Send a ping so their time is recorded even if they never return.
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.detached) {
+      _sendTrackingPing();
+    }
+  }
+
+  Future<void> _sendTrackingPing() async {
+    if (_secondsSpent < _minTrackSeconds) return;
     try {
       await _api.trackReading(
         articleId: widget.id,
@@ -374,8 +404,7 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
                 final isTowards = e['direction'] == 'towards';
                 final weight =
                     (e['weight'] as num?)?.toDouble() ?? 0.0;
-                final opacity =
-                    (0.4 + weight.clamp(0.0, 1.0) * 0.6);
+                final opacity = (0.4 + weight.clamp(0.0, 1.0) * 0.6);
 
                 return Tooltip(
                   message: isTowards
@@ -411,8 +440,7 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
             const SizedBox(height: 8),
             Text(
               'Filled = pushes toward label  ·  Grey = pushes against',
-              style:
-                  TextStyle(color: Colors.grey[400], fontSize: 10),
+              style: TextStyle(color: Colors.grey[400], fontSize: 10),
             ),
           ],
         ),
@@ -523,18 +551,10 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
                             style: TextStyle(
                                 fontSize: 10,
                                 color: Colors.blue[800])),
-                        Text('C-Left',
-                            style: TextStyle(
-                                fontSize: 10,
-                                color: Colors.cyan[600])),
                         Text('Centre',
                             style: TextStyle(
                                 fontSize: 10,
                                 color: Colors.teal[600])),
-                        Text('C-Right',
-                            style: TextStyle(
-                                fontSize: 10,
-                                color: Colors.orange[600])),
                         Text('Right',
                             style: TextStyle(
                                 fontSize: 10,
@@ -686,8 +706,7 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
           Row(
             children: [
               Text('$emoji $ruling',
-                  style:
-                      const TextStyle(fontWeight: FontWeight.w600)),
+                  style: const TextStyle(fontWeight: FontWeight.w600)),
               if (speaker != null && speaker != 'N/A') ...[
                 const SizedBox(width: 8),
                 Text('— $speaker',
@@ -739,7 +758,8 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
             children: [
               Row(
                 children: [
-                  Icon(Icons.article, size: 16, color: Colors.blue[700]),
+                  Icon(Icons.article,
+                      size: 16, color: Colors.blue[700]),
                   const SizedBox(width: 6),
                   Text(
                     'ARTICLE CONTENT',
@@ -790,171 +810,157 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return PopScope(
-      canPop: true,
-      onPopInvokedWithResult: (didPop, result) async {
-        if (didPop && !_hasTracked) await _trackReadingTime();
-      },
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text('Article'),
-        ),
-        body: SingleChildScrollView(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Source badge + category
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Article'),
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Colors.blue.shade50,
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Text(
+                    widget.sourceName,
+                    style: TextStyle(
+                      color: Colors.blue.shade700,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                if (widget.category != null &&
+                    widget.category!.isNotEmpty)
                   Container(
                     padding: const EdgeInsets.symmetric(
                         horizontal: 12, vertical: 6),
                     decoration: BoxDecoration(
-                      color: Colors.blue.shade50,
+                      color: Colors.blue[50],
                       borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: Colors.blue[200]!),
                     ),
                     child: Text(
-                      widget.sourceName,
+                      formatCategory(widget.category),
                       style: TextStyle(
-                        color: Colors.blue.shade700,
+                        fontSize: 12,
                         fontWeight: FontWeight.w600,
+                        color: Colors.blue[700],
                       ),
                     ),
                   ),
-                  if (widget.category != null &&
-                      widget.category!.isNotEmpty)
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: Colors.blue[50],
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(color: Colors.blue[200]!),
-                      ),
-                      child: Text(
-                        formatCategory(widget.category),
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.blue[700],
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 12),
-
-              // Title
-              Text(
-                widget.title,
-                style: Theme.of(context)
-                    .textTheme
-                    .headlineSmall
-                    ?.copyWith(fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 16),
-
-              // Summary chips — full label names in detail screen
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  Chip(
-                    avatar: Icon(Icons.source,
-                        size: 16,
-                        color: getBiasColor(widget.biasScore)),
-                    label: Text(
-                        'Outlet Political Bias: '
-                        '${getBiasLabel(widget.biasScore)}'),
-                    backgroundColor: getBiasColor(widget.biasScore)
-                        .withAlpha((255 * 0.2).round()),
-                  ),
-                  if (widget.politicalBias != null)
-                    Chip(
-                      avatar: Icon(Icons.article_outlined,
-                          size: 16,
-                          color: getPoliticalBiasColor(
-                              widget.politicalBias)),
-                      label: Text(
-                          'Article Political Bias: '
-                          '${getPoliticalBiasLabel(widget.politicalBias)}'),
-                      backgroundColor:
-                          getPoliticalBiasColor(widget.politicalBias)
-                              .withAlpha((255 * 0.2).round()),
-                    ),
-                  if (widget.sentimentScore != null)
-                    Chip(
-                      avatar: Icon(
-                        widget.sentimentScore! > 0
-                            ? Icons.sentiment_satisfied
-                            : widget.sentimentScore! < 0
-                                ? Icons.sentiment_dissatisfied
-                                : Icons.sentiment_neutral,
-                        size: 16,
-                        color: getSentimentColor(widget.sentimentScore),
-                      ),
-                      label: Text(
-                          'Sentiment: '
-                          '${getSentimentLabel(widget.sentimentScore)}'),
-                      backgroundColor:
-                          getSentimentColor(widget.sentimentScore)
-                              .withAlpha((255 * 0.2).round()),
-                    ),
-                  if (widget.generalBias != null)
-                    Chip(
-                      avatar: Icon(
-                        widget.generalBias == 'BIASED'
-                            ? Icons.warning_amber
-                            : Icons.check_circle_outline,
-                        size: 16,
-                        color: widget.generalBias == 'BIASED'
-                            ? Colors.orange[700]
-                            : Colors.green[700],
-                      ),
-                      label:
-                          Text(_formatGeneralBias(widget.generalBias)),
-                      backgroundColor: widget.generalBias == 'BIASED'
-                          ? Colors.orange.withAlpha(40)
-                          : Colors.green.withAlpha(40),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 16),
-
-              _buildBiasBreakdownCard(),
-              const SizedBox(height: 12),
-              _buildSpectrumBar(),
-              const SizedBox(height: 12),
-              _buildBiasExplanationSection(),
-              if (widget.biasExplanation != null &&
-                  widget.biasExplanation!.isNotEmpty)
-                const SizedBox(height: 12),
-              _buildCredibilityCard(),
-              const SizedBox(height: 8),
-              _buildFactCheckSection(),
-              const SizedBox(height: 16),
-
-              if (widget.content != null && widget.content!.isNotEmpty)
-                _buildArticleContentCard()
-              else
-                Center(
-                  child: Column(
-                    children: [
-                      const Icon(Icons.article_outlined,
-                          size: 64, color: Colors.grey),
-                      const SizedBox(height: 16),
-                      Text('Content not yet available.',
-                          style:
-                              TextStyle(color: Colors.grey[500])),
-                    ],
-                  ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Text(
+              widget.title,
+              style: Theme.of(context)
+                  .textTheme
+                  .headlineSmall
+                  ?.copyWith(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                Chip(
+                  avatar: Icon(Icons.source,
+                      size: 16,
+                      color: getBiasColor(widget.biasScore)),
+                  label: Text(
+                      'Outlet Political Bias: '
+                      '${getBiasLabel(widget.biasScore)}'),
+                  backgroundColor: getBiasColor(widget.biasScore)
+                      .withAlpha((255 * 0.2).round()),
                 ),
-              const SizedBox(height: 24),
-            ],
-          ),
+                if (widget.politicalBias != null)
+                  Chip(
+                    avatar: Icon(Icons.article_outlined,
+                        size: 16,
+                        color: getPoliticalBiasColor(
+                            widget.politicalBias)),
+                    label: Text(
+                        'Article Political Bias: '
+                        '${getPoliticalBiasLabel(widget.politicalBias)}'),
+                    backgroundColor:
+                        getPoliticalBiasColor(widget.politicalBias)
+                            .withAlpha((255 * 0.2).round()),
+                  ),
+                if (widget.sentimentScore != null)
+                  Chip(
+                    avatar: Icon(
+                      widget.sentimentScore! > 0
+                          ? Icons.sentiment_satisfied
+                          : widget.sentimentScore! < 0
+                              ? Icons.sentiment_dissatisfied
+                              : Icons.sentiment_neutral,
+                      size: 16,
+                      color: getSentimentColor(widget.sentimentScore),
+                    ),
+                    label: Text(
+                        'Sentiment: '
+                        '${getSentimentLabel(widget.sentimentScore)}'),
+                    backgroundColor:
+                        getSentimentColor(widget.sentimentScore)
+                            .withAlpha((255 * 0.2).round()),
+                  ),
+                if (widget.generalBias != null)
+                  Chip(
+                    avatar: Icon(
+                      widget.generalBias == 'BIASED'
+                          ? Icons.warning_amber
+                          : Icons.check_circle_outline,
+                      size: 16,
+                      color: widget.generalBias == 'BIASED'
+                          ? Colors.orange[700]
+                          : Colors.green[700],
+                    ),
+                    label:
+                        Text(_formatGeneralBias(widget.generalBias)),
+                    backgroundColor: widget.generalBias == 'BIASED'
+                        ? Colors.orange.withAlpha(40)
+                        : Colors.green.withAlpha(40),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            _buildBiasBreakdownCard(),
+            const SizedBox(height: 12),
+            _buildSpectrumBar(),
+            const SizedBox(height: 12),
+            _buildBiasExplanationSection(),
+            if (widget.biasExplanation != null &&
+                widget.biasExplanation!.isNotEmpty)
+              const SizedBox(height: 12),
+            _buildCredibilityCard(),
+            const SizedBox(height: 8),
+            _buildFactCheckSection(),
+            const SizedBox(height: 16),
+            if (widget.content != null && widget.content!.isNotEmpty)
+              _buildArticleContentCard()
+            else
+              Center(
+                child: Column(
+                  children: [
+                    const Icon(Icons.article_outlined,
+                        size: 64, color: Colors.grey),
+                    const SizedBox(height: 16),
+                    Text('Content not yet available.',
+                        style: TextStyle(color: Colors.grey[500])),
+                  ],
+                ),
+              ),
+            const SizedBox(height: 24),
+          ],
         ),
       ),
     );

@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 
 // ── Bias (source-level, numeric score from sources table) ────────────────────
-// Stronger blue for left, teal for centre (fully distinct from both sides),
-// stronger red for right.
+// Three buckets only: Left Wing, Centre, Right Wing. No Centre-Left or
+// Centre-Right. Stronger blue for left, teal for centre (fully distinct from
+// both sides), stronger red for right.
 
 Color getBiasColor(double? score) {
   if (score == null) return Colors.grey.shade500;
@@ -21,16 +22,11 @@ String getBiasLabelShort(double? score) {
 String getBiasLabel(double? score) {
   if (score == null) return 'Unknown';
   if (score > 0.3) return 'Right Wing';
-  if (score > 0.1) return 'Centre Right';
-  if (score >= -0.1) return 'Centre';
-  if (score >= -0.3) return 'Centre Left';
-  return 'Left Wing';
+  if (score < -0.3) return 'Left Wing';
+  return 'Centre';
 }
 
 // ── Political bias (article-level, RoBERTa string label) ─────────────────────
-// Backend returns 'LEFT', 'CENTER', 'RIGHT' from the fine-tuned RoBERTa
-// classifier operating on the article's own text. Colour palette deliberately
-// matches the source-level bias palette so users can compare them visually.
 
 Color getPoliticalBiasColor(String? label) {
   if (label == null || label.isEmpty) return Colors.grey.shade500;
@@ -50,8 +46,6 @@ String getPoliticalBiasLabel(String? label) {
   return 'Unknown';
 }
 
-// Map a RoBERTa label to a numeric score so it can feed components that
-// expect a [-1, +1] value (e.g. weighted averages on the bias profile).
 double? politicalBiasToScore(String? label) {
   if (label == null || label.isEmpty) return null;
   final upper = label.toUpperCase();
@@ -62,8 +56,6 @@ double? politicalBiasToScore(String? label) {
 }
 
 // ── Sentiment ─────────────────────────────────────────────────────────────────
-// Strong green for positive, deep orange for negative (distinct from red/right),
-// amber for neutral.
 
 Color getSentimentColor(double? score) {
   if (score == null) return Colors.grey.shade500;
