@@ -7,6 +7,7 @@ import 'package:fl_chart/fl_chart.dart';
 import '../models/bias_profile.dart';
 import '../services/api_service.dart';
 
+/// Profile screen rendering the user's personal bias breakdown.
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
 
@@ -23,6 +24,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   BiasProfile? _profile;
   bool _loading = true;
   String? _errorMessage;
+  // Index of the currently tapped bar in the sources chart, or -1 if none.
   int _touchedBarIndex = -1;
 
   @override
@@ -71,10 +73,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
             color: Colors.blue[800]),
       );
 
-  // ── Mode helpers ───────────────────────────────────────────────────────────
-  // Stat cards and summary row use COUNTS (mode), not time-weighted averages,
-  // so the stat card, pie chart, and detailed breakdown always agree on which
-  // leaning dominates the user's reading. Tie-break order: Left > Right >
+  // Mode helpers.
+  //
+  // Stat cards and the summary row use COUNTS (mode), not time-weighted
+  // averages, so the stat card, pie chart, and detailed breakdown always
+  // agree on which leaning dominates. Tie-break order: Left > Right >
   // Centre, matching the dominant colour of the segmented bar.
 
   String _modeLabel(int left, int center, int right) {
@@ -118,6 +121,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       );
     }
 
+    // Empty state: no reading history yet.
     if (_profile == null || _profile!.isEmpty) {
       return Scaffold(
         appBar: AppBar(
@@ -198,8 +202,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  // ── User header ────────────────────────────────────────────────────────────
-
+  // User header card showing avatar, name, and quick summary stats.
   Widget _buildUserHeader() {
     final name = _user?.displayName ?? 'Reader';
     final initial = name[0].toUpperCase();
@@ -298,12 +301,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
     ]);
   }
 
-  // ── Four stat cards (2 × 2) ────────────────────────────────────────────────
-
+  // Four stat cards arranged in a 2x2 grid.
   Widget _buildStatCards() {
     final p = _profile!;
 
-    // Outlet Political Bias — COUNTS (mode), matches pie and breakdown.
+    // Outlet political bias uses COUNTS (mode) to match the pie and breakdown.
     final outletTotal = p.leftCount + p.centerCount + p.rightCount;
     final hasOutletBias = outletTotal > 0;
     final outletBiasLabel = !hasOutletBias
@@ -313,7 +315,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ? Colors.grey
         : _modeColor(p.leftCount, p.centerCount, p.rightCount);
 
-    // Article Political Bias — COUNTS (mode), matches pie and breakdown.
+    // Article political bias also uses COUNTS (mode).
     final articleTotal = p.articleLeftCount +
         p.articleCenterCount +
         p.articleRightCount;
@@ -327,9 +329,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
         : _modeColor(p.articleLeftCount, p.articleCenterCount,
             p.articleRightCount);
 
-    // General Bias — snapshotted BIASED/UNBIASED counts from
-    // reading_history.general_bias. Majority wins; tie favours
-    // unbiased for the user-friendly default.
+    // General bias is a snapshot of BIASED/UNBIASED counts from
+    // reading_history.general_bias. Majority wins; ties favour unbiased.
     final hasGeneralBias = p.biasedCount + p.unbiasedCount > 0;
     final isBiased = p.biasedCount > p.unbiasedCount;
     final generalBiasLabel =
@@ -345,7 +346,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ? Icons.warning_amber
             : Icons.check_circle_outline;
 
-    // Sentiment
+    // Sentiment card.
     final sentimentColor = p.sentimentLabel == 'Positive'
         ? Colors.green[700]!
         : p.sentimentLabel == 'Negative'
@@ -417,8 +418,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  // ── Pie charts ─────────────────────────────────────────────────────────────
+  // Pie charts.
 
+  /// Rounds three floats to integers that sum to exactly 100, distributing
+  /// remainders by largest fractional part. Keeps pie labels consistent.
   List<int> _roundToHundred(double a, double b, double c) {
     final floors = [a.floor(), b.floor(), c.floor()];
     final remainders = [a - floors[0], b - floors[1], c - floors[2]];
@@ -539,8 +542,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
     ]);
   }
 
-  // ── Source bar chart ───────────────────────────────────────────────────────
+  // Source bar chart.
 
+  // Palette cycles deterministically by index so bar colours are stable
+  // across rebuilds.
   Color _sourceBarColor(int index) {
     final palette = [
       Colors.blue[800]!,
@@ -559,6 +564,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     return palette[index % palette.length];
   }
 
+  // Wraps a multi-word source name onto two lines for the axis label.
   String _wrapSourceName(String name) {
     final words = name.split(' ');
     if (words.length <= 2) return words.join('\n');
@@ -569,6 +575,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Widget _buildSourceBarChart() {
     final raw = _profile!.sourceBreakdown;
+    // Fall back to the simple "most read source" tile if no breakdown.
     if (raw == null || raw.isEmpty) {
       return _buildDetailCard(
           'Most read source',
@@ -577,6 +584,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           Icons.bookmark);
     }
 
+    // Sort by descending count and keep the top 12 sources.
     final sorted = raw.entries.toList()
       ..sort((a, b) => b.value.compareTo(a.value));
     final sources = sorted.take(12).toList();
@@ -598,6 +606,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               SizedBox(
                 height: 270,
                 child: Row(children: [
+                  // Fixed left axis that stays put while the main chart scrolls.
                   SizedBox(
                     width: 28,
                     child: BarChart(BarChartData(
@@ -808,7 +817,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
-  // ── Detailed breakdown ─────────────────────────────────────────────────────
+  // Detailed breakdown cards.
 
   Widget _buildDetailedBreakdown() {
     final p = _profile!;
@@ -819,7 +828,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final generalTotal = p.biasedCount + p.unbiasedCount;
 
     return Column(children: [
-      // ── Outlet Political Bias ──────────────────────────────────────
+      // Outlet political bias card.
       Card(
         elevation: 2,
         shape: RoundedRectangleBorder(
@@ -864,6 +873,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           color: Colors.red[800]!,
                           icon: Icons.east)),
                 ]),
+                // Segmented bar summarises the three leaning counts visually.
                 if (outletTotal > 0) ...[
                   const SizedBox(height: 14),
                   ClipRRect(
@@ -895,7 +905,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       ),
       const SizedBox(height: 12),
 
-      // ── Article Political Bias ─────────────────────────────────────
+      // Article political bias card.
       Card(
         elevation: 2,
         shape: RoundedRectangleBorder(
@@ -983,7 +993,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       ),
       const SizedBox(height: 12),
 
-      // ── General Bias (BIASED / UNBIASED) ───────────────────────────
+      // General bias card (BIASED vs UNBIASED).
       Card(
         elevation: 2,
         shape: RoundedRectangleBorder(
@@ -1046,7 +1056,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       ),
       const SizedBox(height: 12),
 
-      // ── Sentiment ──────────────────────────────────────────────────
+      // Sentiment card (POSITIVE vs NEGATIVE).
       Card(
         elevation: 2,
         shape: RoundedRectangleBorder(
@@ -1109,7 +1119,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       ),
       const SizedBox(height: 12),
 
-      // ── Summary row — uses COUNTS to match everything above ────────
+      // Summary row uses COUNTS to match everything above.
       Card(
         elevation: 2,
         shape: RoundedRectangleBorder(
@@ -1163,6 +1173,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     ]);
   }
 
+  // Individual count/percent tile for the leaning breakdown cards.
   Widget _buildLeaningTile({
     required String label,
     required int count,
@@ -1273,6 +1284,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         margin: const EdgeInsets.symmetric(horizontal: 4));
   }
 
+  // Fallback detail tile used when the source bar chart has no data.
   Widget _buildDetailCard(
       String label, String value, Color color, IconData icon) {
     return Card(

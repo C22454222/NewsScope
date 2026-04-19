@@ -1,6 +1,7 @@
 """
-NewsScope Sources API Router.
-Flake8: 0 errors/warnings.
+NewsScope sources API router.
+
+Provides endpoints for listing and adding news source records.
 """
 
 from fastapi import APIRouter
@@ -8,16 +9,16 @@ from fastapi import APIRouter
 from app.db.supabase import supabase
 from app.schemas import SourceBase
 
-
 router = APIRouter()
 
 
 @router.get("")
 def get_sources() -> list:
     """
-    Return the list of configured news sources.
+    Return all configured news sources.
 
-    Used to power filter UIs and source diagnostics.
+    Used to power source filter UIs and source-level diagnostics
+    in the Flutter client.
     """
     return supabase.table("sources").select("*").execute().data
 
@@ -27,7 +28,8 @@ def add_source(source: SourceBase) -> list:
     """
     Add a new news source record.
 
-    Uses model_dump() to convert the Pydantic model to a dict.
+    Converts the Pydantic model to a dict via model_dump() before
+    inserting so only declared schema fields are written.
     """
     return (
         supabase.table("sources")

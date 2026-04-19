@@ -1,3 +1,4 @@
+// lib/screens/article_detail_screen.dart
 import 'dart:async';
 import 'dart:developer' as developer;
 
@@ -7,6 +8,12 @@ import '../models/article.dart';
 import '../services/api_service.dart';
 import '../utils/score_helpers.dart';
 
+/// Displays full article content alongside bias, credibility, and fact-check data.
+///
+/// Tracks reading time via a 1-second periodic timer. A ping is sent at
+/// [_minTrackSeconds] and again on dispose/background so the final elapsed
+/// time is always recorded. The backend upserts on (user_id, article_id),
+/// so repeated pings update rather than duplicate.
 class ArticleDetailScreen extends StatefulWidget {
   final String id;
   final String title;
@@ -47,6 +54,7 @@ class ArticleDetailScreen extends StatefulWidget {
     this.politicalBiasScore,
   });
 
+  /// Convenience constructor that populates all fields from an [Article] model.
   factory ArticleDetailScreen.fromArticle(Article article) {
     return ArticleDetailScreen(
       id: article.id,
@@ -84,7 +92,7 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen>
   bool _factCheckLoading = false;
   Map<String, dynamic>? _loadedFactChecks;
 
-  // Minimum seconds spent before we send a tracking ping.
+  // Minimum seconds before a tracking ping is sent.
   // Backend upserts on (user_id, article_id) so repeated pings update
   // rather than duplicate.
   static const int _minTrackSeconds = 5;
@@ -95,8 +103,8 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen>
     WidgetsBinding.instance.addObserver(this);
     _loadedFactChecks = widget.factChecks;
 
-    // Tick once a second so the 5s auto-track fires precisely at 5s
-    // rather than waiting for the next 5s boundary.
+    // Tick once per second so the auto-track fires precisely at 5s
+    // rather than waiting for the next interval boundary.
     _trackingTimer = Timer.periodic(
       const Duration(seconds: 1),
       (_) {
@@ -113,8 +121,7 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen>
   void dispose() {
     _trackingTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
-    // Always send final ping on screen exit — upsert means this
-    // overwrites earlier pings with the true total time.
+    // Final ping on exit overwrites earlier pings with the true total time.
     _sendTrackingPing();
     super.dispose();
   }
@@ -122,8 +129,8 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
-    // User backgrounded or paused the app without leaving the article.
-    // Send a ping so their time is recorded even if they never return.
+    // Send a ping when the app is backgrounded so time is recorded
+    // even if the user never returns to this screen.
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.inactive ||
         state == AppLifecycleState.detached) {
@@ -172,6 +179,7 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen>
     );
   }
 
+  // Maps a bias score in [-1, 1] to a [0, 1] position on the spectrum bar.
   double _biasScoreToPosition(double? score) {
     if (score == null) return 0.5;
     return ((score.clamp(-1.0, 1.0) + 1.0) / 2.0);
@@ -198,7 +206,7 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen>
     return lower[0].toUpperCase() + lower.substring(1);
   }
 
-  // ── Bias Breakdown card ────────────────────────────────────────────────────
+  // Bias breakdown card
 
   Widget _buildBiasBreakdownCard() {
     final sourceLabel = getBiasLabelShort(widget.biasScore);
@@ -207,6 +215,7 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen>
     final articleLabel = getPoliticalBiasLabel(widget.politicalBias);
     final articleColor = getPoliticalBiasColor(widget.politicalBias);
 
+    // Flag when the RoBERTa article label differs from the outlet rating.
     bool diverges = false;
     if (widget.politicalBias != null && widget.biasScore != null) {
       diverges =
@@ -287,7 +296,7 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen>
             Text(
               diverges
                   ? 'The article\'s text was classified independently '
-                      'of its outlet — this piece reads differently to '
+                      'of its outlet -- this piece reads differently to '
                       'the outlet\'s usual leaning.'
                   : 'The outlet rating reflects the publisher\'s '
                       'typical leaning; the article-level label is '
@@ -439,7 +448,7 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen>
             ),
             const SizedBox(height: 8),
             Text(
-              'Filled = pushes toward label  ·  Grey = pushes against',
+              'Filled = pushes toward label  *  Grey = pushes against',
               style: TextStyle(color: Colors.grey[400], fontSize: 10),
             ),
           ],
@@ -501,6 +510,7 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen>
                     Stack(
                       clipBehavior: Clip.none,
                       children: [
+                        // Gradient bar represents the political spectrum left to right.
                         ClipRRect(
                           borderRadius: BorderRadius.circular(8),
                           child: Container(
@@ -518,6 +528,7 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen>
                             ),
                           ),
                         ),
+                        // Marker circle positioned proportionally to the bias score.
                         Positioned(
                           left: (barWidth * pos - markerSize / 2)
                               .clamp(0, barWidth - markerSize),
@@ -709,7 +720,7 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen>
                   style: const TextStyle(fontWeight: FontWeight.w600)),
               if (speaker != null && speaker != 'N/A') ...[
                 const SizedBox(width: 8),
-                Text('— $speaker',
+                Text('- $speaker',
                     style: TextStyle(
                         color: Colors.grey[600], fontSize: 12)),
               ],
@@ -819,6 +830,7 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen>
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Source name and category chips
             Wrap(
               spacing: 8,
               runSpacing: 8,
@@ -868,6 +880,7 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen>
                   ?.copyWith(fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 16),
+            // Bias, sentiment, and general bias summary chips
             Wrap(
               spacing: 8,
               runSpacing: 8,
@@ -945,6 +958,7 @@ class _ArticleDetailScreenState extends State<ArticleDetailScreen>
             const SizedBox(height: 8),
             _buildFactCheckSection(),
             const SizedBox(height: 16),
+            // Article body or fallback empty state
             if (widget.content != null && widget.content!.isNotEmpty)
               _buildArticleContentCard()
             else

@@ -1,32 +1,32 @@
 /// NewsScope Article model.
 ///
-/// Fields match the backend ArticleResponse schema and the Supabase
-/// articles table exactly. Every column in the DB is represented here.
+/// Fields mirror the backend ArticleResponse Pydantic schema and the
+/// Supabase articles table. Every DB column has a corresponding field.
 ///
-/// Field mapping (DB column → Dart field):
-///   id                    → id
-///   source                → source
-///   source_id             → sourceId
-///   url                   → url
-///   title                 → title
-///   content               → content
-///   bias_score            → biasScore        (source-level [-1,+1])
-///   bias_intensity        → biasIntensity
-///   sentiment_score       → sentimentScore
-///   published_at          → publishedAt
-///   created_at            → createdAt
-///   updated_at            → updatedAt
-///   category              → category
-///   general_bias          → generalBias
-///   general_bias_score    → generalBiasScore
-///   political_bias        → politicalBias    (RoBERTa article-level label)
-///   political_bias_score  → politicalBiasScore
-///   credibility_score     → credibilityScore
-///   fact_checks           → factChecks       (JSONB)
-///   claims_checked        → claimsChecked
-///   credibility_reason    → credibilityReason
-///   credibility_updated_at→ credibilityUpdatedAt
-///   bias_explanation      → biasExplanation  (LIME JSONB list)
+/// DB column to Dart field mapping:
+///   id                     -> id
+///   source                 -> source
+///   source_id              -> sourceId
+///   url                    -> url
+///   title                  -> title
+///   content                -> content
+///   bias_score             -> biasScore        (source-level [-1, +1])
+///   bias_intensity         -> biasIntensity
+///   sentiment_score        -> sentimentScore
+///   published_at           -> publishedAt
+///   created_at             -> createdAt
+///   updated_at             -> updatedAt
+///   category               -> category
+///   general_bias           -> generalBias
+///   general_bias_score     -> generalBiasScore
+///   political_bias         -> politicalBias    (RoBERTa article-level)
+///   political_bias_score   -> politicalBiasScore
+///   credibility_score      -> credibilityScore
+///   fact_checks            -> factChecks       (JSONB)
+///   claims_checked         -> claimsChecked
+///   credibility_reason     -> credibilityReason
+///   credibility_updated_at -> credibilityUpdatedAt
+///   bias_explanation       -> biasExplanation  (LIME JSONB list)
 class Article {
   final String id;
   final String? sourceId;
@@ -47,17 +47,17 @@ class Article {
   final String? category;
   final String? generalBias;
   final double? generalBiasScore;
-  final String? politicalBias;           // added: DB political_bias column
-  final double? politicalBiasScore;      // added: DB political_bias_score column
+  final String? politicalBias;
+  final double? politicalBiasScore;
 
-  // Credibility + fact-checking
+  // Credibility and fact-checking
   final double? credibilityScore;
   final Map<String, dynamic>? factChecks;
   final int? claimsChecked;
   final String? credibilityReason;
   final DateTime? credibilityUpdatedAt;
 
-  // LIME bias explainability
+  // LIME bias explainability token weights
   final List<Map<String, dynamic>>? biasExplanation;
 
   Article({
@@ -90,7 +90,7 @@ class Article {
     return Article(
       id: json['id']?.toString() ?? '',
       sourceId: json['source_id']?.toString(),
-      // source may arrive as a nested object from some endpoints
+      // source may arrive as a nested object from some endpoints.
       source: json['source'] is Map
           ? (json['source']['name'] ?? 'Unknown Source')
           : (json['source']?.toString() ?? 'Unknown Source'),
@@ -155,7 +155,7 @@ class Article {
     };
   }
 
-  // ── Helpers ────────────────────────────────────────────────────────────────
+  // Private parsing helpers used by fromJson.
 
   static DateTime? _parseDate(dynamic value) {
     if (value == null) return null;

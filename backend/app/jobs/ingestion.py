@@ -1,36 +1,4 @@
-"""
-NewsScope ingestion pipeline.
-
-CHANGES FROM v3:
-
-1. EVEN SOURCE SPREAD — all 12 sources fetched dynamically:
-   Previously AP News was the only NewsAPI source alongside 8 RSS
-   feeds. Now all 12 sources have their own scraper or feed, and
-   ingestion caps each source at _PER_SOURCE_LIMIT articles per
-   cycle so no single source dominates the feed.
-
-2. PER-SOURCE SCRAPERS — dedicated scrapers for all 12 sources:
-   BBC, CNN, DW, Fox, AP, GB News were already present. Added
-   dedicated scrapers for RTÉ, The Guardian, Irish Times,
-   The Independent, Sky News, and NPR.
-
-3. RSS FEED REBALANCING:
-   Each RSS feed capped at _RSS_ENTRY_LIMIT (30) entries. This
-   prevents a prolific feed (DW publishes 100+ daily) from crowding
-   out smaller sources in the database query window.
-
-4. NEWSAPI SOURCES ADJUSTED:
-   Now fetches: CNN, Fox News, BBC News, AP News, NPR.
-   NPR added since its RSS feed can be unreliable.
-
-5. CATEGORY PASSED THROUGH FROM normalize_article:
-   infer_category() is called at normalisation time (with URL + title)
-   and content is used to refine on re-infer if category is missing.
-
-6. _scrape_one() — article content re-infer uses content argument.
-
-Flake8: 0 errors/warnings.
-"""
+"""NewsScope ingestion pipeline."""
 
 import asyncio
 import gc
@@ -53,9 +21,9 @@ from app.core.config import settings
 from app.db.supabase import supabase
 
 
-# ── Constants ─────────────────────────────────────────────────────────────────
+# Constants
 
-# NewsAPI sources — 5 sources × 24 cycles = 120/day, within free tier.
+# 5 sources x 24 cycles = 120 requests/day, within the free tier.
 NEWSAPI_SOURCES = [
     "cnn",
     "fox-news",
@@ -64,7 +32,7 @@ NEWSAPI_SOURCES = [
     "npr",
 ]
 
-# RSS feed → canonical source name.
+# Maps RSS feed URLs to canonical source names.
 # Target: 30 articles per source per cycle for balanced coverage.
 FEED_NAME_MAP: Dict[str, str] = {
     "https://www.theguardian.com/uk/rss": "The Guardian",
@@ -79,8 +47,7 @@ FEED_NAME_MAP: Dict[str, str] = {
     "https://www.npr.org/rss/rss.php?id=1001": "NPR",
 }
 
-# Supplementary feeds for broader coverage per source.
-# These are merged with the primary feed and deduplicated by URL.
+# Additional feeds per source, merged and deduplicated by URL.
 SUPPLEMENTARY_FEEDS: Dict[str, List[str]] = {
     "The Guardian": [
         "https://www.theguardian.com/world/rss",
@@ -119,7 +86,8 @@ SUPPLEMENTARY_FEEDS: Dict[str, List[str]] = {
     ],
 }
 
-# ── Tuning ────────────────────────────────────────────────────────────────────
+
+# Tuning
 
 _SCRAPE_WORKERS = 4
 _INSERT_CHUNK_SIZE = 5
@@ -127,10 +95,10 @@ _FACTCHECK_CONCURRENCY = 1
 _FACTCHECK_DELAY_SECONDS = 600
 _NEWSAPI_PAGE_SIZE = 100
 
-# Articles per source per cycle — prevents one source dominating.
+# Caps articles per source per cycle to prevent any one source dominating.
 _PER_SOURCE_LIMIT = 30
 
-# RSS entries read per feed (primary feeds only; supplementary = 15 each).
+# Primary feeds are capped at 20 entries; supplementary feeds at 15.
 _RSS_ENTRY_LIMIT = 20
 _RSS_SUPPLEMENTARY_LIMIT = 15
 
@@ -148,7 +116,8 @@ _BLOCKED_URL_SUFFIXES = (
 
 _main_event_loop: Optional[asyncio.AbstractEventLoop] = None
 
-# ── Boilerplate regexes ───────────────────────────────────────────────────────
+
+# Compiled regexes for stripping source-specific boilerplate
 
 _INDEPENDENT_PREAMBLE_RE = re.compile(
     r"Your support helps us to tell the story.*?Read more\s*",
@@ -163,7 +132,8 @@ _FOX_LISTEN_BANNER_RE = re.compile(
     re.IGNORECASE,
 )
 
-# ── Source domain dispatch ────────────────────────────────────────────────────
+
+# Maps URL domains to canonical source names for scraper dispatch
 
 _SOURCE_DISPATCH: Dict[str, str] = {
     "cnn.com": "CNN",
@@ -194,7 +164,7 @@ def _detect_source_from_url(url: str) -> Optional[str]:
     return None
 
 
-# ── URL validation ─────────────────────────────────────────────────────────────
+# URL validation
 
 
 def _is_valid_article_url(url: str) -> bool:
@@ -204,7 +174,7 @@ def _is_valid_article_url(url: str) -> bool:
     return not any(path.endswith(suffix) for suffix in _BLOCKED_URL_SUFFIXES)
 
 
-# ── Age gate ───────────────────────────────────────────────────────────────────
+# Age gate
 
 
 def _is_within_age_limit(published_at: Optional[str]) -> bool:
@@ -222,7 +192,7 @@ def _is_within_age_limit(published_at: Optional[str]) -> bool:
         return True
 
 
-# ── Content validation ────────────────────────────────────────────────────────
+# Content validation
 
 
 def _is_readable_content(text: str) -> bool:
@@ -233,7 +203,7 @@ def _is_readable_content(text: str) -> bool:
     return (printable / len(sample)) > 0.85
 
 
-# ── Event loop bridge ─────────────────────────────────────────────────────────
+# Event loop bridge
 
 
 def set_main_event_loop(loop: asyncio.AbstractEventLoop) -> None:
@@ -241,13 +211,13 @@ def set_main_event_loop(loop: asyncio.AbstractEventLoop) -> None:
     _main_event_loop = loop
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# Helpers
 
 
 def _get_rss_feeds() -> List[str]:
     raw = os.getenv("RSS_FEEDS", "")
     env_feeds = [s.strip() for s in raw.split(",") if s.strip()]
-    # Fall back to FEED_NAME_MAP keys if env var not set
+    # Fall back to FEED_NAME_MAP keys if the env var is not set.
     return env_feeds if env_feeds else list(FEED_NAME_MAP.keys())
 
 
@@ -279,9 +249,8 @@ def normalize_article(
     }
 
 
-# Normalise variant source names to the canonical 12.
-# RSS feed titles and NewsAPI can return non-canonical names that
-# would otherwise create duplicate rows in the sources table.
+# Variant source names from RSS and NewsAPI mapped to the canonical 12,
+# preventing duplicate rows in the sources table.
 _CANONICAL_NAMES: Dict[str, str] = {
     "UK News - The latest headlines from the UK | Sky News": "Sky News",
     "NPR Topics: News": "NPR",
@@ -323,7 +292,8 @@ def sanitize_for_postgres(text: str) -> str:
     text = text.replace("\x00", "").replace("\u0000", "")
     text = re.sub(r"[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f]", "", text)
     text = re.sub(r"[\ud800-\udfff]", "", text)
-    text = text.encode("utf-8", errors="ignore").decode("utf-8", errors="ignore")
+    text = text.encode("utf-8", errors="ignore")
+    text = text.decode("utf-8", errors="ignore")
     return text
 
 
@@ -361,7 +331,7 @@ def clean_text(text: str) -> str:
     return text.strip()
 
 
-# ── Shared scraping helper ────────────────────────────────────────────────────
+# Shared scraping helpers
 
 
 def _get_soup(
@@ -415,7 +385,7 @@ def _paragraphs_from(container: Any, min_len: int = 30) -> List[str]:
     ]
 
 
-# ── Source-specific scrapers ──────────────────────────────────────────────────
+# Source-specific scrapers
 
 
 def _scrape_bbc(url: str) -> Optional[str]:
@@ -426,9 +396,13 @@ def _scrape_bbc(url: str) -> Optional[str]:
     _strip_noise(soup)
 
     paragraphs: List[str] = []
-    wanted_components = {"text-block", "crosshead-block", "unordered-list-block"}
+    wanted_components = {
+        "text-block", "crosshead-block", "unordered-list-block"
+    }
 
-    article_body = soup.find(attrs={"data-component": "article-body-component"})
+    article_body = soup.find(
+        attrs={"data-component": "article-body-component"}
+    )
     if article_body:
         for block in article_body.find_all(attrs={"data-component": True}):
             if block.get("data-component") not in wanted_components:
@@ -514,9 +488,15 @@ def _scrape_cnn(url: str) -> Optional[str]:
     if not paragraphs:
         article_tag = soup.find("article")
         if article_tag:
-            children = [c for c in article_tag.children if hasattr(c, "get_text")]
+            children = [
+                c for c in article_tag.children
+                if hasattr(c, "get_text")
+            ]
             if children:
-                best_child = max(children, key=lambda c: len(c.get_text(strip=True)))
+                best_child = max(
+                    children,
+                    key=lambda c: len(c.get_text(strip=True)),
+                )
                 paragraphs = _paragraphs_from(best_child)
 
     soup.decompose()
@@ -528,7 +508,7 @@ def _scrape_cnn(url: str) -> Optional[str]:
         if len(cleaned) > 150:
             return cleaned
 
-    # Final fallback: newspaper3k extraction
+    # Fallback: newspaper3k extraction.
     try:
         na = Article(url)
         na.download()
@@ -707,7 +687,10 @@ def _scrape_gb_news(url: str) -> Optional[str]:
     _strip_noise(soup)
 
     for tag in soup.find_all(
-        class_=re.compile(r"share|social|tag|author|byline|related|trending", re.IGNORECASE)
+        class_=re.compile(
+            r"share|social|tag|author|byline|related|trending",
+            re.IGNORECASE,
+        )
     ):
         tag.decompose()
 
@@ -775,9 +758,11 @@ def _scrape_rte(url: str) -> Optional[str]:
         except Exception:
             continue
 
-    # RTÉ sometimes puts content in <div class="summary">
+    # RTÉ sometimes puts the lead content in a summary div.
     if not paragraphs:
-        summary = soup.find(class_=re.compile(r"summary|lead|intro", re.IGNORECASE))
+        summary = soup.find(
+            class_=re.compile(r"summary|lead|intro", re.IGNORECASE)
+        )
         if summary:
             t = summary.get_text(separator=" ", strip=True)
             if len(t) > 100:
@@ -801,7 +786,6 @@ def _scrape_guardian(url: str) -> Optional[str]:
 
     _strip_noise(soup)
 
-    # Guardian structured article body
     guardian_selectors = [
         "[data-gu-name='body']",
         "[class*='article-body-commercial-selector']",
@@ -842,7 +826,7 @@ def _scrape_irish_times(url: str) -> Optional[str]:
 
     _strip_noise(soup)
 
-    # Remove paywall and subscription prompts
+    # Strip paywall and subscription elements.
     for tag in soup.find_all(
         class_=re.compile(r"paywall|subscriber|premium|promo", re.IGNORECASE)
     ):
@@ -878,7 +862,7 @@ def _scrape_irish_times(url: str) -> Optional[str]:
         if len(cleaned) > 150:
             return cleaned
 
-    # Final fallback: newspaper3k extraction
+    # Fallback: newspaper3k extraction.
     try:
         na = Article(url)
         na.download()
@@ -930,7 +914,6 @@ def _scrape_independent(url: str) -> Optional[str]:
 
     if paragraphs:
         content = "\n\n".join(paragraphs)
-        # Remove Independent preamble
         content = _INDEPENDENT_PREAMBLE_RE.sub("", content)
         cleaned = clean_text(content)
         if len(cleaned) > 150:
@@ -976,7 +959,7 @@ def _scrape_sky_news(url: str) -> Optional[str]:
         if len(cleaned) > 150:
             return cleaned
 
-    # Final fallback: newspaper3k extraction
+    # Fallback: newspaper3k extraction.
     try:
         na = Article(url)
         na.download()
@@ -1029,7 +1012,7 @@ def _scrape_npr(url: str) -> Optional[str]:
     return None
 
 
-# ── Generic scraping tiers ────────────────────────────────────────────────────
+# Generic scraping tiers
 
 
 def fetch_content_newspaper(url: str) -> Optional[str]:
@@ -1064,7 +1047,9 @@ def fetch_content_beautifulsoup(url: str) -> Optional[str]:
             "Upgrade-Insecure-Requests": "1",
             "Referer": "https://www.google.com/",
         }
-        response = requests.get(url, headers=headers, timeout=15, allow_redirects=True)
+        response = requests.get(
+            url, headers=headers, timeout=15, allow_redirects=True
+        )
         response.raise_for_status()
         response.encoding = "utf-8"
         decoded = response.text
@@ -1163,7 +1148,9 @@ def fetch_content_beautifulsoup(url: str) -> Optional[str]:
 def fetch_content_aggressive(url: str) -> Optional[str]:
     try:
         headers = {"User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1)"}
-        response = requests.get(url, headers=headers, timeout=15, allow_redirects=True)
+        response = requests.get(
+            url, headers=headers, timeout=15, allow_redirects=True
+        )
         response.raise_for_status()
         response.encoding = "utf-8"
         decoded = response.text
@@ -1213,7 +1200,8 @@ def fetch_content_with_retry(url: str, max_retries: int = 2) -> Optional[str]:
                 "Pragma": "no-cache",
             }
             response = requests.get(
-                url, headers=headers, timeout=20, allow_redirects=True, verify=True
+                url, headers=headers, timeout=20, allow_redirects=True,
+                verify=True
             )
             if response.status_code == 429:
                 response.close()
@@ -1229,7 +1217,9 @@ def fetch_content_with_retry(url: str, max_retries: int = 2) -> Optional[str]:
             response.close()
             del response
 
-            for unwanted in soup(["script", "style", "head", "title", "meta", "link"]):
+            for unwanted in soup(
+                ["script", "style", "head", "title", "meta", "link"]
+            ):
                 unwanted.decompose()
 
             text = soup.get_text(separator=" ", strip=True)
@@ -1265,7 +1255,9 @@ def fetch_content_title_fallback(title: str, source: str) -> str:
         f"For the complete article, please visit the source website."
     )
     while len(fallback_text) < 200:
-        fallback_text += f" Additional context from {source} regarding {title}."
+        fallback_text += (
+            f" Additional context from {source} regarding {title}."
+        )
     return clean_text(fallback_text)
 
 
@@ -1273,12 +1265,12 @@ def fetch_content(url: str, title: str = "", source: str = "") -> str:
     """
     7-tier guaranteed scraping strategy. Never returns None.
 
-    Tier 0: Source-specific scraper for all 12 known sources
-    Tier 1: newspaper3k
-    Tier 2: BeautifulSoup
-    Tier 3: Aggressive
-    Tier 4: Retry backoff
-    Tier 5: Title fallback (100% guarantee)
+    Tier 0: Source-specific scraper for all 12 known sources.
+    Tier 1: newspaper3k.
+    Tier 2: BeautifulSoup generic extraction.
+    Tier 3: Aggressive full-page text dump.
+    Tier 4: Retry with exponential backoff.
+    Tier 5: Title-based placeholder (guaranteed non-None).
     """
     detected_source = _detect_source_from_url(url)
 
@@ -1333,7 +1325,7 @@ def fetch_content(url: str, title: str = "", source: str = "") -> str:
     return fetch_content_title_fallback(title, source)
 
 
-# ── Worker ────────────────────────────────────────────────────────────────────
+# Scrape worker
 
 
 def _scrape_one(article: Dict[str, Any]) -> Dict[str, Any]:
@@ -1347,12 +1339,16 @@ def _scrape_one(article: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     if not _is_readable_content(content):
-        print(f"  Binary content detected, using fallback: {article.get('url', '?')[:80]}")
-        content = fetch_content_title_fallback(title_val, source_name_val or "")
+        url_short = article.get("url", "?")[:80]
+        print(f"  Binary content detected, using fallback: {url_short}")
+        content = fetch_content_title_fallback(
+            title_val, source_name_val or ""
+        )
 
     category = article.get("category")
     if not category:
-        print(f"  Category missing — re-inferring: {article.get('url', '?')[:80]}")
+        url_short = article.get("url", "?")[:80]
+        print(f"  Category missing, re-inferring: {url_short}")
         category = infer_category(
             article.get("url"),
             article.get("title"),
@@ -1390,7 +1386,7 @@ def _scrape_one(article: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
-# ── Fact-check bridge ─────────────────────────────────────────────────────────
+# Fact-check bridge
 
 
 async def factcheck_batch(article_ids: List[str]) -> None:
@@ -1441,14 +1437,14 @@ async def _delayed_factcheck(article_ids: List[str]) -> None:
 
 def _schedule_factcheck(article_ids: List[str]) -> None:
     if _main_event_loop is None or not _main_event_loop.is_running():
-        print("Fact-check skipped — no running event loop captured.")
+        print("Fact-check skipped: no running event loop captured.")
         return
     asyncio.run_coroutine_threadsafe(
         _delayed_factcheck(article_ids), _main_event_loop
     )
 
 
-# ── Batch insert ──────────────────────────────────────────────────────────────
+# Batch insert
 
 
 def insert_articles_batch(articles: List[Dict[str, Any]]) -> List[str]:
@@ -1570,15 +1566,15 @@ def insert_articles_batch(articles: List[Dict[str, Any]]) -> List[str]:
     return all_new_ids
 
 
-# ── Fetchers ──────────────────────────────────────────────────────────────────
+# Fetchers
 
 
 def _cap_by_source(
     articles: List[Dict[str, Any]], limit: int
 ) -> List[Dict[str, Any]]:
     """
-    Enforce _PER_SOURCE_LIMIT per source so no single outlet dominates.
-    Articles are already in recency order from their feeds.
+    Enforce a per-source article cap so no single outlet dominates.
+    Articles are expected to already be in recency order from their feeds.
     """
     counts: Dict[str, int] = {}
     result: List[Dict[str, Any]] = []
@@ -1591,10 +1587,7 @@ def _cap_by_source(
 
 
 def fetch_newsapi() -> List[Dict[str, Any]]:
-    """
-    Fetch from NewsAPI — CNN, Fox News, BBC News, AP News, NPR.
-    5 sources × 24 cycles = 120/day, within free tier.
-    """
+    """Fetch top headlines from NewsAPI for CNN, Fox, BBC, AP, and NPR."""
     if not settings.NEWSAPI_KEY:
         print("NEWSAPI_KEY not set, skipping NewsAPI")
         return []
@@ -1670,7 +1663,9 @@ def _fetch_single_rss(
         for e in parsed.entries[:limit]:
             url = getattr(e, "link", None)
             title = getattr(e, "title", None)
-            published = getattr(e, "published", None) or getattr(e, "updated", None)
+            published = (
+                getattr(e, "published", None) or getattr(e, "updated", None)
+            )
 
             if not url or url in seen_urls:
                 continue
@@ -1697,9 +1692,9 @@ def fetch_rss() -> List[Dict[str, Any]]:
     """
     Fetch articles from all RSS feeds.
 
-    Primary feeds capped at _RSS_ENTRY_LIMIT (20) entries each.
-    Supplementary feeds capped at _RSS_SUPPLEMENTARY_LIMIT (15) each.
-    Per-source cap of _PER_SOURCE_LIMIT (30) applied after merging.
+    Primary feeds are capped at _RSS_ENTRY_LIMIT (20) entries each.
+    Supplementary feeds are capped at _RSS_SUPPLEMENTARY_LIMIT (15) each.
+    A per-source cap of _PER_SOURCE_LIMIT (30) is applied after merging.
     """
     normalized: List[Dict[str, Any]] = []
     seen_urls: set = set()
@@ -1719,19 +1714,20 @@ def fetch_rss() -> List[Dict[str, Any]]:
 
         articles = _fetch_single_rss(feed_url, source_name, _RSS_ENTRY_LIMIT)
 
-        # Supplementary feeds for this source
+        # Merge supplementary feeds for this source.
         for supp_url in SUPPLEMENTARY_FEEDS.get(source_name, []):
-            supp = _fetch_single_rss(supp_url, source_name, _RSS_SUPPLEMENTARY_LIMIT)
+            supp = _fetch_single_rss(
+                supp_url, source_name, _RSS_SUPPLEMENTARY_LIMIT
+            )
             articles.extend(supp)
 
-        # Deduplicate across feeds for this source
+        # Deduplicate across all feeds for this source.
         source_articles: List[Dict[str, Any]] = []
         for a in articles:
             if a["url"] not in seen_urls:
                 seen_urls.add(a["url"])
                 source_articles.append(a)
 
-        # Cap per source
         source_articles = source_articles[:_PER_SOURCE_LIMIT]
         normalized.extend(source_articles)
         print(f"  {source_name}: {len(source_articles)} articles")
@@ -1743,11 +1739,11 @@ def fetch_rss() -> List[Dict[str, Any]]:
     return normalized
 
 
-# ── Main job ──────────────────────────────────────────────────────────────────
+# Main ingestion job
 
 
 def run_ingestion_cycle() -> None:
-    """Main ingestion job — triggered by APScheduler every hour."""
+    """Main ingestion job, triggered by APScheduler every hour."""
     print("\n" + "=" * 70)
     print("INGESTION CYCLE STARTED")
     print("=" * 70)
@@ -1766,7 +1762,7 @@ def run_ingestion_cycle() -> None:
     except Exception as exc:
         print(f"RSS critical error: {exc}")
 
-    # Final deduplication by URL across all sources
+    # Deduplicate by URL across all sources.
     seen: set = set()
     unique: List[Dict[str, Any]] = []
     for a in articles:
@@ -1775,7 +1771,6 @@ def run_ingestion_cycle() -> None:
             unique.append(a)
     articles = unique
 
-    # Log source distribution
     source_counts: Dict[str, int] = {}
     for a in articles:
         src = a.get("source", "unknown")
@@ -1819,14 +1814,14 @@ def canonicalise_source_name(raw_name):
 
 
 def is_duplicate_url(url, existing_urls):
-    """Return True if url (normalised) is in existing_urls (set)."""
+    """Return True if url (normalised) is already in existing_urls."""
     normalised = url.rstrip("/") if url else ""
     existing_normalised = {u.rstrip("/") for u in existing_urls}
     return normalised in existing_normalised
 
 
 def clean_article_text(text):
-    """Strip null bytes, surrogates, normalise whitespace, drop common boilerplate."""
+    """Strip null bytes and surrogates, normalise whitespace."""
     if not text:
         return ""
     text = text.replace("\x00", "")

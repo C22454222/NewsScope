@@ -1,19 +1,14 @@
 """
 NewsScope keep-alive pinger.
 
-Pings /health every 14 minutes to prevent Render free tier spin-down.
-Pings all three HF Spaces every 10 minutes to prevent Gradio cold
-starts — free Spaces sleep after ~15 minutes of inactivity, causing
-30-90s cold start delays on the next analysis cycle.
-
-All three Spaces are pinged in a single scheduled job so they share
-the same 10-minute interval and a single scheduler thread.
+Pings /health every 10 minutes to prevent Render free tier spin-down.
+Pings all three HF Spaces every 8 minutes to prevent Gradio cold starts.
+Free Spaces sleep after roughly 15 minutes of inactivity, causing
+30-90 second cold start delays on the next analysis cycle.
 
 Retry policy: up to 3 attempts with exponential back-off on 500/502/
 503/504 responses. A non-200 after all retries is logged and swallowed
-— it must never propagate or APScheduler will pause the job permanently.
-
-Flake8: 0 errors/warnings.
+so APScheduler never pauses the job permanently.
 """
 
 import time
@@ -26,23 +21,19 @@ from urllib3.util.retry import Retry
 
 from app.core.config import settings
 
-
 BACKEND_URL = settings.RENDER_EXTERNAL_URL
 POLITICAL_BIAS_SPACE = settings.HF_POLITICAL_BIAS_SPACE
 SENTIMENT_SPACE = settings.HF_SENTIMENT_SPACE
 GENERAL_BIAS_SPACE = settings.HF_GENERAL_BIAS_SPACE
 
-
-# Module-level guard — prevents duplicate schedulers if lifespan
-# or Uvicorn worker init somehow calls start_keep_alive() twice.
+# Module-level guard prevents duplicate schedulers if start_keep_alive
+# is called more than once during lifespan or worker initialisation.
 _scheduler: BackgroundScheduler | None = None
 
-
-# Retry policy shared by all pings.
-# Retries up to 3 times on transient server errors (500/502/503/504)
-# with exponential back-off: 2s → 4s → 8s between attempts.
-# raise_on_status=False means exhausted retries return the last
-# response rather than raising — caller decides what to log.
+# Shared retry policy for all ping requests.
+# Retries up to 3 times on transient 5xx errors with exponential
+# back-off (2s, 4s, 8s). raise_on_status=False returns the last
+# response on exhaustion rather than raising so callers decide.
 _RETRY_POLICY = Retry(
     total=3,
     backoff_factor=2,
@@ -55,8 +46,8 @@ _RETRY_POLICY = Retry(
 def _make_session() -> requests.Session:
     """
     Build a requests Session with the shared retry policy mounted on
-    both http:// and https://. Using a context manager (with) in each
-    job guarantees the socket is released after every ping attempt.
+    both http:// and https://. Using the session as a context manager
+    in each job ensures the socket is released after every ping.
     """
     session = requests.Session()
     adapter = HTTPAdapter(max_retries=_RETRY_POLICY)
@@ -65,15 +56,12 @@ def _make_session() -> requests.Session:
     return session
 
 
-# ── Ping jobs ────────────────────────────────────────────────────────────────
-
-
 def keep_alive() -> None:
     """
     Ping /health to prevent Render spin-down.
 
-    Up to 3 retries on 5xx via the session adapter before giving up.
-    A non-200 after all retries is logged but never raised — raising
+    Up to 3 retries on 5xx responses via the session adapter. A
+    non-200 after all retries is logged but never re-raised -- raising
     would cause APScheduler to pause this job permanently.
     """
     try:
@@ -87,7 +75,7 @@ def keep_alive() -> None:
             else:
                 print(
                     f"Keep-alive ping returned {response.status_code} "
-                    f"after retries — Render may still be starting up"
+                    f"after retries -- Render may still be starting up"
                 )
     except Exception as exc:
         print(f"Keep-alive ping error (non-fatal): {exc}")
@@ -97,15 +85,14 @@ def ping_spaces() -> None:
     """
     Ping all three HF Spaces to prevent Gradio cold starts.
 
-    Free Spaces sleep after ~15 minutes of inactivity — a cold start
-    forces the Space to reload its model which takes 30-90s. Pinging
-    every 10 minutes keeps all three warm so analysis calls complete
-    in 2-5s instead of timing out or stalling.
+    Free Spaces sleep after roughly 15 minutes of inactivity. A cold
+    start forces the Space to reload its model, taking 30-90 seconds.
+    Pinging every 8 minutes keeps all three warm so analysis calls
+    complete in 2-5 seconds rather than timing out.
 
-    A simple GET to the Space root is enough — no inference triggered.
-    A 1s gap between pings avoids hitting the same HF edge node twice
-    in rapid succession. All failures are swallowed — a sleeping Space
-    will just cold-start on the next analysis cycle instead.
+    A plain GET to the Space root is sufficient -- no inference is
+    triggered. A 1 second gap between pings avoids hitting the same
+    HF edge node in rapid succession. All failures are swallowed.
     """
     for name, url in (
         ("Political bias", POLITICAL_BIAS_SPACE),
@@ -124,17 +111,14 @@ def ping_spaces() -> None:
         time.sleep(1)
 
 
-# ── APScheduler error listener ───────────────────────────────────────────────
-
-
 def _job_error_listener(event) -> None:
     """
     Catch any exception that escapes a job function.
 
-    Without this, APScheduler silently pauses the offending job after
-    an unhandled exception — the job never fires again until the
-    process restarts. This listener logs and discards the error so
-    the scheduler keeps the job on its normal interval.
+    Without this listener, APScheduler silently pauses the offending
+    job after an unhandled exception and it never fires again until
+    the process restarts. This logs and discards the error so the
+    scheduler keeps the job on its normal interval.
     """
     print(
         f"Keep-alive scheduler job error (non-fatal, "
@@ -142,26 +126,23 @@ def _job_error_listener(event) -> None:
     )
 
 
-# ── Scheduler bootstrap ──────────────────────────────────────────────────────
-
-
 def start_keep_alive() -> None:
     """
     Start the background scheduler for keep-alive pings.
 
-    Job defaults:
-      coalesce=True       — if a ping fires late, run it once not many times
-      max_instances=1     — never run the same job twice concurrently
-      misfire_grace_time  — if a trigger is missed by up to 60s, still fire it
+    Job defaults applied at scheduler level:
+      coalesce=True -- if a ping fires late, run it once not many times
+      max_instances=1 -- never run the same job twice concurrently
+      misfire_grace_time=60 -- fire a missed trigger if within 60s
 
-    Guard prevents duplicate schedulers — safe to call multiple times;
-    only the first call has any effect. Subsequent calls are no-ops.
+    Idempotent -- safe to call multiple times; only the first call
+    has any effect. Subsequent calls are no-ops.
     """
     global _scheduler
 
     if _scheduler is not None and _scheduler.running:
         print(
-            "Keep-alive scheduler already running — "
+            "Keep-alive scheduler already running -- "
             "skipping duplicate start."
         )
         return

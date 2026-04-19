@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 
-// ── Bias (source-level, numeric score from sources table) ────────────────────
-// Three buckets only: Left Wing, Centre, Right Wing. No Centre-Left or
-// Centre-Right. Stronger blue for left, teal for centre (fully distinct from
-// both sides), stronger red for right.
+// Source-level bias helpers
+//
+// Uses three buckets only: Left Wing, Centre, Right Wing.
+// Blue for left, teal for centre (visually distinct from both sides),
+// red for right.
 
 Color getBiasColor(double? score) {
   if (score == null) return Colors.grey.shade500;
@@ -26,7 +27,7 @@ String getBiasLabel(double? score) {
   return 'Centre';
 }
 
-// ── Political bias (article-level, RoBERTa string label) ─────────────────────
+// Article-level political bias helpers (RoBERTa string label)
 
 Color getPoliticalBiasColor(String? label) {
   if (label == null || label.isEmpty) return Colors.grey.shade500;
@@ -46,6 +47,8 @@ String getPoliticalBiasLabel(String? label) {
   return 'Unknown';
 }
 
+/// Converts a RoBERTa string label to a numeric score on [-1, +1].
+/// Returns null for unrecognised labels.
 double? politicalBiasToScore(String? label) {
   if (label == null || label.isEmpty) return null;
   final upper = label.toUpperCase();
@@ -55,7 +58,7 @@ double? politicalBiasToScore(String? label) {
   return null;
 }
 
-// ── Sentiment ─────────────────────────────────────────────────────────────────
+// Sentiment helpers
 
 Color getSentimentColor(double? score) {
   if (score == null) return Colors.grey.shade500;
@@ -71,7 +74,7 @@ String getSentimentLabel(double? score) {
   return 'Neutral';
 }
 
-// ── Credibility ───────────────────────────────────────────────────────────────
+// Credibility helpers
 
 Color getCredibilityColor(double? score) {
   if (score == null) return Colors.grey.shade500;
@@ -87,6 +90,7 @@ String getCredibilityLabel(double? score) {
   return 'Low';
 }
 
+/// Maps a fact-check ruling string to a display emoji.
 String getRulingEmoji(String ruling) {
   final r = ruling.toLowerCase();
   if (r.contains('true') && !r.contains('mostly')) return '✅';
@@ -97,8 +101,9 @@ String getRulingEmoji(String ruling) {
   return '❓';
 }
 
-// ── Category ──────────────────────────────────────────────────────────────────
+// Category helpers
 
+/// Title-cases a category string, preserving known acronyms.
 String formatCategory(String? category) {
   if (category == null || category.isEmpty) return '';
   const preserve = {'us': 'US', 'uk': 'UK', 'eu': 'EU', 'gaa': 'GAA'};

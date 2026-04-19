@@ -1,9 +1,14 @@
+// lib/screens/sign_in_screen.dart
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'sign_up_screen.dart';
 
+/// Sign-in screen supporting email/password and Google OAuth.
+///
+/// Validates the form before attempting any Firebase call and maps
+/// FirebaseAuthException codes to user-friendly messages.
 class SignInScreen extends StatefulWidget {
   const SignInScreen({super.key});
 
@@ -53,6 +58,7 @@ class _SignInScreenState extends State<SignInScreen> {
         email: _emailController.text.trim(),
         password: _passwordController.text,
       );
+      // Block unverified email accounts from accessing the app.
       if (userCred.user != null && !userCred.user!.emailVerified) {
         await FirebaseAuth.instance.signOut();
         if (!mounted) return;
@@ -101,15 +107,14 @@ class _SignInScreenState extends State<SignInScreen> {
           .sendPasswordResetEmail(email: _emailController.text.trim());
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content:
-            Text('Reset link sent to ${_emailController.text.trim()}'),
+        content: Text('Reset link sent to ${_emailController.text.trim()}'),
         backgroundColor: Colors.green[700],
         behavior: SnackBarBehavior.floating,
       ));
     } on FirebaseAuthException catch (e) {
       _showError(_mapPasswordResetError(e.code));
     } catch (_) {
-      _showError('Could not send reset email — please try again');
+      _showError('Could not send reset email -- please try again');
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -126,13 +131,13 @@ class _SignInScreenState extends State<SignInScreen> {
       case 'user-disabled':
         return 'This account has been disabled';
       case 'too-many-requests':
-        return 'Too many attempts — please try again later';
+        return 'Too many attempts -- please try again later';
       case 'network-request-failed':
         return 'No internet connection';
       case 'invalid-credential':
         return 'Incorrect email or password';
       default:
-        return 'Sign in failed — please try again';
+        return 'Sign in failed -- please try again';
     }
   }
 
@@ -143,9 +148,9 @@ class _SignInScreenState extends State<SignInScreen> {
       case 'network-request-failed':
         return 'No internet connection';
       case 'too-many-requests':
-        return 'Too many attempts — please try again later';
+        return 'Too many attempts -- please try again later';
       default:
-        return 'Could not send reset email — please try again';
+        return 'Could not send reset email -- please try again';
     }
   }
 
@@ -174,7 +179,7 @@ class _SignInScreenState extends State<SignInScreen> {
                 children: [
                   const SizedBox(height: 12),
 
-                  // ── Hero card ──────────────────────────────────────────
+                  // Hero branding card
                   Container(
                     width: double.infinity,
                     padding: const EdgeInsets.fromLTRB(20, 18, 20, 18),
@@ -191,7 +196,7 @@ class _SignInScreenState extends State<SignInScreen> {
                     ),
                     child: Column(
                       children: [
-                        // Logo
+                        // App logo
                         Container(
                           width: 52,
                           height: 52,
@@ -199,8 +204,7 @@ class _SignInScreenState extends State<SignInScreen> {
                             color: Colors.white.withAlpha(18),
                             borderRadius: BorderRadius.circular(14),
                             border: Border.all(
-                                color: Colors.white.withAlpha(50),
-                                width: 1.5),
+                                color: Colors.white.withAlpha(50), width: 1.5),
                           ),
                           child: const Icon(Icons.newspaper,
                               size: 28, color: Colors.white),
@@ -220,8 +224,7 @@ class _SignInScreenState extends State<SignInScreen> {
                                   style: TextStyle(color: Colors.white)),
                               TextSpan(
                                   text: 'Scope',
-                                  style: TextStyle(
-                                      color: Colors.blue[300])),
+                                  style: TextStyle(color: Colors.blue[300])),
                             ],
                           ),
                         ),
@@ -260,7 +263,7 @@ class _SignInScreenState extends State<SignInScreen> {
                   ),
                   const SizedBox(height: 14),
 
-                  // ── Feature highlights ─────────────────────────────────
+                  // Feature highlight chips
                   Row(
                     children: [
                       Expanded(
@@ -278,7 +281,7 @@ class _SignInScreenState extends State<SignInScreen> {
                   ),
                   const SizedBox(height: 14),
 
-                  // ── Sign in card ───────────────────────────────────────
+                  // Sign-in form card
                   Card(
                     elevation: 2,
                     shape: RoundedRectangleBorder(
@@ -298,7 +301,7 @@ class _SignInScreenState extends State<SignInScreen> {
                           ),
                           const SizedBox(height: 14),
 
-                          // Email
+                          // Email field
                           _buildLabel('Email'),
                           const SizedBox(height: 5),
                           TextFormField(
@@ -307,8 +310,7 @@ class _SignInScreenState extends State<SignInScreen> {
                             keyboardType: TextInputType.emailAddress,
                             autocorrect: false,
                             inputFormatters: [
-                              FilteringTextInputFormatter.deny(
-                                  RegExp(r'\s')),
+                              FilteringTextInputFormatter.deny(RegExp(r'\s')),
                               LengthLimitingTextInputFormatter(254),
                             ],
                             decoration: _inputDecoration(
@@ -318,7 +320,7 @@ class _SignInScreenState extends State<SignInScreen> {
                           ),
                           const SizedBox(height: 12),
 
-                          // Password
+                          // Password field
                           _buildLabel('Password'),
                           const SizedBox(height: 5),
                           TextFormField(
@@ -326,8 +328,7 @@ class _SignInScreenState extends State<SignInScreen> {
                             validator: _validatePassword,
                             obscureText: _obscurePassword,
                             inputFormatters: [
-                              FilteringTextInputFormatter.deny(
-                                  RegExp(r'\s')),
+                              FilteringTextInputFormatter.deny(RegExp(r'\s')),
                               LengthLimitingTextInputFormatter(128),
                             ],
                             decoration: _inputDecoration(
@@ -341,8 +342,8 @@ class _SignInScreenState extends State<SignInScreen> {
                                   color: Colors.grey[500],
                                   size: 20,
                                 ),
-                                onPressed: () => setState(() =>
-                                    _obscurePassword = !_obscurePassword),
+                                onPressed: () => setState(
+                                    () => _obscurePassword = !_obscurePassword),
                               ),
                             ),
                             onFieldSubmitted: (_) => _signInWithEmail(),
@@ -364,7 +365,7 @@ class _SignInScreenState extends State<SignInScreen> {
                             ),
                           ),
 
-                          // Sign in button
+                          // Sign-in button or loading indicator
                           _isLoading
                               ? const Center(
                                   child: CircularProgressIndicator())
@@ -403,14 +404,13 @@ class _SignInScreenState extends State<SignInScreen> {
                           ]),
                           const SizedBox(height: 12),
 
+                          // Google sign-in button
                           OutlinedButton.icon(
-                            onPressed:
-                                _isLoading ? null : _signInWithGoogle,
+                            onPressed: _isLoading ? null : _signInWithGoogle,
                             icon: const Icon(Icons.login, size: 18),
                             label: const Text('Continue with Google'),
                             style: OutlinedButton.styleFrom(
-                              padding:
-                                  const EdgeInsets.symmetric(vertical: 12),
+                              padding: const EdgeInsets.symmetric(vertical: 12),
                               side: BorderSide(color: Colors.grey[300]!),
                               foregroundColor: Colors.grey[800],
                               backgroundColor: Colors.white,
@@ -427,6 +427,7 @@ class _SignInScreenState extends State<SignInScreen> {
                   ),
                   const SizedBox(height: 10),
 
+                  // Navigation to sign-up
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
@@ -440,8 +441,8 @@ class _SignInScreenState extends State<SignInScreen> {
                                 builder: (_) => const SignUpScreen())),
                         style: TextButton.styleFrom(
                             foregroundColor: Colors.blue[700],
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 6),
+                            padding:
+                                const EdgeInsets.symmetric(horizontal: 6),
                             minimumSize: const Size(0, 32)),
                         child: const Text('Sign Up',
                             style:
@@ -459,7 +460,7 @@ class _SignInScreenState extends State<SignInScreen> {
     );
   }
 
-  // ── Helpers ────────────────────────────────────────────────────────────────
+  // Helpers
 
   Widget _buildFeatureChip(IconData icon, String label) {
     return Container(

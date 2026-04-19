@@ -1,18 +1,16 @@
 """
-NewsScope Bias Explainability Service.
+NewsScope bias explainability service.
 
 Uses LIME (Local Interpretable Model-Agnostic Explanations) to identify
 the words most responsible for an article's political bias classification.
 
-Unlike the standard LIME setup, the classifier here is a remote
-HuggingFace Space called via _spaces_call — not a local pipeline.
-_NUM_SAMPLES is set to 50 (vs typical 300) to keep the ~50 HTTP calls
-to the Space within a 10–20s window acceptable for background scoring.
+The classifier is a remote HuggingFace Space called via HTTP rather than
+a local pipeline, so each LIME sample is one HTTP request. _NUM_SAMPLES
+is set to 50 (vs the typical 300) to keep the total ~50 Space calls within
+a 10-20 second window acceptable for background scoring.
 
-This runs after the main _score_article call in analysis.py so it
-never blocks the primary sentiment/bias pipeline.
-
-Flake8: 0 errors/warnings.
+This module runs after _score_article in analysis.py and never blocks
+the primary sentiment/bias pipeline.
 """
 
 from typing import Any, Dict, List, Optional
@@ -22,9 +20,9 @@ from lime.lime_text import LimeTextExplainer
 
 from app.core.config import settings
 
-
 _POLITICAL_BIAS_SPACE = settings.HF_POLITICAL_BIAS_SPACE.strip()
 
+# Maps label strings to the class index expected by LimeTextExplainer.
 _LABEL_MAP: Dict[str, int] = {
     "left": 0,
     "center": 1,
@@ -33,8 +31,8 @@ _LABEL_MAP: Dict[str, int] = {
 }
 _CLASS_NAMES: List[str] = ["left", "center", "right"]
 
-# Reduced from 300 — each sample is a remote HTTP call to an HF Space.
-# 50 samples gives stable top-word attribution in ~10–20s.
+# Reduced from the typical 300 -- each sample is one remote HTTP call.
+# 50 samples produces stable top-word attribution in roughly 10-20 seconds.
 _NUM_SAMPLES = 50
 _NUM_FEATURES = 6
 
@@ -43,9 +41,13 @@ _explainer = LimeTextExplainer(class_names=_CLASS_NAMES)
 
 def _spaces_call_simple(text: str) -> Optional[Dict[str, Any]]:
     """
-    Minimal inline Space caller for LIME — avoids circular import
-    by not importing from analysis.py. Uses requests directly.
-    Identical protocol to _spaces_call in analysis.py.
+    Minimal inline Space caller for LIME.
+
+    Avoids a circular import by not importing _spaces_call from
+    analysis.py. Uses the identical Gradio 5.x two-step SSE protocol:
+      Step 1 -- POST classify_bias, receive event_id
+      Step 2 -- GET event stream, read first data line
+    Returns the parsed result dict or None on any error.
     """
     import json
     import requests
@@ -86,10 +88,11 @@ def _spaces_call_simple(text: str) -> Optional[Dict[str, Any]]:
 
 def _predict_proba(texts: List[str]) -> np.ndarray:
     """
-    Maps the political bias Space output to a (n_texts, 3) probability
-    matrix required by LimeTextExplainer.
-    Falls back to uniform [0.33, 0.33, 0.33] on any error so LIME
-    doesn't crash the whole scoring run.
+    Map political bias Space output to a (n_texts, 3) probability matrix
+    required by LimeTextExplainer.
+
+    Falls back to uniform [0.33, 0.33, 0.33] on any call failure so LIME
+    does not crash the whole scoring run on a single bad response.
     """
     probs = []
     for text in texts:
@@ -124,11 +127,11 @@ def explain_bias(
         {"word": "spending",   "weight": 0.18, "direction": "against"},
       ]
 
-    direction "towards" → word pushes toward the predicted label.
-    direction "against" → word pushes away from the predicted label.
+    direction "towards" means the word pushes toward the predicted label.
+    direction "against"  means the word pushes away from the predicted label.
 
-    Returns [] if text is too short, label is unrecognised, or
-    the Space raises an exception — never raises itself.
+    Returns [] if text is too short, the label is unrecognised, or the
+    Space raises an exception. Never raises itself.
     """
     if not text or len(text.split()) < 10:
         return []

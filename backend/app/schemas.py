@@ -1,22 +1,20 @@
 """
 NewsScope Pydantic schemas.
 
-Matches the Supabase PostgreSQL schema exactly:
-  - articles: all NLP output columns including bias_explanation JSONB
-  - fact_checks: relational table with article_id FK
-  - reading_history: snapshot columns for bias profile calculation
-    (bias_score, sentiment_score, source, general_bias,
-    credibility_score, political_bias)
-  - sources: outlet metadata with bias_rating check constraint
-  - users: id (Firebase UID), email, created_at, updated_at,
-    display_name
+Mirrors the Supabase PostgreSQL schema exactly:
+  articles         -- all NLP output columns including bias_explanation JSONB
+  fact_checks      -- relational table with article_id FK
+  reading_history  -- snapshot columns for bias profile calculation
+                      (bias_score, sentiment_score, source, general_bias,
+                       credibility_score, political_bias)
+  sources          -- outlet metadata with bias_rating check constraint
+  users            -- id (Firebase UID), email, created_at, updated_at,
+                      display_name
 
-No description column — not in the database.
-No preferences/bias_profile on users — profile is calculated live
+No description column -- not present in the database.
+No preferences/bias_profile on users -- the profile is calculated live
 from reading_history; preferences are stored client-side via
 SharedPreferences.
-
-Flake8: 0 errors/warnings.
 """
 
 from datetime import datetime
@@ -26,16 +24,12 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 
-# ── Articles ──────────────────────────────────────────────────────────────────
-
-
 class ArticleBase(BaseModel):
     """
-    Shared fields for article records.
+    Shared fields for article records. Mirrors the articles table columns.
 
-    Mirrors the articles table columns exactly.
-    Both bias_score (source-level, [-1,+1]) and political_bias /
-    political_bias_score (article-level RoBERTa output) are present —
+    Both bias_score (source-level, [-1, +1]) and political_bias /
+    political_bias_score (article-level RoBERTa output) are present --
     they are distinct fields written by different parts of analysis.py.
     """
 
@@ -73,21 +67,21 @@ class Article(ArticleBase):
 
 class ArticleResponse(ArticleBase):
     """
-    Full article response model returned by the API and used
-    internally by fact_checking.py and ingestion.py.
+    Full article response model returned by the API and used internally
+    by fact_checking.py and ingestion.py.
 
     extra='ignore' silently drops unknown Supabase columns so
     ArticleResponse(**row) is always safe even as the schema evolves.
 
-    credibility_score is seeded at 80.0 by ingestion and replaced
-    by the real computed value once fact_checking.py runs.
+    credibility_score is seeded at 80.0 by ingestion and replaced by
+    the real computed value once fact_checking.py runs.
 
-    credibility_reason is a plain human-readable string, e.g.
+    credibility_reason is a plain human-readable string such as
     "2/3 queries matched fact-checks. Source: BBC News. Rated reliable."
 
-    bias_explanation is a JSONB list of word-weight dicts produced
-    by LIME in analysis.py. None until analysis scores the article
-    with political_bias_score >= 0.6. Shape per item:
+    bias_explanation is a JSONB list of word-weight dicts produced by
+    LIME in analysis.py. None until analysis scores the article with
+    political_bias_score >= 0.6. Shape per item:
       {"word": str, "weight": float, "direction": "towards"|"against"}
     """
 
@@ -96,27 +90,24 @@ class ArticleResponse(ArticleBase):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
-    # Credibility + fact-checking fields
+    # Credibility and fact-checking fields.
     credibility_score: Optional[float] = None
     fact_checks: Optional[Dict[str, Any]] = Field(default_factory=dict)
     claims_checked: Optional[int] = 0
     credibility_reason: Optional[str] = None
     credibility_updated_at: Optional[datetime] = None
 
-    # LIME bias explainability
+    # LIME bias explainability output.
     bias_explanation: Optional[List[Dict[str, Any]]] = None
 
     model_config = ConfigDict(from_attributes=True, extra="ignore")
 
 
-# ── Users ─────────────────────────────────────────────────────────────────────
-
-
 class UserCreate(BaseModel):
     """
-    Payload used when creating or upserting a user record.
+    Payload for creating or upserting a user record.
 
-    Matches the users table: id, email, display_name.
+    Matches the users table columns: id, email, display_name.
     updated_at is managed server-side by the set_updated_at trigger
     and is never sent by the client.
     """
@@ -138,9 +129,6 @@ class User(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-# ── Sources ───────────────────────────────────────────────────────────────────
-
-
 class SourceBase(BaseModel):
     """Base fields for a news source record."""
 
@@ -157,15 +145,13 @@ class Source(SourceBase):
     model_config = ConfigDict(from_attributes=True)
 
 
-# ── Reading history ───────────────────────────────────────────────────────────
-
-
 class ReadingHistoryCreate(BaseModel):
     """
-    Payload for tracking article reading time.
+    Payload for recording article reading time.
+
     Sent from the mobile app when the user exits an article.
-    article_id is a string here because the Flutter client sends
-    the UUID as a plain string in the JSON body.
+    article_id is typed as str because the Flutter client sends the
+    UUID as a plain string in the JSON body.
     """
 
     article_id: str
@@ -176,7 +162,7 @@ class ReadingHistory(BaseModel):
     """
     Full reading history record as stored in the database.
 
-    Includes the political_bias snapshot column, populated at read
+    Includes political_bias as a snapshot column, populated at read
     time from articles.political_bias so article-level bias data
     survives article archiving.
     """
@@ -197,35 +183,29 @@ class ReadingHistory(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-# ── Bias profile ──────────────────────────────────────────────────────────────
-
-
 class BiasProfile(BaseModel):
     """
     Calculated bias profile returned by GET /api/bias-profile.
 
-    Computed live from reading_history snapshot columns — never stored.
+    Computed live from reading_history snapshot columns -- never stored.
 
     Outlet-level fields (left_count, center_count, right_count,
     bias_distribution, avg_bias) derive from reading_history.bias_score,
-    the publisher baseline rating copied from sources.bias_score at
-    read time.
+    the publisher baseline copied from sources.bias_score at read time.
 
     Article-level fields (article_left_count, article_center_count,
     article_right_count, article_bias_distribution, avg_article_bias)
     derive from reading_history.political_bias, the per-article RoBERTa
-    label snapshotted at read time so the data survives article
-    archiving.
+    label snapshotted at read time so the data survives archiving.
 
     General bias fields (biased_count, unbiased_count) derive from
-    reading_history.general_bias, the DistilRoBERTa BIASED/UNBIASED
-    label snapshotted at read time.
+    reading_history.general_bias, the DistilRoBERTa BIASED/UNBIASED label.
 
-    source_breakdown: top-12 sources by article count.
-    avg_credibility: mean credibility score across all read articles.
+    source_breakdown lists the top 12 sources by article count.
+    avg_credibility is the mean credibility score across all read articles.
     """
 
-    # ── Outlet-level bias ─────────────────────────────────────────────
+    # Outlet-level bias fields.
     avg_bias: float
     avg_sentiment: float
     total_articles_read: int
@@ -241,7 +221,7 @@ class BiasProfile(BaseModel):
     source_breakdown: Optional[Dict[str, int]] = None
     avg_credibility: Optional[float] = None
 
-    # ── Article-level bias (RoBERTa per-article) ──────────────────────
+    # Article-level bias fields from per-article RoBERTa classification.
     article_left_count: int = 0
     article_center_count: int = 0
     article_right_count: int = 0
@@ -250,12 +230,9 @@ class BiasProfile(BaseModel):
     )
     avg_article_bias: float = 0.0
 
-    # ── General bias (DistilRoBERTa BIASED / UNBIASED) ────────────────
+    # General bias fields from DistilRoBERTa BIASED / UNBIASED labels.
     biased_count: int = 0
     unbiased_count: int = 0
-
-
-# ── Fact checks ───────────────────────────────────────────────────────────────
 
 
 class FactCheckBase(BaseModel):
@@ -287,20 +264,15 @@ class FactCheck(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-# ── Comparison ────────────────────────────────────────────────────────────────
-
-
 class ComparisonRequest(BaseModel):
     """
     Request payload for POST /api/articles/compare.
 
-    topic searches title and content via ilike.
-    category filters by the category column (sub-categories resolved
-    via CATEGORY_GROUP_MAP in articles.py before the DB query).
-    source filters by exact source name as stored in articles.source.
-
-    limit is intentionally absent — the compare endpoint controls its
-    own per-band limits internally and does not expose them to clients.
+    topic searches title and content via ilike. category filters by the
+    category column with sub-categories resolved via CATEGORY_GROUP_MAP
+    in articles.py before the DB query. source filters by exact source
+    name. limit is omitted -- the compare endpoint controls per-band
+    limits internally.
     """
 
     topic: str

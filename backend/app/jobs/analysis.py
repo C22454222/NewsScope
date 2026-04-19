@@ -1,39 +1,35 @@
 """
-NewsScope Analysis Service.
+NewsScope analysis service.
 
-Three models score every article — all run on free HuggingFace Spaces,
-zero Inference API credits consumed:
+Scores every article across three dimensions using free HuggingFace
+Spaces -- zero Inference API credits consumed.
 
-  Sentiment      : distilbert-base-uncased-finetuned-sst-2-english
-                   Space: c22454222-sentiment.hf.space
-                   Endpoint: /gradio_api/call/classify_sentiment
-                   Returns POSITIVE / NEGATIVE scores → mapped to [-1, +1]
+Sentiment        : distilbert-base-uncased-finetuned-sst-2-english
+                   Space    : c22454222-sentiment.hf.space
+                   Endpoint : /gradio_api/call/classify_sentiment
+                   Output   : POSITIVE / NEGATIVE scores mapped to [-1, +1]
 
-  General bias   : valurank/distilroberta-bias
-                   Space: c22454222-general-bias.hf.space
-                   Endpoint: /gradio_api/call/classify_general_bias
-                   Returns BIASED / UNBIASED
+General bias     : valurank/distilroberta-bias
+                   Space    : c22454222-general-bias.hf.space
+                   Endpoint : /gradio_api/call/classify_general_bias
+                   Output   : BIASED / UNBIASED
 
-  Political bias : C22454222/political-bias-roberta (fine-tuned RoBERTa)
-                   Space: c22454222-political-bias-api.hf.space
-                   Endpoint: /gradio_api/call/classify_bias
-                   Returns LEFT / CENTER / RIGHT + confidence score
-                   Trained on 37,554 AllSides articles. 87.3% acc / F1.
+Political bias   : C22454222/political-bias-roberta (fine-tuned RoBERTa)
+                   Space    : c22454222-political-bias-api.hf.space
+                   Endpoint : /gradio_api/call/classify_bias
+                   Output   : LEFT / CENTER / RIGHT + confidence score
+                   Training : 37,554 AllSides articles, 87.3% acc / F1
 
-All three use the Gradio 5.x two-step SSE protocol:
-  Step 1 — POST {base}/gradio_api/call/{fn}   → {"event_id": "<uuid>"}
-  Step 2 — GET  {base}/gradio_api/call/{fn}/{event_id}  → SSE stream
+All three Spaces use the Gradio 5.x two-step SSE protocol:
+  Step 1 -- POST {base}/gradio_api/call/{fn}  returns {"event_id": ""}
+  Step 2 -- GET  {base}/gradio_api/call/{fn}/{event_id}  SSE stream
 
-No timeouts set — Render free tier does not impose request timeouts and
-HF Spaces cold starts can take 30-90s. Full article text is sent to
-every Space; each applies truncation=True internally so the underlying
-model only sees its token limit (512 tokens for all three).
+No request timeouts are set because HF Spaces cold starts can take
+30-90 seconds and Render free tier does not impose request time limits.
 
-Analysis window uses created_at (ingestion time) not published_at so
-articles ingested today are always scored regardless of publish date.
-Display window is 7 days — matches standard news app conventions.
-
-Flake8: 0 errors/warnings.
+Analysis window is keyed on created_at (ingestion time) rather than
+published_at so articles ingested today are always scored regardless of
+their original publish date.
 """
 
 import asyncio
@@ -49,31 +45,34 @@ from app.core.config import settings
 from app.db.supabase import supabase
 from app.services.explainability import explain_bias
 
-
 POLITICAL_BIAS_SPACE = settings.HF_POLITICAL_BIAS_SPACE.strip()
 SENTIMENT_SPACE = settings.HF_SENTIMENT_SPACE.strip()
 GENERAL_BIAS_SPACE = settings.HF_GENERAL_BIAS_SPACE.strip()
 
-# 8 concurrent articles × 0.5s stagger = calls spread over 3.5s window.
+# 8 concurrent articles x 0.5s stagger spreads calls over a 3.5s window.
 _ANALYSIS_CONCURRENCY = 8
 
-# Full article text cap — Spaces apply truncation=True internally.
+# Character cap before sending to a Space. Each Space applies
+# truncation=True internally so only 512 tokens reach the model.
 _TEXT_LIMIT_ARTICLE = 8000
 
-# Primary window: 7 days by created_at — covers ingestion lag where
-# articles published weeks ago are ingested today. 48h fallback removed;
-# 7d is now the floor. Backfill handles anything older.
-_ANALYSIS_WINDOW_HOURS = 168  # 7 days
+# 7 day window keyed on created_at -- covers ingestion lag where
+# articles published weeks ago are ingested today.
+_ANALYSIS_WINDOW_HOURS = 168
 
-# Safety cap per regular cycle — backfill has no cap.
+# Safety cap per regular scheduled cycle. Backfill has no cap.
 _MAX_ARTICLES_PER_CYCLE = 200
 
-# Minimum political bias confidence to run LIME explainability.
-# Below this threshold the classification is too uncertain to explain.
+# Political bias confidence must reach this threshold before LIME
+# explainability is run. Below it the classification is too uncertain
+# to produce reliable word-level attribution.
 _LIME_CONFIDENCE_THRESHOLD = 0.6
 
+# Guard flag prevents overlapping analysis cycles triggered by the scheduler.
 _analysis_running = False
 
+# Fallback source-level political leaning used when the sources table
+# has no bias_rating entry for a given source name.
 _SOURCE_BIAS_MAP = {
     "CNN": -1.0,
     "The Guardian": -1.0,
@@ -89,30 +88,34 @@ _SOURCE_BIAS_MAP = {
     "GB News": 1.0,
 }
 
+# Lazily initialised session reused across all Space calls.
 _session: Optional[requests.Session] = None
 
 
 def _get_session() -> requests.Session:
+    """
+    Return the shared requests session, creating it on first call.
+
+    Forces HTTP/1.1 via the Connection header to prevent
+    ConnectionTerminated errors from HF Spaces that can drop
+    HTTP/2 connections mid-stream.
+    """
     global _session
     if _session is None:
         _session = requests.Session()
-        # Force HTTP/1.1 — prevents ConnectionTerminated errors from
-        # HF Spaces which can drop HTTP/2 connections mid-stream.
         _session.headers.update({"Connection": "keep-alive"})
     return _session
 
 
 def _reset_session() -> None:
+    """Close and discard the shared session so the next call creates a fresh one."""
     global _session
     if _session is not None:
         try:
             _session.close()
         except Exception:
             pass
-        _session = None
-
-
-# ── Generic Gradio Space caller ───────────────────────────────────────────────
+    _session = None
 
 
 def _spaces_call(
@@ -121,26 +124,25 @@ def _spaces_call(
     text: str,
 ) -> Optional[Any]:
     """
-    Call any Gradio 5.x Space via the two-step SSE protocol.
+    Call a Gradio 5.x Space using the two-step SSE protocol.
 
     Step 1: POST {base}/gradio_api/call/{fn_name}
-            Body: {"data": ["<text>"]}
-            Returns: {"event_id": "<uuid>"}
+            Body    : {"data": [""]}
+            Returns : {"event_id": ""}
 
     Step 2: GET {base}/gradio_api/call/{fn_name}/{event_id}
-            Streams SSE lines. The "data:" line holds a JSON list —
-            payload[0] is what the Space function returned.
+            Streams SSE lines. The "data:" line contains a JSON list
+            where payload[0] is the value returned by the Space function.
 
-    Handles two payload shapes across Gradio versions:
-      - payload[0] is already a list/dict  → returned as-is
-      - payload[0] is a JSON string        → parsed before returning
+    Handles two payload shapes seen across Gradio versions:
+      payload[0] is a list/dict  -- returned as-is
+      payload[0] is a JSON string -- parsed before returning
 
-    No timeout set — HF Spaces cold starts can legitimately take
-    30-90s and Render does not impose request time limits.
-    Returns payload[0] on success, None on any error.
+    No timeout is set because HF Spaces cold starts can take 30-90s.
+    Returns payload[0] on success or None on any error.
     """
     if not space_base:
-        print(f"Space URL not configured for {fn_name} — skipping.")
+        print(f"Space URL not configured for {fn_name} -- skipping.")
         return None
 
     base = space_base.rstrip("/")
@@ -148,7 +150,7 @@ def _spaces_call(
     try:
         session = _get_session()
 
-        # Step 1: submit job, receive event_id.
+        # Step 1: submit the job and receive an event_id.
         r1 = session.post(
             f"{base}/gradio_api/call/{fn_name}",
             headers={"Content-Type": "application/json"},
@@ -162,13 +164,13 @@ def _spaces_call(
         if not r1_json or "event_id" not in r1_json:
             print(
                 f"Space [{fn_name}]: unexpected response shape "
-                f"— {r1_json} — Space may still be building."
+                f"-- {r1_json} -- Space may still be building."
             )
             return None
 
         event_id = r1_json["event_id"]
 
-        # Step 2: stream SSE until result line.
+        # Step 2: stream SSE lines until the result data line arrives.
         r2 = session.get(
             f"{base}/gradio_api/call/{fn_name}/{event_id}",
             stream=True,
@@ -183,8 +185,8 @@ def _spaces_call(
 
             result = payload[0]
 
-            # Gradio sometimes serialises the return value as a JSON
-            # string rather than a parsed object — unwrap if needed.
+            # Unwrap JSON strings that Gradio sometimes returns instead
+            # of a parsed object -- seen in some Gradio version responses.
             if isinstance(result, str):
                 try:
                     result = json.loads(result)
@@ -202,10 +204,13 @@ def _spaces_call(
     return None
 
 
-# ── Source bias ───────────────────────────────────────────────────────────────
-
-
 def _get_source_political_leaning(source_name: str) -> float:
+    """
+    Look up source political leaning from the Supabase sources table.
+
+    Falls back to _SOURCE_BIAS_MAP if the table has no entry for the
+    given source name, and to 0.0 (Centre) if neither matches.
+    """
     try:
         response = (
             supabase.table("sources")
@@ -229,18 +234,17 @@ def _get_source_political_leaning(source_name: str) -> float:
     return _SOURCE_BIAS_MAP.get(source_name, 0.0)
 
 
-# ── Sentiment ─────────────────────────────────────────────────────────────────
-
-
 def _sentiment_score(text: str) -> Optional[float]:
     """
-    Score sentiment via classify_sentiment on the sentiment Space.
-    Returns float in [-1.0, +1.0]: positive - negative scores.
-    Returns None if the Space call fails — retried next cycle.
+    Score text sentiment via the sentiment Space.
+
+    Returns a float in [-1.0, +1.0] computed as positive_score minus
+    negative_score. Returns None if the Space call fails so the
+    article can be retried on the next scheduled cycle.
     """
     items = _spaces_call(SENTIMENT_SPACE, "classify_sentiment", text)
     if not items:
-        print("Sentiment Space call failed — will retry next cycle.")
+        print("Sentiment Space call failed -- will retry next cycle.")
         return None
 
     try:
@@ -262,10 +266,13 @@ def _sentiment_score(text: str) -> Optional[float]:
         return None
 
 
-# ── Political bias (source-level) ─────────────────────────────────────────────
-
-
 def _get_political_bias(source_name: str) -> Tuple[float, float]:
+    """
+    Derive source-level political bias from the sources table or fallback map.
+
+    Returns (bias_score, confidence) where bias_score is in [-1.0, +1.0]
+    and confidence is fixed at 0.5 for source-level lookups.
+    """
     bias_score = _get_source_political_leaning(source_name)
 
     if bias_score < -0.3:
@@ -282,21 +289,21 @@ def _get_political_bias(source_name: str) -> Tuple[float, float]:
     return bias_score, 0.5
 
 
-# ── General bias ──────────────────────────────────────────────────────────────
-
-
 def _detect_general_bias(
     text: str,
 ) -> Tuple[Optional[str], Optional[float]]:
     """
-    Classify BIASED / UNBIASED via classify_general_bias on the
-    general bias Space. Returns (label, confidence) or (None, None).
+    Classify BIASED / UNBIASED via the general bias Space.
+
+    Handles multiple label formats returned by different Gradio versions
+    including LABEL_0/LABEL_1 numeric fallbacks. Returns (None, None) if
+    the Space call fails so the article can be retried next cycle.
     """
     items = _spaces_call(
         GENERAL_BIAS_SPACE, "classify_general_bias", text
     )
     if not items:
-        print("General bias Space call failed — will retry next cycle.")
+        print("General bias Space call failed -- will retry next cycle.")
         return None, None
 
     try:
@@ -319,7 +326,7 @@ def _detect_general_bias(
         else:
             print(
                 f"Unknown general bias label: '{top_label}' "
-                "— defaulting to UNBIASED"
+                "-- defaulting to UNBIASED"
             )
             label = "UNBIASED"
 
@@ -331,27 +338,26 @@ def _detect_general_bias(
         return None, None
 
 
-# ── Article-level political bias (fine-tuned RoBERTa via HF Space) ────────────
-
-
 def _detect_political_bias(
     title: str,
     content: str,
 ) -> Tuple[Optional[str], Optional[float]]:
     """
-    Classify LEFT / CENTER / RIGHT via classify_bias on the political
-    bias Space. Full title + content sent — Space truncates to 512
-    tokens internally. Returns (label, confidence) or (None, None).
+    Classify LEFT / CENTER / RIGHT via the political bias Space.
+
+    Full title and content are sent; the Space applies truncation=True
+    internally so the underlying RoBERTa model only sees 512 tokens.
+    Returns (None, None) if the Space call fails.
     """
     text = f"{title}. {content}".strip()
 
     if len(text) < 10:
-        print("Political bias: text too short — skipping.")
+        print("Political bias: text too short -- skipping.")
         return None, None
 
     result = _spaces_call(POLITICAL_BIAS_SPACE, "classify_bias", text)
     if not result:
-        print("Political bias Space call failed — will retry next cycle.")
+        print("Political bias Space call failed -- will retry next cycle.")
         return None, None
 
     try:
@@ -368,25 +374,18 @@ def _detect_political_bias(
         return None, None
 
 
-# ── Single article scorer ─────────────────────────────────────────────────────
-
-
 def _score_article(article: dict) -> dict:
     """
     Score a single article synchronously. Called via asyncio.to_thread.
 
-    Full article text (title + content, capped at _TEXT_LIMIT_ARTICLE)
-    sent to all three Spaces. Each Space applies truncation=True so
-    the model only sees its token limit (512 tokens for all three).
+    Runs three remote Space calls in order: sentiment, general bias,
+    political bias. Source-level political leaning is a local DB lookup.
+    A 0.1 second sleep between Space calls avoids bursting one Space.
 
-    Three remote Space calls: sentiment, general bias, political bias.
-    Source-level political leaning is a local DB lookup — no network.
-    0.1s sleep between Space calls to avoid bursting the same Space.
-
-    LIME explainability runs after political bias scoring — only when
-    confidence >= _LIME_CONFIDENCE_THRESHOLD (0.6). Skipped for low-
-    confidence classifications where attribution would be unreliable.
-    LIME makes ~50 additional Space calls (~10–20s extra per article).
+    LIME explainability runs only when political bias confidence is at or
+    above _LIME_CONFIDENCE_THRESHOLD (0.6). Below that threshold the
+    classification is too uncertain to produce reliable attribution.
+    LIME makes approximately 50 additional Space calls per article (10-20s).
     """
     content = (article.get("content") or "")
     title = article.get("title") or ""
@@ -395,7 +394,7 @@ def _score_article(article: dict) -> dict:
     full_text = f"{title}. {content}".strip()[:_TEXT_LIMIT_ARTICLE]
 
     if len(full_text) < 10:
-        print(f"Skipping article {article['id']} — no content")
+        print(f"Skipping article {article['id']} -- no content")
         return {}
 
     sentiment = _sentiment_score(full_text)
@@ -441,8 +440,7 @@ def _score_article(article: dict) -> dict:
     if political_bias_score is not None:
         update_data["political_bias_score"] = political_bias_score
 
-    # LIME explainability — only runs when political bias confidence is
-    # high enough to produce reliable word attribution. Skipped otherwise.
+    # Run LIME only when confidence is high enough for reliable attribution.
     if (
         political_bias_label and political_bias_score is not None and political_bias_score >= _LIME_CONFIDENCE_THRESHOLD
     ):
@@ -462,14 +460,14 @@ def _score_article(article: dict) -> dict:
     return {"id": article["id"], "update": update_data}
 
 
-# ── Windowed article fetch (by created_at) ────────────────────────────────────
-
-
 def _fetch_unscored_articles(window_hours: int) -> list:
     """
     Fetch unscored articles ingested within the last `window_hours`.
-    Filters by created_at (ingestion time) not published_at so articles
-    published weeks ago but ingested today are always scored.
+
+    Uses created_at (ingestion time) not published_at so articles
+    published weeks ago but ingested today are always included.
+    Content is fetched in a second query and merged in to avoid
+    Supabase row size limits on the initial select.
     """
     cutoff = (
         datetime.now(timezone.utc) - timedelta(hours=window_hours)
@@ -506,14 +504,12 @@ def _fetch_unscored_articles(window_hours: int) -> list:
     return articles
 
 
-# ── Backfill — no time window ─────────────────────────────────────────────────
-
-
 def _fetch_all_unscored_articles() -> list:
     """
-    Fetch ALL unscored articles regardless of age.
-    Used for one-time backfill of articles missed by the 7d window.
-    Pages through in batches of 1000 to avoid Supabase row limits.
+    Fetch all unscored articles regardless of age for one-time backfill.
+
+    Pages through the database in batches of 1000 to stay within
+    Supabase row limits. Called by backfill_all_articles.
     """
     all_articles: list = []
     page_size = 1000
@@ -557,13 +553,13 @@ def _fetch_all_unscored_articles() -> list:
     return all_articles
 
 
-# ── Shared gather logic ───────────────────────────────────────────────────────
-
-
 async def _run_analysis(articles: list, label: str) -> None:
     """
     Score and persist a list of articles concurrently.
+
     Shared by analyze_unscored_articles and backfill_all_articles.
+    Staggered 0.5s per article to spread Space calls across the window
+    defined by _ANALYSIS_CONCURRENCY (8 articles x 0.5s = 3.5s spread).
     """
     print(
         f"{label}: analyzing {len(articles)} articles "
@@ -595,20 +591,19 @@ async def _run_analysis(articles: list, label: str) -> None:
     print(f"{label}: complete.")
 
 
-# ── Public entry points ───────────────────────────────────────────────────────
-
-
 async def analyze_unscored_articles() -> None:
     """
-    Async entry point called by APScheduler every 5 minutes.
-    Scores articles ingested in the last 7 days (created_at window).
-    7 days matches standard news app display conventions and covers
-    ingestion lag where old articles are ingested well after publish.
+    Score articles ingested in the last 7 days. Called by APScheduler
+    every 5 minutes.
+
+    Uses the created_at window to cover ingestion lag where articles
+    published weeks ago are ingested and scored today. A running guard
+    prevents overlapping cycles if the previous one has not finished.
     """
     global _analysis_running
 
     if _analysis_running:
-        print("Analysis already running — skipping duplicate trigger.")
+        print("Analysis already running -- skipping duplicate trigger.")
         return
 
     _analysis_running = True
@@ -631,14 +626,16 @@ async def analyze_unscored_articles() -> None:
 
 async def backfill_all_articles() -> None:
     """
-    One-time backfill — scores ALL unscored articles in the database
-    regardless of age. Called via POST /debug/backfill.
-    Pages in batches of 1000, no article cap.
+    Score all unscored articles in the database regardless of age.
+
+    One-time backfill called via POST /debug/backfill. Pages through
+    in batches of 1000 with no article count cap. A running guard
+    prevents the backfill from launching during an active cycle.
     """
     global _analysis_running
 
     if _analysis_running:
-        print("Analysis already running — skipping backfill.")
+        print("Analysis already running -- skipping backfill.")
         return
 
     _analysis_running = True

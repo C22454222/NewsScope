@@ -1,30 +1,27 @@
 """
-NewsScope FastAPI application entry points.
+NewsScope FastAPI application entry point.
 
-SCHEDULING OVERVIEW (v8 — chain-first, FCM notifications, credibility snapshot):
+SCHEDULING OVERVIEW (v8 — chain-first, FCM notifications):
 
   PIPELINE (chained, fires automatically each cycle):
-    :00  Ingestion starts   (CronTrigger minute=0)
+    :00  Ingestion starts (CronTrigger minute=0).
          Categorisation is inline — happens per-article during scraping.
-         Completes in ~5 minutes on 512MB Render free tier.
-         _heavy_job_lock held for entire duration.
-         on completion
-         Analysis fires immediately — no fixed wait, no wasted minutes.
-         Completes in ~10-15 minutes (200 articles x 8 concurrent HF calls).
-         LIME runs inside analysis for high-confidence articles (~20-30 min).
-         on completion
-         FCM notification sent to `news_updates` topic if new articles
-         were inserted. Count measured from articles inserted during
-         the ingestion window (created_at within last 30 minutes).
-         on completion
-         Pipeline done. Total wall time: ~25-40 minutes per hour.
+         Completes in ~5 minutes on 512 MB Render free tier.
+         _heavy_job_lock held for the entire duration.
+      -> on completion: Analysis fires immediately — no fixed wait,
+         no wasted idle minutes. Completes in ~10-15 minutes
+         (200 articles × 8 concurrent HF calls). LIME runs inside
+         analysis for high-confidence articles (~20-30 min).
+      -> on completion: FCM notification sent to the news_updates topic
+         if new articles were inserted during this cycle.
+         Count is measured from articles.created_at within the last
+         _NOTIFICATION_WINDOW_MINUTES minutes.
+      -> Pipeline done. Total wall time: ~25-40 minutes per hour.
 
-  SAFETY NETS (cron — only fire if chained call failed/was skipped):
+  SAFETY NETS (cron — only fire if the chained call failed/was skipped):
     :20  Analysis safety net  (CronTrigger minute=20)
     :50  Fact-check           (CronTrigger minute=50)
     03:00 Archiving           (CronTrigger hour=3)
-
-Flake8: 0 errors/warnings.
 """
 
 import asyncio
@@ -59,21 +56,33 @@ from app.schemas import (
     ReadingHistoryCreate,
 )
 
-
-# ── Main event loop — captured in lifespan for sync bridges ──────────────────
+# Captured in lifespan and passed to ingestion so APScheduler threads
+# can schedule coroutines onto the main event loop via run_coroutine_threadsafe.
 _main_loop: Optional[asyncio.AbstractEventLoop] = None
 
-
-# ── Job guards ────────────────────────────────────────────────────────────────
+# Guards that prevent overlapping ingestion/analysis cycles.
 _ingestion_running = False
 _analysis_running = False
 _heavy_job_lock = threading.Lock()
 
+# Minimum age of the most recent article (minutes) required before
+# a startup cycle is allowed to run — prevents bursting immediately
+# after a cold Render redeploy.
 _REDEPLOY_GUARD_MINUTES = 45
+
+# Look-back window used to count newly inserted articles for FCM.
 _NOTIFICATION_WINDOW_MINUTES = 30
 
 
 def init_firebase() -> None:
+    """
+    Initialise Firebase Admin SDK.
+
+    Reads credentials from the FIREBASE_SERVICE_ACCOUNT environment
+    variable (JSON string) if present, otherwise falls back to a local
+    firebase-service-account.json file. ValueError is swallowed — it
+    means the SDK was already initialised (e.g. during hot-reload).
+    """
     try:
         service_account = os.getenv("FIREBASE_SERVICE_ACCOUNT")
         if service_account:
@@ -92,9 +101,6 @@ def init_firebase() -> None:
 init_firebase()
 
 
-# ── Political bias label → numeric score ──────────────────────────────────────
-
-
 def _political_bias_score(label: Optional[str]) -> Optional[float]:
     """Map a RoBERTa political_bias label to a [-1, +1] numeric score."""
     if not label:
@@ -107,9 +113,6 @@ def _political_bias_score(label: Optional[str]) -> Optional[float]:
     if upper in ("CENTER", "CENTRE"):
         return 0.0
     return None
-
-
-# ── FCM notification helper ───────────────────────────────────────────────────
 
 
 def _count_recently_inserted_articles() -> int:
@@ -132,8 +135,11 @@ def _count_recently_inserted_articles() -> int:
 
 def _notify_new_articles() -> None:
     """
-    Send an FCM push notification to the `news_updates` topic if new
+    Send an FCM push notification to the news_updates topic if new
     articles were inserted during this ingestion cycle.
+
+    Skipped silently when the count is zero. FCM failures are logged
+    and swallowed — a notification failure must never crash the pipeline.
     """
     count = _count_recently_inserted_articles()
     if count <= 0:
@@ -170,8 +176,10 @@ def _notify_new_articles() -> None:
         print(f"FCM publish failed: {exc}")
 
 
-# ── Sync bridges for APScheduler ─────────────────────────────────────────────
-
+# ── APScheduler sync bridges ──────────────────────────────────────────────────
+# APScheduler runs jobs in background threads. Each bridge acquires the
+# heavy-job lock, then schedules the async coroutine onto the main loop via
+# run_coroutine_threadsafe. The lock is always released in a finally block.
 
 def _sync_ingestion() -> None:
     if not _heavy_job_lock.acquire(blocking=False):
@@ -243,10 +251,16 @@ def _sync_archive() -> None:
         print(f"Scheduled archiving error: {exc}")
 
 
-# ── Async job wrappers ────────────────────────────────────────────────────────
-
+# ── Async pipeline wrappers ───────────────────────────────────────────────────
 
 async def _scheduled_ingestion() -> None:
+    """
+    Run ingestion then immediately chain analysis and FCM notification.
+
+    Guard flag prevents duplicate runs if the cron fires while a prior
+    cycle is still executing. The chain fires on completion so analysis
+    always starts with a fresh article pool and no idle wait is wasted.
+    """
     global _ingestion_running
     if _ingestion_running:
         print("Ingestion already running — skipping duplicate trigger.")
@@ -270,6 +284,12 @@ async def _scheduled_ingestion() -> None:
 
 
 async def _guarded_analysis() -> None:
+    """
+    Run analysis with a guard that prevents overlapping cycles.
+
+    Called directly by _scheduled_ingestion after ingestion completes,
+    and also by the :20 safety net when ingestion was skipped or failed.
+    """
     global _analysis_running
     if _analysis_running:
         print("Analysis already running — skipping duplicate trigger.")
@@ -283,9 +303,16 @@ async def _guarded_analysis() -> None:
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
 
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """
+    FastAPI lifespan handler.
+
+    Captures the main event loop, starts APScheduler with four jobs
+    (ingestion, analysis safety net, fact-check, archiving), and
+    launches keep-alive in production. Schedules a startup sequence
+    that respects the redeploy guard before running the first cycle.
+    """
     global _main_loop
 
     from app.core.scheduler import scheduler
@@ -349,8 +376,15 @@ async def lifespan(app: FastAPI):
 
 # ── Startup helpers ───────────────────────────────────────────────────────────
 
-
 def _ingestion_ran_recently() -> bool:
+    """
+    Return True if the most recent article update was within
+    _REDEPLOY_GUARD_MINUTES, indicating a pipeline ran before this
+    deploy and a full startup cycle should be skipped.
+
+    Falls back to False (i.e., proceed with ingestion) on any error
+    so a DB outage doesn't permanently suppress startup cycles.
+    """
     try:
         data = (
             supabase.table("articles")
@@ -388,6 +422,14 @@ def _ingestion_ran_recently() -> bool:
 
 
 async def _run_startup_sequence() -> None:
+    """
+    Run on startup: skip the full pipeline if the redeploy guard fires,
+    otherwise acquire the lock and run the full chained pipeline
+    (ingestion → analysis → FCM notification).
+
+    When the guard fires, waits 180 s then runs analysis alone so
+    freshly deployed scoring improvements are applied to existing articles.
+    """
     if _ingestion_ran_recently():
         print(
             "Startup ingestion skipped (redeploy guard). "
@@ -425,12 +467,17 @@ async def _run_startup_sequence() -> None:
 app = FastAPI(title="NewsScope API", version="1.0.0", lifespan=lifespan)
 
 
-# ── Auth ──────────────────────────────────────────────────────────────────────
-
+# ── Auth dependency ───────────────────────────────────────────────────────────
 
 def get_current_user(
     authorization: Optional[str] = Header(None),
 ) -> str:
+    """
+    Validate the Firebase ID token from the Authorization header.
+
+    Returns the authenticated Firebase UID on success. Raises HTTP 401
+    for missing, invalid, or expired tokens.
+    """
     if not authorization:
         raise HTTPException(status_code=401, detail="Not authenticated")
     token = authorization.replace("Bearer ", "")
@@ -455,7 +502,6 @@ def get_current_user(
 
 # ── Core routes ───────────────────────────────────────────────────────────────
 
-
 @app.get("/")
 def root():
     return {
@@ -478,7 +524,6 @@ def health():
 
 
 # ── Internal + debug routes ───────────────────────────────────────────────────
-
 
 @app.post("/internal/analyze-batch")
 async def internal_analyze_batch(background_tasks: BackgroundTasks):
@@ -520,19 +565,21 @@ async def debug_notify():
 
 # ── User API ──────────────────────────────────────────────────────────────────
 
-
 @app.post("/api/reading-history")
 async def track_reading(
     data: ReadingHistoryCreate,
     user_id: str = Depends(get_current_user),
 ):
     """
-    Track article reading time and snapshot scores for bias profile.
+    Record that the current user read an article and snapshot the
+    article's bias/credibility scores onto the history row.
 
-    Upsert on (user_id, article_id) so repeated reads of the same
-    article update the existing row rather than creating duplicates.
-    The Flutter client may call this multiple times for one read
-    (once at 5s auto-track, once on exit, once on app backgrounding).
+    Uses an update-if-greater strategy on an existing row: if the client
+    sends a shorter duration than what is already stored (e.g. a 5 s
+    auto-ping after the user already read the full article), the stored
+    value is kept. This means multiple calls from a single reading session
+    (5 s auto-track, exit hook, app backgrounding) always converge to the
+    longest observed duration without creating duplicate rows.
     """
     try:
         article_data = (
@@ -561,7 +608,6 @@ async def track_reading(
             "political_bias": scores.get("political_bias"),
         }
 
-        # Check for existing row; if present, update; else insert.
         existing = (
             supabase.table("reading_history")
             .select("id, time_spent_seconds")
@@ -573,9 +619,6 @@ async def track_reading(
         )
 
         if existing:
-            # Only update if the new time is greater than stored time,
-            # so multiple pings from one session always converge to
-            # the longest duration observed.
             stored_time = existing[0].get("time_spent_seconds", 0) or 0
             if data.time_spent_seconds > stored_time:
                 response = (
@@ -607,10 +650,12 @@ async def track_reading(
 @app.get("/api/bias-profile", response_model=BiasProfile)
 async def get_bias_profile(user_id: str = Depends(get_current_user)):
     """
-    Calculate user's bias profile from reading history.
+    Calculate and return the bias profile for the current user.
 
-    All scores read from snapshot columns on reading_history so profile
-    data stays intact after articles are archived and purged.
+    All scores are read from snapshot columns on reading_history so
+    the profile remains accurate after articles are archived and purged
+    from the articles table. Nothing is persisted — computed live on
+    every request.
     """
     try:
         response = (
@@ -656,7 +701,7 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
 
         total_time = sum(h["time_spent_seconds"] for h in history)
 
-        # ── Outlet-level bias (bias_score snapshot) ───────────────────
+        # Outlet-level bias — time-weighted average of bias_score snapshot.
         bias_terms = [
             (h["time_spent_seconds"], h["bias_score"])
             for h in history
@@ -731,7 +776,7 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
             if cred_values else None
         )
 
-        # ── Article-level bias (political_bias snapshot) ──────────────
+        # Article-level bias — time-weighted average of political_bias snapshot.
         art_left = 0
         art_center = 0
         art_right = 0
@@ -776,7 +821,7 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
             ),
         }
 
-        # ── General bias (general_bias snapshot: BIASED / UNBIASED) ───
+        # General bias — count of BIASED / UNBIASED labels from DistilRoBERTa.
         biased_count = 0
         unbiased_count = 0
         for h in history:
@@ -819,7 +864,14 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
 
 @app.post("/api/articles/compare", response_model=ComparisonResponse)
 async def compare_articles(request: ComparisonRequest):
-    """Group articles by political leaning for the Compare screen."""
+    """
+    Group articles by political leaning for the Compare screen.
+
+    Filters the full article pool (no date cutoff) by topic (ilike on
+    title and content), category (sub-category expansion via
+    CATEGORY_GROUP_MAP), and source. Splits the result into left
+    (bias_score < -0.3), center (-0.3 to 0.3), and right (> 0.3) bands.
+    """
     try:
         query = (
             supabase.table("articles")

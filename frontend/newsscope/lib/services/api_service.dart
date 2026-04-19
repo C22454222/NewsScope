@@ -8,11 +8,17 @@ import '../core/config.dart';
 import '../models/article.dart';
 import '../models/bias_profile.dart';
 
+/// HTTP client for all NewsScope backend requests.
+///
+/// Every authenticated method calls [_getToken()] first. If no Firebase
+/// user is signed in, or the token fetch fails, the method returns early
+/// without hitting the network.
 class ApiService {
   static String get _baseUrl => AppConfig.baseUrl;
 
-  // ── Auth ──────────────────────────────────────────────────────────────────
+  // Auth helpers
 
+  /// Returns the current user's Firebase ID token, or null on failure.
   Future<String?> _getToken() async {
     try {
       final user = FirebaseAuth.instance.currentUser;
@@ -27,13 +33,13 @@ class ApiService {
     }
   }
 
-  // ── User registration ─────────────────────────────────────────────────────
+  // User registration
 
-  /// Upserts the user record in Supabase.
+  /// Upserts the user record in Supabase via POST /users.
   ///
   /// Sends display_name so the users.display_name column stays in sync
-  /// with Firebase without requiring a separate PUT call. The backend
-  /// ON CONFLICT (email) upsert will update the field on every login.
+  /// with Firebase on every login without a separate PUT call. The
+  /// backend uses ON CONFLICT (email) to upsert.
   Future<void> registerUser({
     required String uid,
     required String email,
@@ -61,8 +67,9 @@ class ApiService {
     }
   }
 
-  // ── User deletion ─────────────────────────────────────────────────────────
+  // User deletion
 
+  /// Deletes the user record from Supabase via DELETE /users/:uid.
   Future<void> deleteUser(String uid) async {
     final token = await _getToken();
     if (token == null) {
@@ -84,8 +91,9 @@ class ApiService {
     }
   }
 
-  // ── Articles ──────────────────────────────────────────────────────────────
+  // Articles
 
+  /// Fetches the article feed, optionally filtered by category or source.
   Future<List<Article>> getArticles({
     String? category,
     String? source,
@@ -120,6 +128,7 @@ class ApiService {
     }
   }
 
+  /// Fetches a single article by ID. Returns null on error or 404.
   Future<Article?> getArticle(String articleId) async {
     try {
       final response = await http.get(
@@ -137,8 +146,10 @@ class ApiService {
     return null;
   }
 
-  // ── Reading history ───────────────────────────────────────────────────────
+  // Reading history
 
+  /// Records that the authenticated user read [articleId] for
+  /// [timeSpentSeconds] seconds via POST /api/reading-history.
   Future<void> trackReading({
     required String articleId,
     required int timeSpentSeconds,
@@ -171,8 +182,10 @@ class ApiService {
     }
   }
 
-  // ── Bias profile ──────────────────────────────────────────────────────────
+  // Bias profile
 
+  /// Fetches the authenticated user's aggregated bias profile.
+  /// Returns null if unauthenticated or the request fails.
   Future<BiasProfile?> getBiasProfile() async {
     final token = await _getToken();
     if (token == null) {
@@ -201,13 +214,14 @@ class ApiService {
     return null;
   }
 
-  // ── Article comparison ────────────────────────────────────────────────────
+  // Article comparison
 
-  /// POST /api/articles/compare
+  /// Fetches cross-source comparison results for a topic via
+  /// POST /api/articles/compare.
   ///
-  /// The [limit] parameter has been removed — the backend controls
-  /// per-band limits internally and the ComparisonRequest schema
-  /// has no limit field. Sending it was a no-op.
+  /// The limit parameter has been removed. The backend controls
+  /// per-band limits internally; the ComparisonRequest schema has no
+  /// limit field.
   Future<Map<String, dynamic>?> compareArticles(
     String topic, {
     String? category,
@@ -240,8 +254,10 @@ class ApiService {
     return null;
   }
 
-  // ── Fact-checks ───────────────────────────────────────────────────────────
+  // Fact-checks
 
+  /// Triggers an on-demand fact-check for [articleId] via
+  /// POST /articles/:id/factcheck.
   Future<Map<String, dynamic>?> triggerFactCheck(
       String articleId) async {
     try {

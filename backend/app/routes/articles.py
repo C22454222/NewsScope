@@ -1,14 +1,10 @@
 """
-NewsScope Articles API Router.
+NewsScope articles API router.
 
-Credibility scoring + fact-checking endpoints.
-Category filtering uses CATEGORY_GROUP_MAP to resolve sub-categories
-(football, climate, film, etc.) to their parent group so Flutter's
-chip filter correctly matches all stored variants.
-
-Archive window: 7 days — weekly rolling article pool.
-
-Flake8: 0 errors/warnings.
+Handles article retrieval, insertion, and credibility scoring endpoints.
+Category filtering resolves sub-categories (football, climate, film etc.)
+to their Flutter chip parent group via CATEGORY_GROUP_MAP so filter chips
+correctly match all stored variants. Archive window is 7 days.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -24,14 +20,13 @@ from app.jobs.fact_checking import (
 )
 from app.schemas import ArticleCreate, ArticleResponse
 
-
 router = APIRouter(tags=["articles"])
 
-# Rolling archive window — 7 days for a weekly article pool.
+# Rolling 7-day archive window -- articles older than this are excluded.
 _ARCHIVE_DAYS = 7
 
-# Maps granular backend sub-categories → Flutter parent chip categories.
-# Ensures ?category=sport returns articles tagged football/rugby/gaa etc.
+# Maps granular backend sub-categories to Flutter parent chip categories.
+# Ensures ?category=sport returns articles tagged football, rugby, gaa etc.
 # Mirrors the chip categories in HomeFeedTab._categories (lowercased).
 CATEGORY_GROUP_MAP: dict = {
     # sport
@@ -60,7 +55,7 @@ CATEGORY_GROUP_MAP: dict = {
 
 
 def _archive_cutoff() -> str:
-    """ISO timestamp for the start of the rolling archive window."""
+    """Return an ISO timestamp for the start of the rolling archive window."""
     return (
         datetime.now(timezone.utc) - timedelta(days=_ARCHIVE_DAYS)
     ).isoformat()
@@ -69,8 +64,9 @@ def _archive_cutoff() -> str:
 def _write_fact_check_rows(article_id: str, structured_checks: list) -> None:
     """
     Upsert normalised fact-check rows into the fact_checks table.
-    Deletes existing rows for the article first to avoid duplicates.
-    No-op if structured_checks is empty.
+
+    Deletes existing rows for the article first to prevent duplicates
+    on re-checks. No-op if structured_checks is empty.
     """
     if not structured_checks:
         return
@@ -91,13 +87,12 @@ def get_articles(
     source: Optional[str] = Query(default=None),
 ) -> List[dict]:
     """
-    Recent articles (7d rolling window), optionally filtered by
-    category and/or source.
+    Return recent articles within the 7-day rolling window.
 
-    Category resolves sub-categories via CATEGORY_GROUP_MAP so
-    ?category=sport returns articles tagged sport, football, rugby etc.
-    Source matches the exact source name stored in the articles table,
-    e.g. ?source=BBC+News or ?source=RTÉ+News.
+    Optionally filtered by category and/or source. Category resolves
+    sub-categories via CATEGORY_GROUP_MAP so ?category=sport includes
+    articles tagged sport, football, rugby etc. Source matches the exact
+    source name stored in articles.source.
     """
     query = (
         supabase.table("articles")
@@ -126,12 +121,12 @@ def get_comparison_articles(
     source: Optional[str] = Query(default=None),
 ) -> List[dict]:
     """
-    Articles for comparison view, filtered by topic, category, and/or source.
+    Return articles for the comparison view filtered by topic, category,
+    and/or source.
 
-    Topic searches both title and content so articles with empty content
-    fields are still matched by title.
-    Category resolves sub-categories via CATEGORY_GROUP_MAP.
-    Source matches the exact source name stored in the articles table.
+    Topic searches both title and content via ilike so articles with
+    empty content fields are still matched by headline. Category resolves
+    sub-categories via CATEGORY_GROUP_MAP. Source matches exact name.
     """
     query = (
         supabase.table("articles")
@@ -160,7 +155,13 @@ def get_comparison_articles(
 
 @router.post("")
 async def add_article(article: ArticleCreate) -> dict:
-    """Add article with automatic credibility enrichment."""
+    """
+    Insert a new article with automatic credibility enrichment.
+
+    Credibility is computed synchronously at insert time so the article
+    row is never stored with a bare 'Pending' state when fact-checking
+    succeeds. Inserts normalised fact_checks rows alongside the article.
+    """
     now = datetime.now(timezone.utc).isoformat()
 
     insert_data = {
@@ -209,7 +210,7 @@ async def add_article(article: ArticleCreate) -> dict:
 
 @router.get("/recent-factchecks")
 async def recent_factchecks(hours: int = 24) -> List[dict]:
-    """Return recently fact-checked articles for Flutter dashboard."""
+    """Return recently fact-checked articles for the Flutter dashboard."""
     return await batch_factcheck_recent(hours)
 
 
@@ -230,8 +231,10 @@ def get_article(article_id: str) -> dict:
 @router.post("/{article_id}/factcheck")
 async def factcheck_article(article_id: str) -> dict:
     """
-    Manually re-run fact-check for a single article.
-    Updates both articles and fact_checks tables.
+    Manually re-run fact-checking for a single article.
+
+    Updates both the articles row (scalar fields and JSONB blob) and
+    inserts fresh rows into the normalised fact_checks table.
     """
     resp = (
         supabase.table("articles")
@@ -262,8 +265,8 @@ async def factcheck_article(article_id: str) -> dict:
 @router.post("/admin/factcheck/recent")
 async def run_recent_factcheck(hours: int = 48) -> dict:
     """
-    Re-run fact-checks for articles in the last `hours` hours
-    with credibility score at or below 80.1.
+    Re-run fact-checks for articles in the last `hours` hours whose
+    credibility score is at or below 80.1.
     """
     results = await batch_factcheck_recent(hours=hours)
     return {"checked": len(results)}
@@ -272,9 +275,9 @@ async def run_recent_factcheck(hours: int = 48) -> dict:
 @router.post("/admin/factcheck/retroactive")
 async def run_retroactive_factcheck(limit: int = 500) -> dict:
     """
-    Backfill fact-checks for all articles that have never been
-    checked or haven't been checked in the last 7 days.
-    Run once after deploy, then leave to the scheduler.
+    Backfill fact-checks for all articles that have never been checked
+    or have not been checked in the last 14 days. Run once after deploy,
+    then leave to the scheduler.
     """
     results = await retroactive_factcheck_all(limit=limit)
     return {"checked": len(results)}

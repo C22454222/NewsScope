@@ -2,6 +2,10 @@ import 'package:flutter/material.dart';
 import '../utils/score_helpers.dart';
 
 /// Standalone bias label chip for list tiles and detail views.
+///
+/// Shows the source-level bias label derived from [biasScore]. When
+/// [biasIntensity] is provided, a secondary percentage label is rendered
+/// alongside the chip.
 class BiasChip extends StatelessWidget {
   final double? biasScore;
   final double? biasIntensity;
@@ -22,7 +26,8 @@ class BiasChip extends StatelessWidget {
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          padding:
+              const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
           decoration: BoxDecoration(
             color: color.withAlpha((255 * 0.12).round()),
             borderRadius: BorderRadius.circular(12),

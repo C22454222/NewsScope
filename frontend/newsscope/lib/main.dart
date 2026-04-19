@@ -5,15 +5,17 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 
 import 'screens/auth_gate.dart';
-import 'screens/settings_screen.dart'; // for AppTheme and AppNotifications
+import 'screens/settings_screen.dart';
 import 'core/app_prefs.dart';
 
-// ── FCM background message handler ────────────────────────────────────────────
-// Must be a top-level function (not a class method). Flutter runs this in a
-// separate isolate on Android when the app is terminated or in the background.
+/// FCM background message handler.
+///
+/// Must be a top-level function, not a class method. Flutter executes
+/// this in a separate Dart isolate on Android when the app is terminated
+/// or backgrounded, so Firebase must be re-initialised inside it.
 @pragma('vm:entry-point')
-Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  // Firebase must be initialised in the background isolate too.
+Future<void> _firebaseMessagingBackgroundHandler(
+    RemoteMessage message) async {
   await Firebase.initializeApp();
   debugPrint('Background FCM message: ${message.messageId}');
 }
@@ -21,21 +23,23 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // Silence all debug output in release builds.
   if (kReleaseMode) {
     debugPrint = (String? message, {int? wrapWidth}) {};
   }
 
   await Firebase.initializeApp();
 
-  // Register the background message handler BEFORE any other FCM calls.
-  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+  // Register the background handler before any other FCM calls.
+  FirebaseMessaging.onBackgroundMessage(
+      _firebaseMessagingBackgroundHandler);
 
-  // Initialise the local notifications plugin and create the Android
-  // channel. Must run before any notification can be shown — on Android 8+
-  // notifications without a channel are silently dropped.
+  // Initialise local notifications and create the Android channel.
+  // Must run before any notification is shown; on Android 8+ a missing
+  // channel causes notifications to be silently dropped.
   await AppNotifications.init();
 
-  // Load the persisted theme preference before the first frame is painted.
+  // Load persisted preferences before the first frame is painted.
   await AppTheme.load();
   await AppPrefs.load();
 
@@ -47,8 +51,9 @@ class NewsScopeApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // ValueListenableBuilder rebuilds MaterialApp whenever AppTheme.notifier
-    // changes, giving instant dark/light switching without a full restart.
+    // ValueListenableBuilder rebuilds MaterialApp whenever the theme
+    // notifier changes, giving instant dark/light switching without a
+    // full app restart.
     return ValueListenableBuilder<ThemeMode>(
       valueListenable: AppTheme.notifier,
       builder: (_, themeMode, _) {
@@ -56,7 +61,7 @@ class NewsScopeApp extends StatelessWidget {
           title: 'NewsScope',
           debugShowCheckedModeBanner: false,
 
-          // ── Light theme ──────────────────────────────────────────────────
+          // Light theme
           theme: ThemeData(
             colorScheme: ColorScheme.fromSeed(
               seedColor: Colors.blue,
@@ -67,7 +72,7 @@ class NewsScopeApp extends StatelessWidget {
             useMaterial3: true,
           ),
 
-          // ── Dark theme ───────────────────────────────────────────────────
+          // Dark theme
           darkTheme: ThemeData(
             colorScheme: ColorScheme.fromSeed(
               seedColor: Colors.blue,

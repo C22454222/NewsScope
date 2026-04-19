@@ -5,15 +5,13 @@ import '../services/api_service.dart';
 import '../widgets/article_card.dart';
 import '../screens/article_detail_screen.dart';
 
-/// How the Left / Centre / Right tabs are populated.
+/// Controls how the Left / Centre / Right tabs are populated.
 ///
-/// - [source]  uses the outlet's `bias_score` (same as before — matches the
-///             backend's server-side grouping).
-/// - [article] uses the RoBERTa `political_bias` label produced on the
-///             article's own text. Bucketing happens client-side after the
-///             three response lists are merged.
+/// [source] uses the outlet's baseline bias score (server-side grouping).
+/// [article] uses the article-level RoBERTa label, rebucketed client-side.
 enum CompareGrouping { source, article }
 
+/// Compare screen shows how a topic is covered across the political spectrum.
 class CompareScreen extends StatefulWidget {
   final VoidCallback onArticleRead;
 
@@ -31,6 +29,7 @@ class _CompareScreenState extends State<CompareScreen>
 
   late TabController _tabController;
 
+  // Raw API response, kept so we can regroup without refetching.
   Map<String, dynamic>? _rawResults;
   bool _isLoading = false;
   String? _errorMessage;
@@ -39,8 +38,7 @@ class _CompareScreenState extends State<CompareScreen>
   String? _selectedCategory;
   String? _selectedSource;
 
-  // Default grouping is the outlet's baseline rating — keeps the original
-  // feature working. Users can switch to article-level via the toggle.
+  // Default to outlet-level grouping, matching the original feature.
   CompareGrouping _grouping = CompareGrouping.source;
 
   static const List<Map<String, String>> _categories = [
@@ -62,6 +60,7 @@ class _CompareScreenState extends State<CompareScreen>
     {'label': 'Opinion', 'value': 'opinion'},
   ];
 
+  // Maps the short chip label to the canonical source name used by the API.
   static const Map<String, String> _sourceMap = {
     'BBC': 'BBC News',
     'RTE': 'RTÉ News',
@@ -83,6 +82,7 @@ class _CompareScreenState extends State<CompareScreen>
     'GB News', 'Fox News',
   ];
 
+  // Tab indicator colours: Left (blue), Centre (teal), Right (red).
   static const _tabColors = [
     Color(0xFF1565C0),
     Color(0xFF00796B),
@@ -109,14 +109,17 @@ class _CompareScreenState extends State<CompareScreen>
     super.dispose();
   }
 
+  // True when the user has entered a keyword or selected a category/source.
   bool get _hasAnyFilter =>
       _searchController.text.trim().isNotEmpty ||
       (_selectedCategory != null && _selectedCategory!.isNotEmpty) ||
       _selectedSource != null;
 
+  /// Fetches compare results from the API for the current filter selection.
   Future<void> _searchTopic() async {
     FocusScope.of(context).unfocus();
 
+    // Nothing to search for: clear any stale results and bail.
     if (!_hasAnyFilter) {
       setState(() {
         _errorMessage = null;
@@ -286,10 +289,8 @@ class _CompareScreenState extends State<CompareScreen>
     );
   }
 
-  // ── Grouping toggle ────────────────────────────────────────────────────────
-  // Switches the Left / Centre / Right tab buckets between the outlet's
-  // baseline rating and the article-level RoBERTa classification.
-
+  // Grouping toggle: switches tab buckets between outlet baseline and
+  // article-level RoBERTa classification.
   Widget _buildGroupingToggle() {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
@@ -362,7 +363,7 @@ class _CompareScreenState extends State<CompareScreen>
     );
   }
 
-  // ── Bucketing ──────────────────────────────────────────────────────────────
+  // Bucketing helpers.
 
   List<Article> _toArticles(List<dynamic>? raw) {
     if (raw == null) return [];
@@ -372,8 +373,8 @@ class _CompareScreenState extends State<CompareScreen>
         .toList();
   }
 
-  /// Merge all three server buckets into a single article list. Used when
-  /// regrouping client-side by article-level RoBERTa label.
+  /// Merges all three server buckets into a single deduplicated list.
+  /// Used when regrouping client-side by article-level RoBERTa label.
   List<Article> _allArticlesFromResults(Map<String, dynamic>? results) {
     if (results == null) return [];
     final merged = <Article>[];
@@ -381,16 +382,14 @@ class _CompareScreenState extends State<CompareScreen>
     merged.addAll(_toArticles(results['center_articles'] as List<dynamic>?));
     merged.addAll(_toArticles(results['right_articles'] as List<dynamic>?));
 
-    // Deduplicate by id — server buckets should already be disjoint but be
-    // defensive against future API changes.
+    // Server buckets should already be disjoint, but dedupe defensively.
     final seen = <String>{};
     return merged.where((a) => seen.add(a.id)).toList();
   }
 
-  /// Bucket an article list into (left, centre, right) using the article's
-  /// `politicalBias` label. Articles without a RoBERTa label fall back to
-  /// their source-level `biasScore` so they still appear somewhere rather
-  /// than disappearing from the UI.
+  /// Buckets an article list into (left, centre, right) using each article's
+  /// RoBERTa [politicalBias] label. Articles without a label fall back to
+  /// their outlet-level [biasScore] so they still appear in the UI.
   ({List<Article> left, List<Article> centre, List<Article> right})
       _bucketByArticle(List<Article> articles) {
     final left = <Article>[];
@@ -406,7 +405,7 @@ class _CompareScreenState extends State<CompareScreen>
       } else if (label == 'CENTER' || label == 'CENTRE') {
         centre.add(a);
       } else {
-        // Fallback to source-level score when no RoBERTa label available.
+        // No RoBERTa label, fall back to source-level score.
         final score = a.biasScore;
         if (score == null) {
           centre.add(a);
@@ -423,7 +422,7 @@ class _CompareScreenState extends State<CompareScreen>
     return (left: left, centre: centre, right: right);
   }
 
-  /// Return the three buckets according to the currently selected grouping.
+  /// Returns the three buckets for the currently selected grouping mode.
   ({List<Article> left, List<Article> centre, List<Article> right})
       _currentBuckets() {
     if (_rawResults == null) {
@@ -440,7 +439,7 @@ class _CompareScreenState extends State<CompareScreen>
       );
     }
 
-    // Article-level grouping: merge all server buckets and rebucket locally.
+    // Article-level grouping: merge server buckets and rebucket locally.
     final merged = _allArticlesFromResults(_rawResults);
     return _bucketByArticle(merged);
   }
@@ -546,6 +545,7 @@ class _CompareScreenState extends State<CompareScreen>
   }
 
   Widget _buildResultsBody() {
+    // Empty state: prompt user to pick a filter.
     if (_rawResults == null) {
       return Center(
         child: Column(
@@ -572,6 +572,7 @@ class _CompareScreenState extends State<CompareScreen>
     final buckets = _currentBuckets();
     final total = buckets.left.length + buckets.centre.length + buckets.right.length;
 
+    // Build a human-readable header from the active filters.
     final topic = _searchController.text.trim();
     final headerParts = <String>[];
     if (topic.isNotEmpty) headerParts.add('"$topic"');
@@ -661,6 +662,8 @@ class _CompareScreenState extends State<CompareScreen>
 
   @override
   Widget build(BuildContext context) {
+    // Button label adapts to whether the user has entered a keyword
+    // or is just browsing a category/source.
     final hasCat = _selectedCategory != null && _selectedCategory!.isNotEmpty;
     final buttonLabel =
         (!_searchController.text.trim().isNotEmpty && _hasAnyFilter)
@@ -672,6 +675,7 @@ class _CompareScreenState extends State<CompareScreen>
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return GestureDetector(
+      // Tap outside any input to dismiss the keyboard.
       onTap: () => FocusScope.of(context).unfocus(),
       child: Scaffold(
         appBar: AppBar(

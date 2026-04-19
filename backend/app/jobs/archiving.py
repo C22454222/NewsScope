@@ -1,10 +1,8 @@
 """
-NewsScope Archiving Job.
+NewsScope archiving job.
 
 Archives articles older than ARCHIVE_DAYS to Supabase Storage,
 then deletes them from the articles table. Runs daily at 03:00.
-
-Flake8: 0 errors/warnings.
 """
 
 import json
@@ -23,7 +21,7 @@ def archive_old_articles() -> None:
     and delete them from the database.
 
     Processes in batches of 500 to avoid memory spikes on Render.
-    Deletes only articles that were successfully archived to prevent
+    Deletes only articles that were successfully uploaded to prevent
     data loss on partial failures.
     """
     now = datetime.now(timezone.utc)
@@ -33,7 +31,7 @@ def archive_old_articles() -> None:
     print(f"Cutoff ({ARCHIVE_DAYS} days ago): {cutoff}")
     print(f"Archiving articles published before {cutoff}...")
 
-    # Step 1: Count total articles to archive
+    # Step 1: Count total articles that need archiving.
     try:
         count_response = (
             supabase.table("articles")
@@ -57,7 +55,7 @@ def archive_old_articles() -> None:
     offset = 0
     batch_size = 500
 
-    # Step 2: Process in batches
+    # Step 2: Fetch and upload articles in batches.
     while True:
         batch_num = offset // batch_size + 1
         expected = min(batch_size, total - offset)
@@ -87,7 +85,7 @@ def archive_old_articles() -> None:
 
         print(f"Retrieved {len(rows)} articles in batch {batch_num}")
 
-        # Step 3: Upload each article to Supabase Storage
+        # Step 3: Upload each article as a JSON blob to Storage.
         for row in rows:
             article_id = row["id"]
             key = f"{article_id}.json"
@@ -115,9 +113,9 @@ def archive_old_articles() -> None:
 
     print(f"Archived {archived_count}/{total} articles to storage")
 
-    # Step 4: Delete successfully archived articles from DB
+    # Step 4: Delete only the articles that were successfully archived.
     if not archived_ids:
-        print("No articles successfully archived — skipping deletion")
+        print("No articles successfully archived -- skipping deletion")
         return
 
     print(
@@ -146,6 +144,6 @@ def archive_old_articles() -> None:
             print(f"Failed to delete batch {batch_num}: {exc}")
 
     print(
-        f"Cleanup complete — "
+        f"Cleanup complete -- "
         f"archived: {archived_count}, deleted: {deleted_total}"
     )

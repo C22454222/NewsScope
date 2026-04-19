@@ -1,32 +1,15 @@
 """
-NewsScope Fact-Checking Service.
+NewsScope fact-checking service.
 
-CHANGES FROM v3:
+Scores each article's credibility (0-100) by combining a source
+reputation baseline with results from the Google Fact Check Tools API.
 
-1. structured_checks — compute_credibility_score() now returns a
-   'structured_checks' list of normalised dicts ready for insertion
-   into the fact_checks table. Previously only the raw JSONB blob
-   was returned; rows were never written to the relational table.
-
-2. credibility_updated_at — batch_factcheck_recent() now sets
-   credibility_updated_at on every article it processes so the
-   retroactive job can identify stale vs. never-checked articles.
-
-3. fact_checks table writes — batch_factcheck_recent() deletes old
-   rows for each article then inserts fresh structured_checks rows
-   into the fact_checks table alongside the JSONB blob update.
-
-4. retroactive_factcheck_all() — new function that queries articles
-   where credibility_updated_at IS NULL (never checked) or older
-   than _STALE_DAYS days (stale), and re-runs credibility scoring.
-   Called by the /admin/factcheck/retroactive endpoint.
-
-5. STALE_DAYS raised to 14 — article pool is 7 days, so articles
-   near the pool edge need a second check window. Fact-checkers
-   publish across a 1–14 day range; 7 days was too narrow to catch
-   slower organisations and policy-claim reviews.
-
-Flake8: 0 errors/warnings.
+Pipeline:
+  1. Build up to 3 search queries from the article title and content.
+  2. Query the Google Fact Check Tools API concurrently.
+  3. Map textual rulings to numeric scores (0.0-1.0).
+  4. Adjust the source reputation baseline by up to +/-20 points.
+  5. Persist results to the articles row and the fact_checks table.
 """
 
 import asyncio
@@ -40,13 +23,11 @@ import httpx
 from app.schemas import ArticleResponse
 from app.db.supabase import supabase
 
-
 _MAX_KEYWORD_QUERIES = 3
 _FACTCHECK_BATCH_SIZE = 100
 
-# Articles not checked in the last 14 days are considered stale.
-# Raised from 7 — fact-checkers publish across a 1–14 day window
-# and articles near the 7-day pool edge need a second pass.
+# Raised from 7 days -- fact-checkers publish across a 1-14 day window
+# and articles near the pool edge need a second check pass.
 _STALE_DAYS = 14
 
 _GOOGLE_FACTCHECK_KEY = os.getenv("GOOGLE_FACTCHECK_API_KEY", "")
@@ -54,6 +35,7 @@ _GOOGLE_FACTCHECK_URL = (
     "https://factchecktools.googleapis.com/v1alpha1/claims:search"
 )
 
+# Source reputation baselines used when no fact-check results match.
 _SOURCE_REPUTATION: Dict[str, float] = {
     "Reuters": 93,
     "Associated Press": 92,
@@ -75,6 +57,7 @@ _SOURCE_REPUTATION: Dict[str, float] = {
     "Deutsche Welle": 80,
 }
 
+# Common English stopwords excluded from keyword extraction.
 _STOPWORDS = {
     "the", "a", "an", "and", "or", "but", "in", "on", "at", "to",
     "for", "of", "with", "by", "from", "is", "are", "was", "were",
@@ -86,9 +69,9 @@ _STOPWORDS = {
     "up", "out", "about", "into", "than", "us", "can",
 }
 
-# Stripped down to only genuine noise — named entities (trump, iran,
-# biden etc.) were removed because fact-checker databases index exactly
-# these terms. Keeping them in was causing zero-match queries.
+# Temporal noise words filtered from queries. Named entities such as
+# trump, iran, biden are intentionally kept -- fact-checker databases
+# index those terms and removing them caused zero-match queries.
 _PROPER_NOUN_STOPWORDS = {
     "says", "told", "year", "years", "also", "after", "first",
     "last", "time", "day", "week", "month",
@@ -96,6 +79,7 @@ _PROPER_NOUN_STOPWORDS = {
     "eight", "nine", "ten", "one",
 }
 
+# Regex to strip common article boilerplate before processing content.
 _BOILERPLATE_RE = re.compile(
     r"^("
     r"NEW\b|close\b|Video|Watch|Listen|"
@@ -110,10 +94,8 @@ _BOILERPLATE_RE = re.compile(
 )
 
 
-# ── Content validation ────────────────────────────────────────────────────────
-
-
 def _is_valid_content(text: str) -> bool:
+    """Return True if the text is long enough and mostly printable."""
     if not text or len(text) < 40:
         return False
     sample = text[:500]
@@ -121,10 +103,13 @@ def _is_valid_content(text: str) -> bool:
     return (printable / len(sample)) > 0.85
 
 
-# ── Keyword extraction ────────────────────────────────────────────────────────
-
-
 def _extract_keywords_from_text(text: str, max_words: int = 5) -> List[str]:
+    """
+    Extract the most relevant keywords from a text string.
+
+    Capitalised tokens (likely named entities) are prioritised over
+    lowercase common words. Stopwords and temporal noise are excluded.
+    """
     words = re.findall(r"\b[A-Za-z][a-zA-Z'\-]{2,}\b|\b\d{4}\b", text)
     seen: Dict[str, int] = {}
     for w in words:
@@ -143,17 +128,15 @@ def _extract_keywords_from_text(text: str, max_words: int = 5) -> List[str]:
 
 def build_search_queries(title: str, content: str) -> List[str]:
     """
-    Build up to 3 queries for the Google Fact Check API.
+    Build up to 3 queries for the Google Fact Check Tools API.
 
-    Query 1: Full headline (≤100 chars) — most likely to match a
-             ClaimReview entry directly. Fact-checkers write reviews
-             against specific claims or headlines, so sending the
-             actual headline first gives the best match rate.
-
-    Query 2: Top keywords from headline, including named entities
-             (trump, iran, israel etc. are now preserved).
-
-    Query 3: Combined title + content keywords for topic coverage.
+    Query 1: Full headline (up to 100 chars). Fact-checkers write
+             ClaimReview entries against specific headlines so this
+             gives the highest direct match rate.
+    Query 2: Top keywords extracted from the headline, including named
+             entities which are preserved for better index coverage.
+    Query 3: Combined title and content keywords for broader topic
+             coverage when the headline alone produces no match.
     """
     queries: List[str] = []
 
@@ -185,12 +168,15 @@ def build_search_queries(title: str, content: str) -> List[str]:
     return queries[:_MAX_KEYWORD_QUERIES]
 
 
-# ── Google Fact Check Tools API ───────────────────────────────────────────────
-
-
 async def _check_single_query(
     client: httpx.AsyncClient, query: str
 ) -> tuple[str, Dict[str, Any]]:
+    """
+    Run a single query against the Google Fact Check Tools API.
+
+    Retries once after a 2 second delay on any exception before
+    returning an API Error result to the caller.
+    """
     for attempt in range(2):
         try:
             resp = await client.get(
@@ -232,8 +218,11 @@ async def _check_single_query(
 
 async def check_google_factclaims(queries: List[str]) -> Dict[str, Any]:
     """
-    All queries run concurrently within a shared httpx.AsyncClient.
-    If GOOGLE_FACTCHECK_API_KEY is not set, returns Unverified for all.
+    Run all queries concurrently within a shared httpx.AsyncClient.
+
+    Returns a dict mapping each query string to its result dict.
+    If GOOGLE_FACTCHECK_API_KEY is not configured, all queries
+    return Unverified without making any network calls.
     """
     if not _GOOGLE_FACTCHECK_KEY:
         return {q: {"ruling": "Unverified", "url": None} for q in queries}
@@ -246,10 +235,13 @@ async def check_google_factclaims(queries: List[str]) -> Dict[str, Any]:
     return dict(results_list)
 
 
-# ── Ruling normalisation ──────────────────────────────────────────────────────
-
-
 def ruling_to_score(ruling: str) -> Optional[float]:
+    """
+    Map a textual fact-check ruling to a numeric score in [0.0, 1.0].
+
+    Returns None for error, no-match, or unverified rulings so they
+    are excluded from the credibility score adjustment calculation.
+    """
     if not ruling:
         return None
     r = ruling.lower()
@@ -283,22 +275,19 @@ def ruling_to_score(ruling: str) -> Optional[float]:
     return 0.5
 
 
-# ── Credibility scoring ───────────────────────────────────────────────────────
-
-
 async def compute_credibility_score(
     article: ArticleResponse,
 ) -> Dict[str, Any]:
     """
-    Compute a credibility score (0–100) for a given article.
+    Compute a credibility score (0-100) for a given article.
 
     Formula:
       base  = _SOURCE_REPUTATION.get(source, 65)
-      adj   = (mean valid fact-check scores - 0.5) * 40  → ±20 pts
+      adj   = (mean valid ruling scores - 0.5) * 40  -- max +/-20 pts
       score = clamp(base + adj, 10, 100)
 
-    Returns a dict including 'structured_checks' — a list of normalised
-    rows ready for insertion into the fact_checks table.
+    Also returns 'structured_checks': a list of normalised dicts
+    ready for insertion into the fact_checks relational table.
     """
     source = getattr(article, "source", None) or ""
     base_score = _SOURCE_REPUTATION.get(source, 65.0)
@@ -359,8 +348,8 @@ async def compute_credibility_score(
             f"Rated {verdict}."
         )
 
-    # Build normalised rows for the fact_checks relational table.
-    # Skips non-matches so only genuine ClaimReview hits are stored.
+    # Build normalised rows for the fact_checks table. Non-matches
+    # and errors are skipped so only genuine ClaimReview hits are stored.
     now = datetime.now(timezone.utc).isoformat()
     structured_checks = []
     for query, result in fact_checks.items():
@@ -384,9 +373,6 @@ async def compute_credibility_score(
     }
 
 
-# ── Shared DB write helper ────────────────────────────────────────────────────
-
-
 def _persist_credibility(
     article_id: str,
     cred: Dict[str, Any],
@@ -394,8 +380,8 @@ def _persist_credibility(
 ) -> None:
     """
     Write credibility results to the articles row and insert normalised
-    rows into the fact_checks table. Deletes stale fact_checks rows first
-    to avoid duplicates on re-checks.
+    rows into the fact_checks table. Deletes existing fact_checks rows
+    first to prevent duplicates on subsequent re-checks.
     """
     supabase.table("articles").update({
         "credibility_score": cred["score"],
@@ -418,23 +404,19 @@ def _persist_credibility(
         ]).execute()
 
 
-# ── Batch re-check (three-stage decay) ───────────────────────────────────────
-
-
 async def batch_factcheck_recent(hours: int = 48) -> List[Dict[str, Any]]:
     """
-    Fact-check articles published in the last `hours` hours
-    whose credibility score is at or below 80.1.
+    Fact-check articles published in the last `hours` hours whose
+    credibility score is at or below 80.1.
 
     Called by the scheduler at three frequencies to match the
     real-world fact-checker publication curve:
+      Every 6h  -- hours=24 catches same-day viral claim checks
+      Every 24h -- hours=72 catches the peak 1-3 day check window
+      Every 72h -- retroactive_factcheck_all handles stale articles
 
-      Every 6h  → hours=24   catches same-day viral claim checks
-      Every 24h → hours=72   catches peak 1–3 day check window
-      Every 72h → retroactive_factcheck_all() for stale articles
-
-    Writes results to both the articles row (JSONB blob + scalar
-    fields) and the normalised fact_checks table.
+    Results are written to both the articles row (JSONB blob and scalar
+    fields) and the normalised fact_checks relational table.
     """
     cutoff = (
         datetime.now(timezone.utc) - timedelta(hours=hours)
@@ -472,20 +454,16 @@ async def batch_factcheck_recent(hours: int = 48) -> List[Dict[str, Any]]:
     return results
 
 
-# ── Retroactive / stale re-check ─────────────────────────────────────────────
-
-
 async def retroactive_factcheck_all(
     limit: int = 500,
 ) -> List[Dict[str, Any]]:
     """
-    Re-check all articles that have never been fact-checked
-    (credibility_updated_at IS NULL) or haven't been checked in
-    the last _STALE_DAYS (14) days.
+    Re-check all articles that have never been fact-checked or have not
+    been checked within the last _STALE_DAYS (14) days.
 
-    Scheduler calls this every 72h to catch slow fact-checkers
-    and policy-claim reviews that publish up to two weeks later.
-    Also used as a one-off backfill endpoint after deploy.
+    Called by the scheduler every 72 hours to catch slow fact-checkers
+    and policy-claim reviews that publish up to two weeks after the
+    original story. Also used as a one-off backfill endpoint post-deploy.
     """
     stale_cutoff = (
         datetime.now(timezone.utc) - timedelta(days=_STALE_DAYS)
@@ -538,11 +516,12 @@ async def retroactive_factcheck_all(
     )
     return results
 
-# Test helpers (used by tests/unit/test_keywords.py)
-
 
 def extract_keywords(text, max_keywords=10):
-    """Filter stopwords, prioritise capitalised tokens, return top keywords."""
+    """
+    Filter stopwords, prioritise capitalised tokens, return top keywords.
+    Used by tests/unit/test_keywords.py.
+    """
     if not text:
         return []
     words = text.split()
@@ -561,13 +540,14 @@ def extract_keywords(text, max_keywords=10):
     return result
 
 
-# Test helper (sync wrapper used by tests/unit/test_credibility.py)
 def compute_credibility_score_sync(source_name, rulings):
-    """Sync wrapper of the credibility formula for unit testing.
+    """
+    Sync wrapper of the credibility formula for unit testing.
 
     The production compute_credibility_score is async and takes an
     ArticleResponse. This wrapper exposes the underlying scoring logic
-    in a testable form.
+    directly against a source name and a list of ruling strings.
+    Used by tests/unit/test_credibility.py.
     """
     base = _SOURCE_REPUTATION.get(source_name, 70.0)
     valid = [

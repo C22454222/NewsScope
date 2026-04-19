@@ -1,10 +1,21 @@
+"""
+NewsScope article categorisation.
+
+Infers a category for each article using a 4-tier pipeline:
+  Tier 0 - Known source URL prefix map (most reliable)
+  Tier 1 - Generic URL path/section parsing
+  Tier 2 - Title keyword matching
+  Tier 3 - HuggingFace BART zero-shot NLI or broad keyword fallback
+
+Never returns 'general'. Worst case returns 'world'.
+"""
+
 import os
 import time
 from typing import Dict, Optional
 from urllib.parse import urlparse
 
 import requests
-
 
 CATEGORIES = [
     "politics", "world", "us", "uk", "ireland", "europe",
@@ -16,13 +27,12 @@ CATEGORIES = [
     "opinion", "analysis",
 ]
 
-
+# Broad labels used for the Tier 3 zero-shot NLI classifier.
 _TIER3_LABELS = [
     "politics", "world", "business", "tech",
     "sport", "entertainment", "health", "science",
     "crime",
 ]
-
 
 _HF_TOKEN = os.getenv("HF_API_TOKEN")
 _HF_API_URL = (
@@ -30,17 +40,21 @@ _HF_API_URL = (
     "facebook/bart-large-mnli"
 )
 
-
+# Lazily initialised requests session reused across all API calls.
 _hf_session: Optional[requests.Session] = None
 
 
 def _get_hf_session() -> requests.Session:
+    """Return the shared requests session, creating it on first call."""
     global _hf_session
     if _hf_session is None:
         _hf_session = requests.Session()
     return _hf_session
 
 
+# Maps known source URL prefixes to their canonical category.
+# More specific paths must appear before broader ones; the lookup
+# iterates in descending length order to ensure correct matching.
 _SOURCE_URL_PREFIX_MAP: Dict[str, str] = {
     # RTÉ News
     "rte.ie/news/politics": "politics",
@@ -104,7 +118,7 @@ _SOURCE_URL_PREFIX_MAP: Dict[str, str] = {
     "irishtimes.com/crime-law": "crime",
     "irishtimes.com/courts": "crime",
     "irishtimes.com/opinion": "opinion",
-    # The Independent (Ireland edition)
+    # The Independent
     "independent.ie/irish-news": "ireland",
     "independent.ie/world-news": "world",
     "independent.ie/business": "business",
@@ -187,8 +201,10 @@ _SOURCE_URL_PREFIX_MAP: Dict[str, str] = {
 
 def _match_from_known_source(url: str) -> Optional[str]:
     """
-    Tier 0: strip scheme + www, then check against known source prefixes.
-    More specific paths checked before broader ones via sorted order.
+    Tier 0: Match URL against known source prefix map.
+
+    Strips scheme and www prefix, then checks prefixes in descending
+    length order so more specific paths take priority over broader ones.
     """
     if not url:
         return None
@@ -211,6 +227,12 @@ def _match_from_known_source(url: str) -> Optional[str]:
 
 
 def _match_from_path(path: str) -> Optional[str]:
+    """
+    Tier 1: Infer category from URL path segments.
+
+    Checks structured section paths first, then falls back to
+    keyword presence anywhere in the path string.
+    """
     if not path:
         return None
 
@@ -270,7 +292,10 @@ def _match_from_path(path: str) -> Optional[str]:
         for seg in ["world", "international", "europe", "africa", "asia"]
     ):
         return "world"
-    if any(seg in path_lower for seg in ["business", "markets", "economy", "finance"]):
+    if any(
+        seg in path_lower
+        for seg in ["business", "markets", "economy", "finance"]
+    ):
         return "business"
     if any(seg in path_lower for seg in ["tech", "technology", "digital"]):
         return "tech"
@@ -279,9 +304,15 @@ def _match_from_path(path: str) -> Optional[str]:
         for seg in ["sport", "sports", "football", "rugby", "tennis", "gaa"]
     ):
         return "sport"
-    if any(seg in path_lower for seg in ["entertainment", "culture", "arts", "tv", "film"]):
+    if any(
+        seg in path_lower
+        for seg in ["entertainment", "culture", "arts", "tv", "film"]
+    ):
         return "entertainment"
-    if any(seg in path_lower for seg in ["health", "wellbeing", "covid", "medicine"]):
+    if any(
+        seg in path_lower
+        for seg in ["health", "wellbeing", "covid", "medicine"]
+    ):
         return "health"
     if any(seg in path_lower for seg in ["science", "environment"]):
         return "science"
@@ -298,6 +329,12 @@ def _match_from_path(path: str) -> Optional[str]:
 
 
 def _match_from_title(title: str) -> Optional[str]:
+    """
+    Tier 2: Infer category from article title keywords.
+
+    Checks category-specific keyword lists in priority order.
+    Returns None if no keyword matches, allowing Tier 3 to run.
+    """
     if not title:
         return None
 
@@ -445,7 +482,9 @@ def _match_from_title(title: str) -> Optional[str]:
 
 def _match_from_title_broad(title: str) -> str:
     """
-    Broad fallback keyword scan — catches what tier 2 misses.
+    Broad fallback keyword scan used when all other tiers fail.
+
+    Catches categories that the stricter Tier 2 scan misses.
     Never returns 'general'. Worst case returns 'world'.
     """
     if not title:
@@ -529,15 +568,12 @@ def _match_from_title_broad(title: str) -> str:
 
 def _classify_with_api(title: str, content: Optional[str] = None) -> str:
     """
-    Tier 3: HuggingFace Inference API — zero local memory cost.
+    Tier 3: Zero-shot classification via HuggingFace Inference API.
 
-    Timeout raised 8s → 20s: bart-large-mnli warm calls complete in
-    ~3-8s; cold-start takes 20-40s. 20s catches warm models reliably.
-
-    503 warm-up retry: waits 15s and retries once on model-loading
-    503 responses.
-
-    Session reuse: TCP connection reused across calls via _hf_session.
+    Uses facebook/bart-large-mnli with no local memory overhead.
+    Timeout is set to 20s to reliably cover warm model latency (3-8s).
+    On a 503 model-loading response, waits 15s and retries once before
+    falling back to the broad keyword matcher.
     """
     if not _HF_TOKEN:
         return _match_from_title_broad(title)
@@ -557,6 +593,7 @@ def _classify_with_api(title: str, content: Optional[str] = None) -> str:
         )
 
         if response.status_code == 503:
+            # Model is still loading on the inference server; wait and retry.
             print("bart-large-mnli loading, waiting 15s before retry...")
             response.close()
             time.sleep(15)
@@ -586,13 +623,15 @@ def infer_category(
     content: Optional[str] = None,
 ) -> str:
     """
-    4-tier category inference — zero local ML model loaded.
+    Run the 4-tier category inference pipeline for a single article.
 
-    Tier 0: Known source URL prefix (most reliable — source-specific)
-    Tier 1a: Generic URL path/section parsing (leading-slash fix applied)
-    Tier 2: Title keyword match — crime category added, US/UK split
-    Tier 3: HuggingFace BART zero-shot OR broad keyword fallback
-    Never returns 'general' — worst case is 'world'.
+    Tiers are tried in order; the first match is returned immediately:
+      Tier 0 - Known source URL prefix (most reliable, source-specific)
+      Tier 1 - Generic URL path/section parsing
+      Tier 2 - Title keyword matching with crime/US/UK distinctions
+      Tier 3 - HuggingFace BART zero-shot NLI or broad keyword fallback
+
+    Never returns 'general'. Worst case returns 'world'.
     """
     if url:
         category = _match_from_known_source(url)
@@ -615,9 +654,9 @@ def infer_category(
 
     return _classify_with_api(title or "", content)
 
-# Test helpers (used by tests/unit/test_categorisation.py)
 
-
+# Normalisation map used by tests/unit/test_categorisation.py to
+# collapse sub-categories into their parent group for assertion checks.
 CATEGORY_GROUP_MAP = {
     "football": "sport",
     "rugby": "sport",

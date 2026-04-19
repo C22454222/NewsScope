@@ -1,11 +1,14 @@
 """
-NewsScope Users API Router.
-Flake8: 0 errors/warnings.
+NewsScope users API router.
+
+Handles user creation, retrieval, deletion, and reading history
+management. Firebase ID token validation is performed inline to
+avoid a circular import with main.py.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Header
 from typing import Optional
 
+from fastapi import APIRouter, Depends, Header, HTTPException
 from firebase_admin import auth
 
 from app.db.supabase import supabase
@@ -14,18 +17,16 @@ from app.schemas import UserCreate
 router = APIRouter()
 
 
-# ── Auth dependency (local copy to avoid circular import with main.py) ───────
-
 def _get_current_user(
     authorization: Optional[str] = Header(None),
 ) -> str:
     """
     Validate the Firebase ID token and return the authenticated UID.
 
-    This is a local copy of the get_current_user dependency defined in
-    main.py. Duplicating it here avoids a circular import (main imports
-    this router, so this router cannot import main). The implementation
-    is intentionally identical.
+    This is a local copy of the dependency defined in main.py.
+    Duplicating it here avoids a circular import -- main imports this
+    router, so this router cannot import main. The implementation is
+    intentionally identical.
     """
     if not authorization:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -52,23 +53,20 @@ def add_user(user: UserCreate) -> dict:
     """
     Upsert a user record in Supabase.
 
-    Called after every Firebase login — not just registration —
-    so the users row is guaranteed present before any reading
+    Called after every Firebase login -- not just on first registration
+    -- so the users row is guaranteed to exist before any reading
     history is written.
 
-    Deduplication strategy
-    ──────────────────────
-    Google Sign-In can produce multiple Firebase UIDs for the same
-    email address if the user signs in on a new device or after
-    clearing app data. We use ON CONFLICT (email) so that if a row
-    already exists for this email, we UPDATE its id to the latest
-    Firebase UID rather than inserting a duplicate row.
+    Google Sign-In can produce multiple Firebase UIDs for the same email
+    address across devices or after clearing app data. ON CONFLICT (email)
+    updates the row id to the latest UID rather than inserting a duplicate,
+    keeping reading_history FK writes safe and preventing orphaned rows.
+    The upsert is atomic -- no select-then-insert race condition.
 
-    This keeps the users row in sync with whatever UID Firebase
-    currently considers canonical, which means:
-      - reading_history FK writes always succeed (UID matches)
-      - no orphaned rows accumulate over time
-      - the operation is atomic — no select-then-insert race condition
+    If the returned UID differs from the new UID, any reading_history
+    rows written under the old UID are re-parented to the new one so
+    history is never lost. In the common path old and new UIDs are equal
+    and this is a no-op.
     """
     payload: dict[str, str | None] = {
         "id": user.id,
@@ -81,7 +79,7 @@ def add_user(user: UserCreate) -> dict:
         supabase.table("users")
         .upsert(
             payload,
-            on_conflict="email",          # deduplicate on email, not UID
+            on_conflict="email",  # deduplicate on email, not UID
         )
         .execute()
     )
@@ -92,12 +90,6 @@ def add_user(user: UserCreate) -> dict:
     new_uid = user.id
     returned_uid = response.data[0]["id"]
 
-    # If the email already existed under a different UID, Supabase will have
-    # updated the row's id to new_uid. Re-parent any reading_history rows
-    # that were written under the old UID so history is never orphaned.
-    #
-    # NOTE: This only matters in the rare Google re-auth edge case.
-    # In the normal path old_uid == new_uid and this is a no-op.
     if returned_uid != new_uid:
         (
             supabase.table("reading_history")
@@ -129,17 +121,13 @@ def clear_user_history(
     current_user: str = Depends(_get_current_user),
 ) -> dict:
     """
-    Delete all reading_history rows for a user without deleting
-    the user account itself.
+    Delete all reading_history rows for a user without removing the account.
 
     Called from the Flutter settings screen when the user taps
-    "Clear Reading History". Resets the bias profile back to an
-    empty state while preserving the account, preferences,
-    notification subscription, and Firebase auth record.
-
-    The current user is validated against the uid path parameter —
-    users can only clear their own history, never someone else's.
-    Returns 200 even if no rows found (idempotent).
+    "Clear Reading History". Resets the bias profile to empty while
+    preserving the account, preferences, notification subscription,
+    and Firebase auth record. Users can only clear their own history.
+    Returns 200 even if no rows exist (idempotent).
     """
     if current_user != uid:
         raise HTTPException(
@@ -156,31 +144,37 @@ def delete_user(uid: str) -> dict:
     """
     Delete all Supabase data for a user by Firebase UID.
 
-    Deletes reading_history first (FK constraint), then the users row.
-    Called from the Flutter client immediately after Firebase
-    user.delete() succeeds — keeps Firebase and Supabase in sync.
-    Returns 200 even if no rows found (idempotent — safe to retry).
+    Deletes reading_history first to satisfy the FK constraint, then
+    removes the users row. Called from the Flutter client immediately
+    after Firebase user.delete() succeeds to keep both stores in sync.
+    Returns 200 even if no rows exist (idempotent -- safe to retry).
     """
     supabase.table("reading_history").delete().eq("user_id", uid).execute()
     supabase.table("users").delete().eq("id", uid).execute()
     return {"deleted": uid}
 
-# Test helpers (used by tests/unit/test_bias_profile.py)
-
 
 def compute_weighted_average(items):
-    """Compute time-weighted average of a list of {score, weight} dicts."""
+    """
+    Compute the time-weighted average of a list of {score, weight} dicts.
+    Used by tests/unit/test_bias_profile.py.
+    """
     if not items:
         return 0.0
     total_weight = sum(item.get("weight", 0) for item in items)
     if total_weight == 0:
         return 0.0
-    weighted_sum = sum(item.get("score", 0) * item.get("weight", 0) for item in items)
+    weighted_sum = sum(
+        item.get("score", 0) * item.get("weight", 0) for item in items
+    )
     return weighted_sum / total_weight
 
 
 def largest_remainder_round(fractions):
-    """Round a list of fractions to integer percentages summing to exactly 100."""
+    """
+    Round a list of fractions to integer percentages that sum to exactly 100.
+    Used by tests/unit/test_bias_profile.py.
+    """
     if not fractions:
         return []
     scaled = [f * 100 for f in fractions]

@@ -1,7 +1,13 @@
+// lib/screens/sign_up_screen.dart
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
+/// Registration screen with inline password strength feedback.
+///
+/// Validation errors only appear after the user has interacted with each
+/// field (_passwordDirty / _confirmDirty flags). On submit, both flags are
+/// set to true so all remaining errors are revealed at once.
 class SignUpScreen extends StatefulWidget {
   const SignUpScreen({super.key});
 
@@ -22,7 +28,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
   bool _obscurePassword = true;
   bool _obscureConfirmPassword = true;
 
-  // Track whether the user has touched each field, so errors only
+  // Track whether the user has touched each field so errors only
   // appear after the user has started interacting with that field.
   bool _passwordDirty = false;
   bool _confirmDirty = false;
@@ -44,15 +50,17 @@ class _SignUpScreenState extends State<SignUpScreen> {
     super.dispose();
   }
 
-  // ── Password rule checks ───────────────────────────────────────────────────
+  // Password rule checks
 
   bool get _hasMinLength => _passwordController.text.length >= 8;
-  bool get _hasUppercase => RegExp(r'[A-Z]').hasMatch(_passwordController.text);
+  bool get _hasUppercase =>
+      RegExp(r'[A-Z]').hasMatch(_passwordController.text);
   bool get _hasNumber => RegExp(r'[0-9]').hasMatch(_passwordController.text);
-  bool get _hasSpecial => _specialCharRegex.hasMatch(_passwordController.text);
+  bool get _hasSpecial =>
+      _specialCharRegex.hasMatch(_passwordController.text);
   bool get _noSpaces => !_passwordController.text.contains(' ');
 
-  // ── Validators ─────────────────────────────────────────────────────────────
+  // Validators
 
   String? _validateUsername(String? value) {
     final v = value?.trim() ?? '';
@@ -83,7 +91,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
     return null;
   }
 
-  // Confirm password only validates after the user has started typing
+  // Confirm password only validates after the user has started typing.
   String? _validateConfirmPassword(String? value) {
     if (!_confirmDirty) return null;
     if (value != _passwordController.text) return 'Passwords do not match';
@@ -91,7 +99,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
   }
 
   Future<void> _signUp() async {
-    // Mark both fields as dirty so all errors show on submit
+    // Mark both fields dirty so all errors surface on submit.
     setState(() {
       _passwordDirty = true;
       _confirmDirty = true;
@@ -125,7 +133,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
       case 'network-request-failed':
         return 'No internet connection';
       default:
-        return 'Registration failed — please try again';
+        return 'Registration failed -- please try again';
     }
   }
 
@@ -138,8 +146,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
     ));
   }
 
-  // ── Password strength rules widget ─────────────────────────────────────────
-
+  // Password strength checklist, only visible after the user starts typing.
   Widget _buildPasswordRules() {
     if (!_passwordDirty && _passwordController.text.isEmpty) {
       return const SizedBox.shrink();
@@ -169,8 +176,8 @@ class _SignUpScreenState extends State<SignUpScreen> {
             ),
             const SizedBox(height: 6),
             _rule('At least 8 characters', _hasMinLength),
-            _rule('One capital letter (A–Z)', _hasUppercase),
-            _rule('One number (0–9)', _hasNumber),
+            _rule('One capital letter (A-Z)', _hasUppercase),
+            _rule('One number (0-9)', _hasNumber),
             _rule('One special character (e.g. @, #, !)', _hasSpecial),
             _rule('No spaces', _noSpaces),
           ],
@@ -228,7 +235,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // ── Header banner ──────────────────────────────────────
+                  // Header banner
                   Container(
                     width: double.infinity,
                     padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
@@ -251,9 +258,11 @@ class _SignUpScreenState extends State<SignUpScreen> {
                           decoration: BoxDecoration(
                             color: Colors.white.withAlpha(18),
                             borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: Colors.white.withAlpha(50)),
+                            border: Border.all(
+                                color: Colors.white.withAlpha(50)),
                           ),
-                          child: const Icon(Icons.newspaper, size: 24, color: Colors.white),
+                          child: const Icon(Icons.newspaper,
+                              size: 24, color: Colors.white),
                         ),
                         const SizedBox(width: 14),
                         Expanded(
@@ -285,7 +294,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
                   ),
                   const SizedBox(height: 16),
 
-                  // ── Display name ───────────────────────────────────────
+                  // Display name field
                   _buildLabel('Display Name'),
                   const SizedBox(height: 5),
                   TextFormField(
@@ -293,7 +302,8 @@ class _SignUpScreenState extends State<SignUpScreen> {
                     validator: _validateUsername,
                     textCapitalization: TextCapitalization.words,
                     inputFormatters: [
-                      FilteringTextInputFormatter.allow(RegExp(r"[a-zA-Z0-9 '_\-]")),
+                      FilteringTextInputFormatter.allow(
+                          RegExp(r"[a-zA-Z0-9 '_\-]")),
                       LengthLimitingTextInputFormatter(30),
                     ],
                     decoration: _inputDecoration(
@@ -303,7 +313,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
                   ),
                   const SizedBox(height: 12),
 
-                  // ── Email ──────────────────────────────────────────────
+                  // Email field
                   _buildLabel('Email Address'),
                   const SizedBox(height: 5),
                   TextFormField(
@@ -322,7 +332,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
                   ),
                   const SizedBox(height: 12),
 
-                  // ── Password ───────────────────────────────────────────
+                  // Password field
                   _buildLabel('Password'),
                   const SizedBox(height: 5),
                   TextFormField(
@@ -344,7 +354,8 @@ class _SignUpScreenState extends State<SignUpScreen> {
                           color: Colors.grey[500],
                           size: 20,
                         ),
-                        onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                        onPressed: () =>
+                            setState(() => _obscurePassword = !_obscurePassword),
                       ),
                     ),
                     onChanged: (_) {
@@ -354,11 +365,11 @@ class _SignUpScreenState extends State<SignUpScreen> {
                       });
                     },
                   ),
-                  // Password rules checklist (only visible after typing)
+                  // Strength checklist shown after first keystroke
                   _buildPasswordRules(),
                   const SizedBox(height: 12),
 
-                  // ── Confirm password ───────────────────────────────────
+                  // Confirm password field
                   _buildLabel('Confirm Password'),
                   const SizedBox(height: 5),
                   TextFormField(
@@ -380,8 +391,9 @@ class _SignUpScreenState extends State<SignUpScreen> {
                           color: Colors.grey[500],
                           size: 20,
                         ),
-                        onPressed: () => setState(
-                            () => _obscureConfirmPassword = !_obscureConfirmPassword),
+                        onPressed: () => setState(() =>
+                            _obscureConfirmPassword =
+                                !_obscureConfirmPassword),
                       ),
                     ),
                     onChanged: (_) {
@@ -394,7 +406,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
                   ),
                   const SizedBox(height: 20),
 
-                  // ── Create account button ──────────────────────────────
+                  // Submit button or loading indicator
                   _isLoading
                       ? const Center(child: CircularProgressIndicator())
                       : ElevatedButton(
@@ -402,33 +414,39 @@ class _SignUpScreenState extends State<SignUpScreen> {
                           style: ElevatedButton.styleFrom(
                             backgroundColor: Colors.blue[700],
                             foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 13),
+                            padding:
+                                const EdgeInsets.symmetric(vertical: 13),
                             shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(10)),
                             elevation: 2,
                             textStyle: const TextStyle(
-                                fontSize: 15, fontWeight: FontWeight.w600),
+                                fontSize: 15,
+                                fontWeight: FontWeight.w600),
                           ),
                           child: const Text('Create Account'),
                         ),
                   const SizedBox(height: 12),
 
+                  // Navigation back to sign-in
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       Text(
                         'Already have an account?',
-                        style: TextStyle(color: Colors.grey[600], fontSize: 13),
+                        style:
+                            TextStyle(color: Colors.grey[600], fontSize: 13),
                       ),
                       TextButton(
                         onPressed: () => Navigator.pop(context),
                         style: TextButton.styleFrom(
                           foregroundColor: Colors.blue[700],
-                          padding: const EdgeInsets.symmetric(horizontal: 6),
+                          padding:
+                              const EdgeInsets.symmetric(horizontal: 6),
                           minimumSize: const Size(0, 32),
                         ),
                         child: const Text('Sign In',
-                            style: TextStyle(fontWeight: FontWeight.w600)),
+                            style:
+                                TextStyle(fontWeight: FontWeight.w600)),
                       ),
                     ],
                   ),
@@ -441,7 +459,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
     );
   }
 
-  // ── Shared decoration helpers ──────────────────────────────────────────────
+  // Shared decoration helpers
 
   Widget _buildLabel(String text) {
     return Text(
@@ -466,7 +484,8 @@ class _SignUpScreenState extends State<SignUpScreen> {
       suffixIcon: suffix,
       filled: true,
       fillColor: Colors.white,
-      contentPadding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+      contentPadding:
+          const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(10),
         borderSide: BorderSide(color: Colors.grey[300]!),

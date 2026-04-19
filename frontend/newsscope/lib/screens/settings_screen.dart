@@ -12,23 +12,23 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../core/config.dart';
 import '../core/app_prefs.dart';
 
-// ── Local notifications plugin (singleton) ────────────────────────────────────
-// Initialised once in AppNotifications.init(); safe to call multiple times.
+// Local notifications plugin singleton. Initialised once in
+// AppNotifications.init(); safe to call multiple times.
 final FlutterLocalNotificationsPlugin _localNotifications =
     FlutterLocalNotificationsPlugin();
 
-// ── App-wide notification helper ──────────────────────────────────────────────
+/// App-wide notification helper handling local + FCM setup.
 class AppNotifications {
   AppNotifications._();
 
   /// Call once from main() after Firebase.initializeApp().
   static Future<void> init() async {
-    // ── Android channel ──────────────────────────────────────────────────────
-    // On Android 8+ (Oreo) a NotificationChannel must exist before any
-    // notification can be shown. Samsung devices honour the same channel API.
+    // Android channel. On Android 8+ (Oreo) a NotificationChannel must
+    // exist before any notification can be shown. Samsung devices honour
+    // the same channel API.
     const androidChannel = AndroidNotificationChannel(
-      'news_updates',          // id  — must match FCM payload channel_id
-      'News Updates',          // human-readable name shown in device settings
+      'news_updates',           // id, must match FCM payload channel_id
+      'News Updates',           // human-readable name in device settings
       description: 'Breaking news alerts from NewsScope',
       importance: Importance.high,
       playSound: true,
@@ -39,20 +39,21 @@ class AppNotifications {
             AndroidFlutterLocalNotificationsPlugin>();
     await androidPlugin?.createNotificationChannel(androidChannel);
 
-    // ── Initialise the plugin ────────────────────────────────────────────────
+    // Plugin initialisation. iOS permissions are requested via FCM below
+    // rather than here to keep the prompt flow consistent.
     const initSettings = InitializationSettings(
       android: AndroidInitializationSettings('@mipmap/ic_launcher'),
       iOS: DarwinInitializationSettings(
-        requestAlertPermission: false, // we ask via FCM instead
+        requestAlertPermission: false,
         requestBadgePermission: false,
         requestSoundPermission: false,
       ),
     );
     await _localNotifications.initialize(initSettings);
 
-    // ── Foreground FCM messages ──────────────────────────────────────────────
-    // By default FCM does NOT show a heads-up notification when the app is in
-    // the foreground on Android. We show one manually via flutter_local_notifications.
+    // Foreground FCM messages. By default FCM does NOT show a heads-up
+    // notification when the app is foregrounded on Android, so we show
+    // one manually via flutter_local_notifications.
     FirebaseMessaging.onMessage.listen((RemoteMessage message) {
       final notification = message.notification;
       if (notification == null) return;
@@ -69,7 +70,7 @@ class AppNotifications {
             importance: Importance.high,
             priority: Priority.high,
             icon: '@mipmap/ic_launcher',
-            // Show a small icon on Samsung's status bar properly.
+            // Ensures the small icon renders correctly on Samsung's status bar.
             styleInformation: const DefaultStyleInformation(true, true),
           ),
           iOS: const DarwinNotificationDetails(),
@@ -78,7 +79,7 @@ class AppNotifications {
     });
   }
 
-  /// Show a local test notification — handy for verifying the channel works.
+  /// Shows a local test notification, used to verify the channel works.
   static Future<void> showTest() async {
     await _localNotifications.show(
       0,
@@ -98,7 +99,8 @@ class AppNotifications {
   }
 }
 
-// ── App-wide theme notifier ────────────────────────────────────────────────────
+/// App-wide theme notifier. Persists the user's light/dark choice to
+/// SharedPreferences and exposes a [ValueNotifier] for MaterialApp.
 class AppTheme {
   AppTheme._();
 
@@ -120,7 +122,8 @@ class AppTheme {
   static bool get isDark => notifier.value == ThemeMode.dark;
 }
 
-// ── Settings Screen ────────────────────────────────────────────────────────────
+/// Settings screen exposing account, notification, display, data and
+/// account-action controls.
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
 
@@ -131,12 +134,12 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   User? get user => FirebaseAuth.instance.currentUser;
 
-  // ── Preferences ─────────────────────────────────────────────────────────────
+  // Persisted preferences, mirrored locally for switch state.
   bool _notificationsEnabled = false;
-  bool _compactCards         = false;
-  bool _showCredibility      = true;
-  bool _showSentiment        = true;
-  bool _darkMode             = false;
+  bool _compactCards = false;
+  bool _showCredibility = true;
+  bool _showSentiment = true;
+  bool _darkMode = false;
 
   String? _displayName;
 
@@ -145,8 +148,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     super.initState();
     _displayName = user?.displayName;
     _loadPreferences();
-    // Keep local _darkMode in sync with the global notifier while this
-    // screen is alive (e.g. if theme is toggled from another entry point).
+    // Keep local _darkMode in sync with the global notifier so external
+    // theme changes (e.g. from another entry point) are reflected here.
     AppTheme.notifier.addListener(_onThemeChanged);
   }
 
@@ -166,10 +169,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (!mounted) return;
     setState(() {
       _notificationsEnabled = prefs.getBool('notifications_enabled') ?? false;
-      _compactCards         = prefs.getBool('compact_cards')         ?? false;
-      _showCredibility      = prefs.getBool('show_credibility')      ?? true;
-      _showSentiment        = prefs.getBool('show_sentiment')        ?? true;
-      _darkMode             = prefs.getBool('dark_mode')             ?? false;
+      _compactCards = prefs.getBool('compact_cards') ?? false;
+      _showCredibility = prefs.getBool('show_credibility') ?? true;
+      _showSentiment = prefs.getBool('show_sentiment') ?? true;
+      _darkMode = prefs.getBool('dark_mode') ?? false;
     });
   }
 
@@ -178,31 +181,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await prefs.setBool(key, value);
   }
 
-  // ── Notifications ──────────────────────────────────────────────────────────
+  // Notifications.
 
   Future<void> _setNotifications(bool value) async {
     if (value) {
-      // ── Step 1: request OS-level permission ─────────────────────────────
-      // On Android 13+ (API 33) POST_NOTIFICATIONS is a runtime permission.
-      // On older Android and Samsung One UI it is granted automatically, but
-      // asking anyway is harmless.
+      // Step 1: request OS-level permission. Android 13+ (API 33)
+      // treats POST_NOTIFICATIONS as a runtime permission. Older Android
+      // and Samsung One UI grant it automatically, but asking is harmless.
       bool osGranted = true;
       if (Platform.isAndroid) {
         final status = await Permission.notification.request();
         osGranted = status.isGranted;
       }
 
-      // ── Step 2: request FCM permission (required on iOS; no-op on Android) ─
+      // Step 2: request FCM permission (required on iOS, no-op on Android).
       final settings = await FirebaseMessaging.instance.requestPermission(
         alert: true, badge: true, sound: true,
       );
       final fcmGranted =
           settings.authorizationStatus == AuthorizationStatus.authorized ||
-          settings.authorizationStatus == AuthorizationStatus.provisional;
+              settings.authorizationStatus == AuthorizationStatus.provisional;
 
       if (!osGranted || !fcmGranted) {
         if (!mounted) return;
-        // User denied — offer to open system settings.
+        // User denied; offer to jump to system settings.
         final openSettings = await showDialog<bool>(
           context: context,
           builder: (context) => AlertDialog(
@@ -228,18 +230,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         );
         if (openSettings == true) await openAppSettings();
-        return; // do NOT toggle the switch on
+        return; // Leave the switch off.
       }
 
-      // ── Step 3: subscribe to FCM topic ──────────────────────────────────
-      await FirebaseMessaging.instance
-          .subscribeToTopic('news_updates');
+      // Step 3: subscribe to the FCM topic used by the backend.
+      await FirebaseMessaging.instance.subscribeToTopic('news_updates');
 
-      // ── Step 4: send a test notification so the user sees it works ──────
+      // Step 4: send a test so the user can see notifications work.
       await AppNotifications.showTest();
     } else {
-      await FirebaseMessaging.instance
-          .unsubscribeFromTopic('news_updates');
+      await FirebaseMessaging.instance.unsubscribeFromTopic('news_updates');
     }
 
     await _saveBool('notifications_enabled', value);
@@ -251,18 +251,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  // ── Theme toggle ───────────────────────────────────────────────────────────
+  // Theme toggle.
 
   Future<void> _setDarkMode(bool value) async {
-    await AppTheme.set(value); // updates notifier + SharedPreferences
-    // _onThemeChanged() will call setState for _darkMode automatically.
+    // Updates the notifier and SharedPreferences; _onThemeChanged()
+    // takes care of calling setState for _darkMode.
+    await AppTheme.set(value);
     _showSnackBar(
       value ? 'Dark mode enabled' : 'Light mode enabled',
       color: Colors.green[700],
     );
   }
 
-  // ── Clear reading history ──────────────────────────────────────────────────
+  // Clear reading history.
 
   Future<void> _handleClearHistory() async {
     final confirmed = await showDialog<bool>(
@@ -309,7 +310,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  // ── Display name ───────────────────────────────────────────────────────────
+  // Display name.
 
   Future<void> _handleEditDisplayName() async {
     final currentName = (_displayName ?? '').trim();
@@ -336,7 +337,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  // ── Change password ────────────────────────────────────────────────────────
+  // Change password (email/password users only).
 
   Future<void> _handleChangePassword() async {
     final email = user?.email;
@@ -353,7 +354,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  // ── Logout ─────────────────────────────────────────────────────────────────
+  // Logout.
 
   Future<void> _handleLogout() async {
     final confirmed = await showDialog<bool>(
@@ -382,7 +383,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     Navigator.of(context).popUntil((route) => route.isFirst);
   }
 
-  // ── Delete account ─────────────────────────────────────────────────────────
+  // Delete account.
 
   Future<void> _handleDeleteAccount() async {
     final confirmed = await showDialog<bool>(
@@ -417,6 +418,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await _attemptDeleteAccount(uid);
   }
 
+  /// Performs the account deletion flow. Firebase requires a recent
+  /// re-auth for deletion; we re-authenticate and retry on
+  /// `requires-recent-login`.
   Future<void> _attemptDeleteAccount(String uid) async {
     try {
       final isGoogleUser =
@@ -428,6 +432,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
       final idToken = await user?.getIdToken();
       await user?.delete();
+      // Tell the backend to purge user data too.
       if (idToken != null) {
         await http.delete(
           Uri.parse('${AppConfig.baseUrl}/users/$uid'),
@@ -440,8 +445,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (!mounted) return;
       if (e.code == 'requires-recent-login') {
         final isGoogleUser =
-            user?.providerData
-                .any((p) => p.providerId == 'google.com') ??
+            user?.providerData.any((p) => p.providerId == 'google.com') ??
                 false;
         if (isGoogleUser) {
           final success = await _reauthWithGoogle();
@@ -463,8 +467,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<bool> _reauthWithGoogle() async {
     try {
-      final googleSignIn  = GoogleSignIn();
-      final googleUser    = await googleSignIn.signIn();
+      final googleSignIn = GoogleSignIn();
+      final googleUser = await googleSignIn.signIn();
       if (googleUser == null) return false;
       final googleAuth = await googleUser.authentication;
       final credential = GoogleAuthProvider.credential(
@@ -508,7 +512,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  // ── Privacy policy ─────────────────────────────────────────────────────────
+  // Privacy policy bottom sheet.
 
   void _showPrivacyPolicy() {
     showModalBottomSheet(
@@ -601,7 +605,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  // ── Snackbar ───────────────────────────────────────────────────────────────
+  // Snackbar helper.
 
   void _showSnackBar(String message, {Color? color}) {
     if (!mounted) return;
@@ -613,7 +617,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     ));
   }
 
-  // ── Widget builders ────────────────────────────────────────────────────────
+  // Widget builders.
 
   Widget _buildSectionHeader(String title) {
     return Padding(
@@ -692,8 +696,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  // ── Glossary ───────────────────────────────────────────────────────────────
-
+  // Glossary data used by the expandable "Glossary of Terms" card.
   static const _glossaryTerms = [
     (
       term: 'Political Leaning',
@@ -826,13 +829,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  // ── Build ──────────────────────────────────────────────────────────────────
+  // Build.
 
   @override
   Widget build(BuildContext context) {
+    // Google-auth users don't have a password, so the change-password tile
+    // and password reauth dialog are skipped for them.
     final isGoogleUser =
-        user?.providerData
-            .any((p) => p.providerId == 'google.com') ??
+        user?.providerData.any((p) => p.providerId == 'google.com') ??
             false;
 
     return Scaffold(
@@ -846,8 +850,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
       body: ListView(
         children: [
-
-          // ── Account ────────────────────────────────────────────────
+          // Account section.
           _buildSectionHeader('Account'),
           Card(
             margin: const EdgeInsets.symmetric(horizontal: 16),
@@ -891,7 +894,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ]),
           ),
 
-          // ── Notifications ──────────────────────────────────────────
+          // Notifications section.
           _buildSectionHeader('Notifications'),
           Card(
             margin: const EdgeInsets.symmetric(horizontal: 16),
@@ -910,8 +913,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
               if (_notificationsEnabled) ...[
                 const Divider(height: 1, indent: 56),
-                // Shortcut tile for Samsung users who may need to check
-                // the system notification settings manually.
+                // Shortcut for Samsung users who may need to manage
+                // channels, sounds and importance in system settings.
                 _buildTile(
                   icon: Icons.settings_outlined,
                   title: 'Notification Settings',
@@ -924,7 +927,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ]),
           ),
 
-          // ── Display Preferences ────────────────────────────────────
+          // Display preferences section.
           _buildSectionHeader('Display Preferences'),
           Card(
             margin: const EdgeInsets.symmetric(horizontal: 16),
@@ -955,6 +958,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 onChanged: (v) async {
                   setState(() => _showCredibility = v);
                   await _saveBool('show_credibility', v);
+                  // Reload AppPrefs so other screens see the change.
                   await AppPrefs.load();
                 },
                 iconColor: Colors.green[700],
@@ -988,7 +992,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ]),
           ),
 
-          // ── Data & Privacy ─────────────────────────────────────────
+          // Data & privacy section.
           _buildSectionHeader('Data & Privacy'),
           Card(
             margin: const EdgeInsets.symmetric(horizontal: 16),
@@ -1017,7 +1021,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ]),
           ),
 
-          // ── About ──────────────────────────────────────────────────
+          // About section.
           _buildSectionHeader('About'),
           Card(
             margin: const EdgeInsets.symmetric(horizontal: 16),
@@ -1041,11 +1045,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ]),
           ),
 
-          // ── Glossary ───────────────────────────────────────────────
+          // Glossary section.
           _buildSectionHeader('Glossary'),
           _buildGlossarySection(),
 
-          // ── Account Actions ────────────────────────────────────────
+          // Account actions section.
           _buildSectionHeader('Account Actions'),
           Card(
             margin: const EdgeInsets.symmetric(horizontal: 16),
@@ -1090,8 +1094,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 }
 
-// ── Re-auth password dialog ────────────────────────────────────────────────────
-
+// Re-auth password dialog used before sensitive actions (delete account).
 class _ReauthPasswordDialog extends StatefulWidget {
   final String email;
   const _ReauthPasswordDialog({required this.email});
@@ -1169,8 +1172,8 @@ class _ReauthPasswordDialogState
   }
 }
 
-// ── Edit display name dialog ───────────────────────────────────────────────────
-
+// Edit display name dialog. Focuses the field and selects all text on
+// open so the user can overwrite their existing name quickly.
 class _EditDisplayNameDialog extends StatefulWidget {
   final String initialValue;
   const _EditDisplayNameDialog({required this.initialValue});
@@ -1189,6 +1192,8 @@ class _EditDisplayNameDialogState
     _controller =
         TextEditingController(text: widget.initialValue);
     _focusNode = FocusNode();
+    // Focus and select-all after the first frame so the dialog is
+    // fully built before we request focus.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _focusNode.requestFocus();

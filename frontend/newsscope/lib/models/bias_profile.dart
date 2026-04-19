@@ -3,19 +3,20 @@
 /// Mirrors the Pydantic BiasProfile schema exactly.
 ///
 /// Outlet-level fields (leftCount, centerCount, rightCount,
-/// biasDistribution, avgBias) derive from reading_history.bias_score —
-/// the publisher baseline rating copied from sources at read time.
+/// biasDistribution, avgBias) are derived from
+/// reading_history.bias_score, the publisher baseline rating copied
+/// from the sources table at read time.
 ///
 /// Article-level fields (articleLeftCount, articleCenterCount,
-/// articleRightCount, articleBiasDistribution, avgArticleBias) derive
-/// from reading_history.political_bias, the per-article RoBERTa label
-/// snapshotted at read time.
+/// articleRightCount, articleBiasDistribution, avgArticleBias) are
+/// derived from reading_history.political_bias, the per-article RoBERTa
+/// label snapshotted at read time.
 ///
-/// General bias fields (biasedCount, unbiasedCount) derive from
+/// General bias fields (biasedCount, unbiasedCount) are derived from
 /// reading_history.general_bias, the DistilRoBERTa BIASED/UNBIASED
 /// label snapshotted at read time.
 class BiasProfile {
-  // ── Outlet-level bias ────────────────────────────────────────────────────
+  // Outlet-level bias derived from source baseline scores.
   final double avgBias;
   final double avgSentiment;
   final int totalArticlesRead;
@@ -35,18 +36,18 @@ class BiasProfile {
   /// Mean credibility score across all articles the user has read.
   final double? avgCredibility;
 
-  // ── Article-level bias (RoBERTa per-article) ─────────────────────────────
+  // Article-level bias from the RoBERTa per-article classifier.
   final int articleLeftCount;
   final int articleCenterCount;
   final int articleRightCount;
 
-  /// Percentage distribution of article-level labels.
+  /// Percentage distribution of article-level RoBERTa labels.
   final Map<String, double> articleBiasDistribution;
 
   /// Time-weighted average article bias on the [-1, +1] scale.
   final double avgArticleBias;
 
-  // ── General bias (DistilRoBERTa BIASED / UNBIASED) ───────────────────────
+  // General bias from the DistilRoBERTa BIASED / UNBIASED classifier.
   final int biasedCount;
   final int unbiasedCount;
 
@@ -80,8 +81,8 @@ class BiasProfile {
     final rawSources =
         (json['source_breakdown'] as Map<String, dynamic>?);
     final rawArticleDist =
-        (json['article_bias_distribution'] as Map<String, dynamic>?) ??
-            {};
+        (json['article_bias_distribution'] as Map<String, dynamic>?)
+            ?? {};
 
     return BiasProfile(
       avgBias: (json['avg_bias'] as num?)?.toDouble() ?? 0.0,
@@ -120,8 +121,10 @@ class BiasProfile {
     );
   }
 
+  /// True when the user has no reading history yet.
   bool get isEmpty => totalArticlesRead == 0;
 
+  /// Dominant sentiment label based on raw counts.
   String get sentimentLabel {
     if (positiveCount == 0 && neutralCount == 0 && negativeCount == 0) {
       return 'Neutral';
@@ -135,8 +138,8 @@ class BiasProfile {
     return 'Neutral';
   }
 
-  /// Dominant general bias label from snapshotted BIASED/UNBIASED counts.
-  /// Returns 'Unbiased' when no data yet.
+  /// Dominant general bias label derived from snapshotted counts.
+  /// Returns 'Unbiased' when no data is available yet.
   String get generalBiasLabel {
     if (biasedCount == 0 && unbiasedCount == 0) return 'Unbiased';
     return biasedCount > unbiasedCount ? 'Biased' : 'Unbiased';

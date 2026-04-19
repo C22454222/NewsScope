@@ -11,6 +11,7 @@ import '../screens/profile_screen.dart';
 import '../screens/settings_screen.dart';
 import '../widgets/article_card.dart';
 
+/// Root screen hosting the bottom navigation bar and its four tabs.
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -20,6 +21,7 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   int _currentIndex = 0;
+  // Bumped whenever the profile tab should rebuild from scratch.
   int _profileKey = 0;
   late List<Widget> _screens;
 
@@ -38,6 +40,7 @@ class _HomeScreenState extends State<HomeScreen> {
     ];
   }
 
+  // Invoked whenever an article is opened so the profile can refresh.
   void _handleArticleRead() {
     setState(() {
       _profileKey++;
@@ -45,9 +48,9 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  // Force a fresh ProfileScreen every time the user lands on or leaves
-  // the profile tab. Keyed rebuild discards cached state so the bias
-  // profile always reflects the latest reading history snapshot.
+  /// Force a fresh [ProfileScreen] every time the user lands on or leaves
+  /// the profile tab. A keyed rebuild discards cached state so the bias
+  /// profile always reflects the latest reading history snapshot.
   void _onTabTapped(int index) {
     final leavingProfile = _currentIndex == 2 && index != 2;
     final enteringProfile = index == 2 && _currentIndex != 2;
@@ -66,6 +69,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      // IndexedStack preserves each tab's scroll position and state.
       body: IndexedStack(index: _currentIndex, children: _screens),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _currentIndex,
@@ -88,8 +92,9 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-// ── Home Feed Tab ──────────────────────────────────────────────────────────────
+// Home Feed Tab.
 
+/// The main news feed with category/source filters and date-grouped articles.
 class HomeFeedTab extends StatefulWidget {
   final VoidCallback onArticleRead;
 
@@ -128,6 +133,7 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
     {'label': 'Opinion', 'value': 'opinion'},
   ];
 
+  // Maps the short chip label to the canonical source name used by the API.
   static const Map<String, String> _sourceMap = {
     'BBC': 'BBC News',
     'RTÉ': 'RTÉ News',
@@ -153,6 +159,7 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
   void initState() {
     super.initState();
     _user = FirebaseAuth.instance.currentUser;
+    // Keep the greeting in sync if the user signs in/out mid-session.
     _userSub = FirebaseAuth.instance.userChanges().listen((u) {
       if (mounted) setState(() => _user = u);
     });
@@ -212,8 +219,7 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
     return 'Good evening';
   }
 
-  // ── Filter label ────────────────────────────────────────────────────────────
-
+  // Filter label (small caps heading above each chip row).
   Widget _buildFilterLabel(String label) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
@@ -229,7 +235,7 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
     );
   }
 
-  // ── Chips ────────────────────────────────────────────────────────────────────
+  // Chips.
 
   Widget _buildChip({
     required String label,
@@ -337,8 +343,9 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
     );
   }
 
-  // ── Greeting card ────────────────────────────────────────────────────────────
+  // Greeting card.
 
+  // Stylised "NewsScope" wordmark used in the app bar.
   Widget _buildNewsScopeTitle() {
     return RichText(
       text: TextSpan(
@@ -369,6 +376,7 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
         ? _user!.displayName!.split(' ').first
         : 'there';
     final now = DateTime.now();
+    // Using static month/day names avoids a full intl dependency.
     const months = [
       'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
       'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
@@ -480,10 +488,12 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
     );
   }
 
+  // Stable YYYY-MM-DD key used to group articles by publication date.
   String _dateKey(DateTime dt) =>
       '${dt.year}-${dt.month.toString().padLeft(2, '0')}-'
       '${dt.day.toString().padLeft(2, '0')}';
 
+  // Converts a date key into a friendly header (Today, Yesterday, or DD/MM/YYYY).
   String _headerText(
       String key, String todayKey, String yesterdayKey) {
     if (key == todayKey) return 'Today';
@@ -576,6 +586,8 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                   );
                 }
 
+                // Group articles by date key so the feed shows sections
+                // for Today, Yesterday, and older dates.
                 final articles = snapshot.data!;
                 final now = DateTime.now();
                 final todayKey = _dateKey(now);
@@ -590,6 +602,7 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                   grouped.putIfAbsent(key, () => []).add(a);
                 }
 
+                // Newest dates first, pushing "Unknown Date" to the bottom.
                 final sortedKeys = grouped.keys.toList()
                   ..sort((a, b) {
                     if (a == 'Unknown Date') return 1;
