@@ -8,15 +8,15 @@ SCHEDULING OVERVIEW (v8 — chain-first, FCM notifications, credibility snapshot
          Categorisation is inline — happens per-article during scraping.
          Completes in ~5 minutes on 512MB Render free tier.
          _heavy_job_lock held for entire duration.
-         ↓ on completion
+         on completion
          Analysis fires immediately — no fixed wait, no wasted minutes.
-         Completes in ~10-15 minutes (200 articles × 8 concurrent HF calls).
+         Completes in ~10-15 minutes (200 articles x 8 concurrent HF calls).
          LIME runs inside analysis for high-confidence articles (~20-30 min).
-         ↓ on completion
+         on completion
          FCM notification sent to `news_updates` topic if new articles
          were inserted. Count measured from articles inserted during
          the ingestion window (created_at within last 30 minutes).
-         ↓ on completion
+         on completion
          Pipeline done. Total wall time: ~25-40 minutes per hour.
 
   SAFETY NETS (cron — only fire if chained call failed/was skipped):
@@ -99,10 +99,10 @@ def _political_bias_score(label: Optional[str]) -> Optional[float]:
     """
     Map a RoBERTa political_bias label to a [-1, +1] numeric score.
 
-    LEFT  → -1.0
-    CENTER / CENTRE → 0.0
-    RIGHT →  +1.0
-    None / unknown → None (excluded from weighted average)
+    LEFT  -> -1.0
+    CENTER / CENTRE -> 0.0
+    RIGHT ->  +1.0
+    None / unknown -> None (excluded from weighted average)
     """
     if not label:
         return None
@@ -120,9 +120,7 @@ def _political_bias_score(label: Optional[str]) -> Optional[float]:
 
 
 def _count_recently_inserted_articles() -> int:
-    """
-    Count articles inserted in the last _NOTIFICATION_WINDOW_MINUTES.
-    """
+    """Count articles inserted in the last _NOTIFICATION_WINDOW_MINUTES."""
     try:
         cutoff = (
             datetime.now(timezone.utc) - timedelta(minutes=_NOTIFICATION_WINDOW_MINUTES)
@@ -538,16 +536,19 @@ async def track_reading(
     """
     Track article reading time and snapshot scores for bias profile.
 
-    Scores (bias, sentiment, source, general_bias, credibility) are
-    copied from the article row at read time so they remain stable
-    after archiving.
+    Scores (bias, sentiment, source, general_bias, credibility,
+    political_bias) are copied from the article row at read time so
+    they remain stable after the article is archived. political_bias
+    is the per-article RoBERTa label; without snapshotting it here,
+    profile aggregation would lose article-level bias data the moment
+    archiving runs.
     """
     try:
         article_data = (
             supabase.table("articles")
             .select(
                 "bias_score, sentiment_score, source, general_bias, "
-                "credibility_score"
+                "credibility_score, political_bias"
             )
             .eq("id", data.article_id)
             .limit(1)
@@ -566,6 +567,7 @@ async def track_reading(
             "source": scores.get("source"),
             "general_bias": scores.get("general_bias"),
             "credibility_score": scores.get("credibility_score"),
+            "political_bias": scores.get("political_bias"),
         }
         response = (
             supabase.table("reading_history").insert(payload).execute()
@@ -585,16 +587,16 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
     """
     Calculate user's bias profile from reading history.
 
+    All scores read from snapshot columns on reading_history so profile
+    data stays intact after articles are archived and purged.
+
     Outlet-level bias fields (left_count, center_count, right_count,
-    bias_distribution, avg_bias) use the bias_score snapshot column
-    already stored in reading_history — the publisher baseline rating.
+    bias_distribution, avg_bias) use bias_score, the publisher
+    baseline rating snapshot.
 
     Article-level bias fields (article_left_count, article_center_count,
     article_right_count, article_bias_distribution, avg_article_bias)
-    are computed by joining reading_history with articles.political_bias
-    at query time, so no schema migration is required. Rows where the
-    joined article has been archived (political_bias is null) are
-    excluded from the article-level aggregation only.
+    use political_bias, the per-article RoBERTa label snapshot.
 
     avg_credibility is a simple mean of the credibility_score snapshot.
     """
@@ -603,8 +605,7 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
             supabase.table("reading_history")
             .select(
                 "time_spent_seconds, bias_score, sentiment_score, "
-                "source, general_bias, credibility_score, "
-                "articles(political_bias)"
+                "source, general_bias, credibility_score, political_bias"
             )
             .eq("user_id", user_id)
             .execute()
@@ -715,15 +716,14 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
             if cred_values else None
         )
 
-        # ── Article-level bias (RoBERTa, joined from articles) ────────
+        # ── Article-level bias (political_bias snapshot) ──────────────
         art_left = 0
         art_center = 0
         art_right = 0
         article_pb_terms = []
 
         for h in history:
-            joined = h.get("articles") or {}
-            pb_label = joined.get("political_bias") if joined else None
+            pb_label = h.get("political_bias")
             pb_score = _political_bias_score(pb_label)
 
             if pb_label:
@@ -789,9 +789,7 @@ async def get_bias_profile(user_id: str = Depends(get_current_user)):
 
 @app.post("/api/articles/compare", response_model=ComparisonResponse)
 async def compare_articles(request: ComparisonRequest):
-    """
-    Group articles by political leaning for the Compare screen.
-    """
+    """Group articles by political leaning for the Compare screen."""
     try:
         query = (
             supabase.table("articles")

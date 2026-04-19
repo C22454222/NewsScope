@@ -20,7 +20,7 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   int _currentIndex = 0;
-  int _profileKey   = 0;
+  int _profileKey = 0;
   late List<Widget> _screens;
 
   @override
@@ -45,8 +45,22 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
+  // Force a fresh ProfileScreen every time the user lands on or leaves
+  // the profile tab. Keyed rebuild discards cached state so the bias
+  // profile always reflects the latest reading history snapshot.
   void _onTabTapped(int index) {
-    setState(() => _currentIndex = index);
+    final leavingProfile = _currentIndex == 2 && index != 2;
+    final enteringProfile = index == 2 && _currentIndex != 2;
+
+    if (leavingProfile || enteringProfile) {
+      setState(() {
+        _profileKey++;
+        _screens[2] = ProfileScreen(key: ValueKey(_profileKey));
+        _currentIndex = index;
+      });
+    } else {
+      setState(() => _currentIndex = index);
+    }
   }
 
   @override
@@ -57,7 +71,7 @@ class _HomeScreenState extends State<HomeScreen> {
         currentIndex: _currentIndex,
         selectedItemColor: Colors.blue[700],
         unselectedItemColor: Colors.grey[500],
-        type: BottomNavigationBarType.fixed, // required for 4+ items
+        type: BottomNavigationBarType.fixed,
         items: const [
           BottomNavigationBarItem(
               icon: Icon(Icons.home), label: 'Home'),
@@ -96,37 +110,37 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
   String? _selectedSource;
 
   static const List<Map<String, String>> _categories = [
-    {'label': 'All',           'value': ''},
-    {'label': 'Politics',      'value': 'politics'},
-    {'label': 'World',         'value': 'world'},
-    {'label': 'US',            'value': 'us'},
-    {'label': 'UK',            'value': 'uk'},
-    {'label': 'Ireland',       'value': 'ireland'},
-    {'label': 'Europe',        'value': 'europe'},
-    {'label': 'Business',      'value': 'business'},
-    {'label': 'Tech',          'value': 'tech'},
-    {'label': 'Science',       'value': 'science'},
-    {'label': 'Health',        'value': 'health'},
-    {'label': 'Environment',   'value': 'environment'},
-    {'label': 'Sport',         'value': 'sport'},
+    {'label': 'All', 'value': ''},
+    {'label': 'Politics', 'value': 'politics'},
+    {'label': 'World', 'value': 'world'},
+    {'label': 'US', 'value': 'us'},
+    {'label': 'UK', 'value': 'uk'},
+    {'label': 'Ireland', 'value': 'ireland'},
+    {'label': 'Europe', 'value': 'europe'},
+    {'label': 'Business', 'value': 'business'},
+    {'label': 'Tech', 'value': 'tech'},
+    {'label': 'Science', 'value': 'science'},
+    {'label': 'Health', 'value': 'health'},
+    {'label': 'Environment', 'value': 'environment'},
+    {'label': 'Sport', 'value': 'sport'},
     {'label': 'Entertainment', 'value': 'entertainment'},
-    {'label': 'Crime',         'value': 'crime'},
-    {'label': 'Opinion',       'value': 'opinion'},
+    {'label': 'Crime', 'value': 'crime'},
+    {'label': 'Opinion', 'value': 'opinion'},
   ];
 
   static const Map<String, String> _sourceMap = {
-    'BBC':          'BBC News',
-    'RTÉ':          'RTÉ News',
-    'Guardian':     'The Guardian',
-    'CNN':          'CNN',
-    'Irish Times':  'The Irish Times',
-    'AP News':      'AP News',
-    'Sky News':     'Sky News',
-    'Independent':  'The Independent',
-    'NPR':          'NPR',
-    'DW':           'Deutsche Welle',
-    'GB News':      'GB News',
-    'Fox News':     'Fox News',
+    'BBC': 'BBC News',
+    'RTÉ': 'RTÉ News',
+    'Guardian': 'The Guardian',
+    'CNN': 'CNN',
+    'Irish Times': 'The Irish Times',
+    'AP News': 'AP News',
+    'Sky News': 'Sky News',
+    'Independent': 'The Independent',
+    'NPR': 'NPR',
+    'DW': 'Deutsche Welle',
+    'GB News': 'GB News',
+    'Fox News': 'Fox News',
   };
 
   static const List<String> _sourceLabels = [
@@ -271,9 +285,9 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
         itemCount: _categories.length,
         separatorBuilder: (_, _) => const SizedBox(width: 8),
         itemBuilder: (context, index) {
-          final cat      = _categories[index];
-          final label    = cat['label']!;
-          final value    = cat['value']!;
+          final cat = _categories[index];
+          final label = cat['label']!;
+          final value = cat['value']!;
           final isSelected = value.isEmpty
               ? (_selectedCategory == null ||
                   _selectedCategory!.isEmpty)
@@ -354,17 +368,17 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
     final name = (_user?.displayName?.isNotEmpty == true)
         ? _user!.displayName!.split(' ').first
         : 'there';
-    final now       = DateTime.now();
-    const months    = [
-      'Jan','Feb','Mar','Apr','May','Jun',
-      'Jul','Aug','Sep','Oct','Nov','Dec',
+    final now = DateTime.now();
+    const months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
     ];
-    const days      = [
-      'Monday','Tuesday','Wednesday','Thursday',
-      'Friday','Saturday','Sunday',
+    const days = [
+      'Monday', 'Tuesday', 'Wednesday', 'Thursday',
+      'Friday', 'Saturday', 'Sunday',
     ];
     final monthName = months[now.month - 1];
-    final dayName   = days[now.weekday - 1];
+    final dayName = days[now.weekday - 1];
 
     return Container(
       width: double.infinity,
@@ -562,10 +576,10 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                   );
                 }
 
-                final articles   = snapshot.data!;
-                final now        = DateTime.now();
-                final todayKey   = _dateKey(now);
-                final yestKey    = _dateKey(
+                final articles = snapshot.data!;
+                final now = DateTime.now();
+                final todayKey = _dateKey(now);
+                final yestKey = _dateKey(
                     now.subtract(const Duration(days: 1)));
 
                 final grouped = <String, List<Article>>{};
@@ -590,7 +604,7 @@ class _HomeFeedTabState extends State<HomeFeedTab> {
                         horizontal: 16),
                     itemCount: sortedKeys.length,
                     itemBuilder: (context, i) {
-                      final dateKey        = sortedKeys[i];
+                      final dateKey = sortedKeys[i];
                       final sectionArticles =
                           grouped[dateKey]!;
                       final header = _headerText(
