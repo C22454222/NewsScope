@@ -6,7 +6,6 @@ import 'package:fl_chart/fl_chart.dart';
 
 import '../models/bias_profile.dart';
 import '../services/api_service.dart';
-import '../utils/score_helpers.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -71,6 +70,26 @@ class _ProfileScreenState extends State<ProfileScreen> {
             letterSpacing: 0.3,
             color: Colors.blue[800]),
       );
+
+  // ── Mode helpers ───────────────────────────────────────────────────────────
+  // Stat cards and summary row use COUNTS (mode), not time-weighted averages,
+  // so the stat card, pie chart, and detailed breakdown always agree on which
+  // leaning dominates the user's reading. Tie-break order: Left > Right >
+  // Centre, matching the dominant colour of the segmented bar.
+
+  String _modeLabel(int left, int center, int right) {
+    if (left == 0 && center == 0 && right == 0) return '—';
+    if (left >= center && left >= right) return 'Left Wing';
+    if (right >= left && right >= center) return 'Right Wing';
+    return 'Centre';
+  }
+
+  Color _modeColor(int left, int center, int right) {
+    if (left == 0 && center == 0 && right == 0) return Colors.grey;
+    if (left >= center && left >= right) return Colors.blue[800]!;
+    if (right >= left && right >= center) return Colors.red[800]!;
+    return Colors.teal[600]!;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -284,18 +303,31 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Widget _buildStatCards() {
     final p = _profile!;
 
-    // Outlet Political Bias
-    final outletBiasColor = getBiasColor(p.avgBias);
-    final outletBiasLabel = getBiasLabel(p.avgBias);
+    // Outlet Political Bias — COUNTS (mode), matches pie and breakdown.
+    final outletTotal = p.leftCount + p.centerCount + p.rightCount;
+    final hasOutletBias = outletTotal > 0;
+    final outletBiasLabel = !hasOutletBias
+        ? '—'
+        : _modeLabel(p.leftCount, p.centerCount, p.rightCount);
+    final outletBiasColor = !hasOutletBias
+        ? Colors.grey
+        : _modeColor(p.leftCount, p.centerCount, p.rightCount);
 
-    // Article Political Bias
-    final articleBiasColor = getBiasColor(p.avgArticleBias);
-    final articleBiasLabel = getBiasLabel(p.avgArticleBias);
-    final hasArticleBias =
-        p.articleLeftCount + p.articleCenterCount + p.articleRightCount >
-            0;
+    // Article Political Bias — COUNTS (mode), matches pie and breakdown.
+    final articleTotal = p.articleLeftCount +
+        p.articleCenterCount +
+        p.articleRightCount;
+    final hasArticleBias = articleTotal > 0;
+    final articleBiasLabel = !hasArticleBias
+        ? '—'
+        : _modeLabel(p.articleLeftCount, p.articleCenterCount,
+            p.articleRightCount);
+    final articleBiasColor = !hasArticleBias
+        ? Colors.grey
+        : _modeColor(p.articleLeftCount, p.articleCenterCount,
+            p.articleRightCount);
 
-    // General Bias — uses snapshotted BIASED/UNBIASED counts from
+    // General Bias — snapshotted BIASED/UNBIASED counts from
     // reading_history.general_bias. Majority wins; tie favours
     // unbiased for the user-friendly default.
     final hasGeneralBias = p.biasedCount + p.unbiasedCount > 0;
@@ -328,17 +360,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
     return Column(children: [
       Row(children: [
         Expanded(
-            child: _buildStatCard(
-                'Outlet Political Bias',
-                outletBiasLabel,
-                outletBiasColor,
-                Icons.source)),
+            child: _buildStatCard('Outlet Political Bias',
+                outletBiasLabel, outletBiasColor, Icons.source)),
         const SizedBox(width: 8),
         Expanded(
             child: _buildStatCard(
                 'Article Political Bias',
-                hasArticleBias ? articleBiasLabel : '—',
-                hasArticleBias ? articleBiasColor : Colors.grey,
+                articleBiasLabel,
+                articleBiasColor,
                 Icons.article_outlined)),
       ]),
       const SizedBox(height: 8),
@@ -1080,7 +1109,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       ),
       const SizedBox(height: 12),
 
-      // ── Summary row ────────────────────────────────────────────────
+      // ── Summary row — uses COUNTS to match everything above ────────
       Card(
         elevation: 2,
         shape: RoundedRectangleBorder(
@@ -1105,19 +1134,27 @@ class _ProfileScreenState extends State<ProfileScreen> {
             _buildVerticalDivider(),
             Expanded(
                 child: _buildSummaryItem(
-                    label: 'Avg Outlet\nBias',
-                    value: getBiasLabel(_profile!.avgBias),
-                    color: getBiasColor(_profile!.avgBias),
+                    label: 'Top Outlet\nBias',
+                    value: (outletTotal > 0)
+                        ? _modeLabel(p.leftCount, p.centerCount,
+                            p.rightCount)
+                        : '—',
+                    color: (outletTotal > 0)
+                        ? _modeColor(p.leftCount, p.centerCount,
+                            p.rightCount)
+                        : Colors.grey,
                     icon: Icons.source)),
             _buildVerticalDivider(),
             Expanded(
                 child: _buildSummaryItem(
-                    label: 'Avg Article\nBias',
+                    label: 'Top Article\nBias',
                     value: (articleTotal > 0)
-                        ? getBiasLabel(_profile!.avgArticleBias)
+                        ? _modeLabel(p.articleLeftCount,
+                            p.articleCenterCount, p.articleRightCount)
                         : '—',
                     color: (articleTotal > 0)
-                        ? getBiasColor(_profile!.avgArticleBias)
+                        ? _modeColor(p.articleLeftCount,
+                            p.articleCenterCount, p.articleRightCount)
                         : Colors.grey,
                     icon: Icons.article_outlined)),
           ]),
